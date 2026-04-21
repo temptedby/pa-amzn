@@ -151,9 +151,9 @@ CREATE TABLE IF NOT EXISTS shipment_templates (
 
 CREATE TABLE IF NOT EXISTS shipments (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  sku TEXT NOT NULL,
+  sku TEXT,
   product_name TEXT,
-  quantity INTEGER NOT NULL,
+  quantity INTEGER,
   prep_contact_id INTEGER,
   inbound_plan_id TEXT,
   operation_id TEXT,
@@ -161,7 +161,13 @@ CREATE TABLE IF NOT EXISTS shipments (
   status TEXT NOT NULL DEFAULT 'draft',
   error_code TEXT,
   error_message TEXT,
+  amazon_shipment_id TEXT,
+  amazon_status TEXT,
+  destination_fc TEXT,
+  shipment_name TEXT,
+  last_synced_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   updated_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_amazon_id ON shipments(amazon_shipment_id) WHERE amazon_shipment_id IS NOT NULL;

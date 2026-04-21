@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { syncInventory } from "@/lib/amazon/sync-inventory";
 import { syncRestockRecommendations } from "@/lib/amazon/sync-restock";
+import { syncShipments } from "@/lib/amazon/sync-shipments";
 import { sendEmail, alertRecipient } from "@/lib/email";
 
 // Vercel Cron invokes this once a day. The CRON_SECRET header is injected
@@ -43,6 +44,13 @@ export async function GET(request: Request) {
     failures.push(`Restock recommendations sync failed: ${restock.error ?? restock.reason ?? "unknown"}`);
   }
 
+  // 3. Inbound shipments — pulls anything Megan created in Seller Central +
+  //    refreshes status on existing rows (WORKING → SHIPPED → IN_TRANSIT → etc.)
+  const ship = await syncShipments();
+  if (!ship.ok) {
+    failures.push(`Shipments sync failed: ${ship.error ?? ship.reason ?? "unknown"}`);
+  }
+
   // Inventory sync already runs runLowStockAlerts internally on success, so
   // that piece is covered.
 
@@ -54,6 +62,7 @@ export async function GET(request: Request) {
       "",
       `Inventory sync: ${inv.ok ? "OK" : "FAILED"} (${inv.count} SKUs, ${inv.durationMs}ms)`,
       `Restock sync: ${restock.ok ? "OK" : "FAILED"} (${restock.count} recs, ${restock.durationMs}ms)`,
+      `Shipments sync: ${ship.ok ? "OK" : "FAILED"} (${ship.count} shipments, ${ship.durationMs}ms)`,
       "",
       `Amazon threshold sync did not complete successfully. Investigate credentials, Amazon API status, or rate limits.`,
     ].join("\n");
@@ -65,6 +74,7 @@ export async function GET(request: Request) {
     finishedAt: new Date().toISOString(),
     inventory: { ok: inv.ok, count: inv.count, durationMs: inv.durationMs, error: inv.error ?? inv.reason },
     restock: { ok: restock.ok, count: restock.count, durationMs: restock.durationMs, error: restock.error ?? restock.reason },
+    shipments: { ok: ship.ok, count: ship.count, durationMs: ship.durationMs, error: ship.error ?? ship.reason },
     failures,
   });
 }

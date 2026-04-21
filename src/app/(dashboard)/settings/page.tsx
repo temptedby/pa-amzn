@@ -151,35 +151,29 @@ export default async function SettingsPage({
             <KVRow label="EMAIL_FROM" value={process.env.EMAIL_FROM ?? "PA AMZN <onboarding@resend.dev> (default)"} />
           </div>
           {isDev && (
-            <details className="mt-4 border-t border-border pt-4">
-              <summary className="cursor-pointer text-sm text-primary font-medium select-none">
-                Update Resend settings
-              </summary>
-              <form action={saveResendCredentials} className="mt-4 space-y-3">
-                <CredField
-                  name="RESEND_API_KEY"
-                  label="Resend API key"
-                  placeholder="re_xxxxxxxxxxxx"
-                  secret
-                />
-                <CredField
-                  name="ALERT_EMAIL"
-                  label="Alert recipient (who gets the emails)"
-                  placeholder="hello@phoneassured.com"
-                />
-                <CredField
-                  name="EMAIL_FROM"
-                  label="From address (use resend.dev until you verify your domain)"
-                  placeholder="PA AMZN <onboarding@resend.dev>"
-                />
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
-                >
-                  Save
-                </button>
-              </form>
-            </details>
+            <form action={saveResendCredentials} className="mt-4 border-t border-border pt-4 space-y-3">
+              <CredField
+                name="RESEND_API_KEY"
+                label="Resend API key"
+                placeholder="re_xxxxxxxxxxxx"
+                secret
+              />
+              <CredField
+                name="ALERT_EMAIL"
+                label="Alert recipient (blank = hello@phoneassured.com)"
+                placeholder="hello@phoneassured.com"
+              />
+              <p className="text-xs text-muted">
+                Leave other fields blank to keep existing values. Emails come from{" "}
+                <code className="text-foreground">onboarding@resend.dev</code> — internal use only, no branding needed.
+              </p>
+              <button
+                type="submit"
+                className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
+              >
+                Save Resend settings
+              </button>
+            </form>
           )}
         </section>
 

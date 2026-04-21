@@ -23,6 +23,12 @@ const ADDITIVE_MIGRATIONS = [
   "ALTER TABLE inventory ADD COLUMN amazon_alert TEXT",
   "ALTER TABLE inventory ADD COLUMN days_of_supply INTEGER",
   "ALTER TABLE inventory ADD COLUMN recommendations_checked_at TEXT",
+  "ALTER TABLE shipments ADD COLUMN amazon_shipment_id TEXT",
+  "ALTER TABLE shipments ADD COLUMN amazon_status TEXT",
+  "ALTER TABLE shipments ADD COLUMN destination_fc TEXT",
+  "ALTER TABLE shipments ADD COLUMN shipment_name TEXT",
+  "ALTER TABLE shipments ADD COLUMN last_synced_at TEXT",
+  "CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_amazon_id ON shipments(amazon_shipment_id) WHERE amazon_shipment_id IS NOT NULL",
 ];
 
 export async function migrate(): Promise<void> {

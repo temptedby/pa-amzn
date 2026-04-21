@@ -1,89 +1,86 @@
-import Link from "next/link";
 import { Topbar } from "@/components/Topbar";
-import { listShipments } from "@/lib/db/queries/shipments";
+import { listShipments, type Shipment } from "@/lib/db/queries/shipments";
 import clsx from "clsx";
 
-function StatusPill({ status }: { status: string }) {
-  const tone =
-    status === "created"
-      ? "bg-success/10 text-success"
-      : status === "failed"
-        ? "bg-danger/10 text-danger"
-        : status === "creating"
-          ? "bg-warning/10 text-warning"
-          : "bg-surface-hover text-muted";
-  return (
-    <span className={clsx("px-2 py-0.5 rounded text-xs font-medium", tone)}>{status}</span>
-  );
+function statusTone(status: string | null): string {
+  if (!status) return "bg-surface-hover text-muted";
+  const s = status.toUpperCase();
+  if (s === "DELIVERED" || s === "CHECKED_IN" || s === "RECEIVING" || s === "CLOSED") return "bg-success/10 text-success";
+  if (s === "SHIPPED" || s === "IN_TRANSIT") return "bg-primary/10 text-primary";
+  if (s === "WORKING" || s === "READY_TO_SHIP") return "bg-warning/10 text-warning";
+  if (s === "CANCELLED" || s === "DELETED" || s === "ERROR") return "bg-danger/10 text-danger";
+  return "bg-surface-hover text-muted";
 }
 
-function formatTime(iso: string): string {
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
   const d = new Date(iso.includes("T") ? iso : iso.replace(" ", "T") + "Z");
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+function Row({ s }: { s: Shipment }) {
+  return (
+    <tr className="border-b border-border last:border-b-0">
+      <td className="px-4 py-3 text-foreground">
+        {s.shipment_name ?? s.sku ?? "—"}
+        {s.amazon_shipment_id && (
+          <div className="text-xs font-mono text-muted">{s.amazon_shipment_id}</div>
+        )}
+      </td>
+      <td className="px-4 py-3 text-right tabular-nums text-foreground">{s.quantity ?? "—"}</td>
+      <td className="px-4 py-3 text-muted">{s.destination_fc ?? "—"}</td>
+      <td className="px-4 py-3">
+        <span className={clsx("px-2 py-0.5 rounded text-xs font-medium", statusTone(s.amazon_status ?? s.status))}>
+          {s.amazon_status ?? s.status}
+        </span>
+      </td>
+      <td className="px-4 py-3 text-right text-xs text-muted">{formatDate(s.last_synced_at ?? s.updated_at)}</td>
+    </tr>
+  );
+}
+
 export default async function ShipmentsPage() {
   const rows = await listShipments();
+  const tracked = rows.filter((r) => r.amazon_shipment_id);
+  const lastSynced = tracked
+    .map((r) => r.last_synced_at)
+    .filter((s): s is string => !!s)
+    .sort()
+    .slice(-1)[0];
 
   return (
     <>
-      <Topbar title="Shipments" subtitle="Inbound plans created via SP-API" />
+      <Topbar
+        title="Shipments"
+        subtitle="Inbound FBA shipments — pulled daily from Amazon"
+      />
       <main className="flex-1 p-6 bg-surface space-y-4">
-        <div className="flex items-center justify-between">
-          <div className="text-xs text-muted">{rows.length} shipment{rows.length === 1 ? "" : "s"}</div>
-          <Link
-            href="/shipments/new"
-            className="px-3 py-1.5 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
-          >
-            New shipment
-          </Link>
+        <div className="text-xs text-muted">
+          {tracked.length} shipment{tracked.length === 1 ? "" : "s"} tracked
+          {lastSynced && <> · last synced {formatDate(lastSynced)}</>}
+          {" · daily cron at 7am PT"}
         </div>
 
         <div className="rounded-lg border border-border bg-background overflow-hidden">
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border bg-surface">
-                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">Created</th>
-                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">SKU</th>
+                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">Shipment</th>
                 <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-right">Qty</th>
+                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">Destination FC</th>
                 <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">Status</th>
-                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-left">Plan ID</th>
+                <th className="px-4 py-3 font-medium text-muted text-xs uppercase tracking-wide text-right">Last synced</th>
               </tr>
             </thead>
             <tbody>
-              {rows.length === 0 ? (
+              {tracked.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-16 text-center text-sm text-muted">
-                    No shipments yet. Click <span className="text-foreground">New shipment</span> or hit the Ship button on an inventory row.
+                    No inbound shipments yet. Create one in Seller Central (Send to Amazon), then the next daily sync pulls it here with live status.
                   </td>
                 </tr>
               ) : (
-                rows.map((s) => (
-                  <tr key={s.id} className="border-b border-border last:border-b-0">
-                    <td className="px-4 py-3 text-xs text-muted">
-                      <Link href={`/shipments/${s.id}`} className="hover:text-primary">
-                        {formatTime(s.created_at)}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs">
-                      <Link href={`/shipments/${s.id}`} className="text-primary hover:underline">
-                        {s.sku}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-3 text-right tabular-nums text-foreground">{s.quantity}</td>
-                    <td className="px-4 py-3">
-                      <StatusPill status={s.status} />
-                      {s.error_message && (
-                        <div className="text-xs text-danger mt-1 truncate max-w-xs" title={s.error_message}>
-                          {s.error_message}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-xs text-muted">
-                      {s.inbound_plan_id ?? "—"}
-                    </td>
-                  </tr>
-                ))
+                tracked.map((s) => <Row key={s.id} s={s} />)
               )}
             </tbody>
           </table>
