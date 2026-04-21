@@ -36,8 +36,10 @@ async function loadInventory(): Promise<InventoryRow[]> {
   return result.rows as unknown as InventoryRow[];
 }
 
-function sellerCentralEditUrl(sku: string, marketplaceId: string): string {
-  return `https://sellercentral.amazon.com/abis/product/edit?mSku=${encodeURIComponent(sku)}&marketplaceID=${marketplaceId}`;
+function sellerCentralEditUrl(sku: string): string {
+  // Inventory search is the most reliable entry point — lands you on the
+  // Manage Inventory page filtered to that SKU, from which Edit is one click.
+  return `https://sellercentral.amazon.com/inventory?search=${encodeURIComponent(sku)}`;
 }
 
 function publicListingUrl(asin: string | null): string | null {
@@ -50,7 +52,7 @@ function formatTimestamp(iso: string | null): string {
   return d.toLocaleString("en-US", { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
-function Row({ r, marketplaceId }: { r: InventoryRow; marketplaceId: string }) {
+function Row({ r }: { r: InventoryRow }) {
   const total = r.quantity_fba + r.quantity_inbound;
   const low = r.threshold !== null && total < r.threshold;
   const dead = total === 0;
@@ -66,7 +68,7 @@ function Row({ r, marketplaceId }: { r: InventoryRow; marketplaceId: string }) {
       <td className="px-4 py-3 font-mono text-xs">
         <div className="flex items-center gap-2">
           <a
-            href={sellerCentralEditUrl(r.sku, marketplaceId)}
+            href={sellerCentralEditUrl(r.sku)}
             target="_blank"
             rel="noopener noreferrer"
             className="text-primary hover:underline"
@@ -181,7 +183,6 @@ export default async function InventoryPage({
   const visible = showAll ? rows : active;
 
   const configured = configFromEnv() !== null;
-  const marketplaceId = process.env.SP_API_MARKETPLACE_ID ?? "ATVPDKIKX0DER";
   const lastChecked = rows
     .map((r) => r.last_checked_at)
     .filter((s): s is string => !!s)
@@ -278,7 +279,7 @@ export default async function InventoryPage({
                   </td>
                 </tr>
               ) : (
-                visible.map((r) => <Row key={r.sku} r={r} marketplaceId={marketplaceId} />)
+                visible.map((r) => <Row key={r.sku} r={r} />)
               )}
             </tbody>
           </table>
