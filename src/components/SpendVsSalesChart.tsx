@@ -44,7 +44,7 @@ export function SpendVsSalesChart({ data }: { data: DailyPoint[] }) {
               borderRadius: 6,
               fontSize: 12,
             }}
-            formatter={(v: number) => `$${v.toFixed(2)}`}
+            formatter={(v) => (typeof v === "number" ? `$${v.toFixed(2)}` : String(v))}
           />
           <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} iconType="circle" />
           <Line
