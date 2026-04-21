@@ -7,6 +7,8 @@ import { updateEnvFile } from "@/lib/env-file";
 import { db, migrate } from "@/lib/db/client";
 
 const SP_API_KEYS = ["SP_API_CLIENT_ID", "SP_API_CLIENT_SECRET", "SP_API_REFRESH_TOKEN"] as const;
+const DATABASE_KEYS = ["DATABASE_URL", "DATABASE_AUTH_TOKEN"] as const;
+const RESEND_KEYS = ["RESEND_API_KEY", "ALERT_EMAIL", "EMAIL_FROM"] as const;
 
 function s(v: FormDataEntryValue | null): string | null {
   if (typeof v !== "string") return null;
@@ -122,4 +124,48 @@ export async function saveSpApiCredentials(formData: FormData) {
   revalidatePath("/inventory");
   const changed = Object.keys(updates).length;
   redirect(`/settings?msg=${encodeURIComponent(`Saved ${changed} credential${changed === 1 ? "" : "s"}`)}`);
+}
+
+export async function saveResendCredentials(formData: FormData) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Disabled in production. Set in Vercel project settings.");
+  }
+
+  const updates: Record<string, string> = {};
+  for (const key of RESEND_KEYS) {
+    const v = formData.get(key);
+    if (typeof v === "string" && v.trim().length > 0) {
+      updates[key] = v.trim();
+    }
+  }
+  if (Object.keys(updates).length === 0) return;
+
+  updateEnvFile(join(process.cwd(), ".env.local"), updates);
+  revalidatePath("/settings");
+  const changed = Object.keys(updates).length;
+  redirect(
+    `/settings?msg=${encodeURIComponent(`Saved ${changed} Resend setting${changed === 1 ? "" : "s"}`)}`,
+  );
+}
+
+export async function saveDatabaseCredentials(formData: FormData) {
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("Disabled in production. Set in Vercel project settings.");
+  }
+
+  const updates: Record<string, string> = {};
+  for (const key of DATABASE_KEYS) {
+    const v = formData.get(key);
+    if (typeof v === "string" && v.trim().length > 0) {
+      updates[key] = v.trim();
+    }
+  }
+  if (Object.keys(updates).length === 0) return;
+
+  updateEnvFile(join(process.cwd(), ".env.local"), updates);
+  revalidatePath("/settings");
+  const changed = Object.keys(updates).length;
+  redirect(
+    `/settings?msg=${encodeURIComponent(`Saved ${changed} database credential${changed === 1 ? "" : "s"}`)}`,
+  );
 }

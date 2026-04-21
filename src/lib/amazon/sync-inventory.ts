@@ -1,6 +1,7 @@
 import { db, migrate } from "@/lib/db/client";
 import { configFromEnv, marketplaceIdFromEnv } from "./sp-api";
 import { fetchFbaInventory, inboundQuantity } from "./inventory";
+import { runLowStockAlerts } from "@/lib/alerts/low-stock";
 
 export interface SyncResult {
   ok: boolean;
@@ -50,6 +51,20 @@ export async function syncInventory(): Promise<SyncResult> {
           now,
         ],
       });
+    }
+
+    // After inventory is refreshed, check thresholds and fire alert emails.
+    // Failures here are logged but don't fail the sync itself.
+    try {
+      const alerts = await runLowStockAlerts();
+      if (alerts.errors.length > 0) {
+        console.warn(`[low-stock] ${alerts.errors.length} email errors:`, alerts.errors);
+      }
+      if (alerts.fired > 0) {
+        console.log(`[low-stock] fired ${alerts.fired} alerts (${alerts.skippedCooldown} skipped, ${alerts.checked} checked)`);
+      }
+    } catch (err) {
+      console.error("[low-stock] run failed:", err);
     }
 
     return { ok: true, count: summaries.length, durationMs: Date.now() - start };

@@ -2,6 +2,8 @@ import { Topbar } from "@/components/Topbar";
 import { logout } from "@/app/login/actions";
 import {
   saveSpApiCredentials,
+  saveDatabaseCredentials,
+  saveResendCredentials,
   savePrepContact,
   deletePrepContact,
   setDefaultPrepContact,
@@ -66,7 +68,11 @@ export default async function SettingsPage({
           />
           <StatusRow label="Amazon Ads API" value="Pending registration" tone="pending" />
           <StatusRow label="Amazon Marketing Stream" value="Not configured" tone="off" />
-          <StatusRow label="Resend (email)" value="Not configured" tone="off" />
+          <StatusRow
+            label="Resend (email)"
+            value={process.env.RESEND_API_KEY ? "Configured" : "Not configured"}
+            tone={process.env.RESEND_API_KEY ? "ok" : "off"}
+          />
           <StatusRow label="Turso (production DB)" value="Not configured" tone="off" />
         </section>
 
@@ -124,6 +130,96 @@ export default async function SettingsPage({
             </details>
           ) : (
             <p className="text-xs text-muted">Set these in Vercel → Project Settings → Environment Variables.</p>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-border bg-background p-5">
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-sm font-semibold text-foreground">Resend (email alerts)</h2>
+            {isDev && <span className="text-xs text-muted">dev only — prod uses Vercel env</span>}
+          </div>
+          <p className="text-xs text-muted mb-4">
+            Powers low-stock alerts and shipment label emails. Free tier at{" "}
+            <a href="https://resend.com" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+              resend.com
+            </a>{" "}
+            (100 emails/day).
+          </p>
+          <div className="mb-4">
+            <KVRow label="RESEND_API_KEY" value={maskSecret(process.env.RESEND_API_KEY)} />
+            <KVRow label="ALERT_EMAIL (to)" value={process.env.ALERT_EMAIL ?? "hello@phoneassured.com (default)"} />
+            <KVRow label="EMAIL_FROM" value={process.env.EMAIL_FROM ?? "PA AMZN <onboarding@resend.dev> (default)"} />
+          </div>
+          {isDev && (
+            <details className="mt-4 border-t border-border pt-4">
+              <summary className="cursor-pointer text-sm text-primary font-medium select-none">
+                Update Resend settings
+              </summary>
+              <form action={saveResendCredentials} className="mt-4 space-y-3">
+                <CredField
+                  name="RESEND_API_KEY"
+                  label="Resend API key"
+                  placeholder="re_xxxxxxxxxxxx"
+                  secret
+                />
+                <CredField
+                  name="ALERT_EMAIL"
+                  label="Alert recipient (who gets the emails)"
+                  placeholder="hello@phoneassured.com"
+                />
+                <CredField
+                  name="EMAIL_FROM"
+                  label="From address (use resend.dev until you verify your domain)"
+                  placeholder="PA AMZN <onboarding@resend.dev>"
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
+                >
+                  Save
+                </button>
+              </form>
+            </details>
+          )}
+        </section>
+
+        <section className="rounded-lg border border-border bg-background p-5">
+          <div className="flex items-center justify-between mb-1">
+            <h2 className="text-sm font-semibold text-foreground">Database (Turso)</h2>
+            {isDev && <span className="text-xs text-muted">dev only — prod uses Vercel env</span>}
+          </div>
+          <p className="text-xs text-muted mb-4">
+            Production DB on Turso. Local dev uses <code className="text-foreground">file:./data/pa-amzn.db</code> unless these are set.
+          </p>
+          <div className="mb-4">
+            <KVRow label="DATABASE_URL" value={maskSecret(process.env.DATABASE_URL, 32)} />
+            <KVRow label="DATABASE_AUTH_TOKEN" value={maskSecret(process.env.DATABASE_AUTH_TOKEN)} />
+          </div>
+          {isDev && (
+            <details className="mt-4 border-t border-border pt-4">
+              <summary className="cursor-pointer text-sm text-primary font-medium select-none">
+                Update database credentials
+              </summary>
+              <form action={saveDatabaseCredentials} className="mt-4 space-y-3">
+                <CredField
+                  name="DATABASE_URL"
+                  label="Turso URL (libsql://…)"
+                  placeholder="libsql://pa-amzn-xxx.turso.io"
+                />
+                <CredField
+                  name="DATABASE_AUTH_TOKEN"
+                  label="Turso auth token"
+                  placeholder="eyJhbGci…"
+                  secret
+                />
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
+                >
+                  Save
+                </button>
+              </form>
+            </details>
           )}
         </section>
 
