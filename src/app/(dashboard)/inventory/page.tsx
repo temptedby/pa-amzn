@@ -2,10 +2,8 @@ import Link from "next/link";
 import { Topbar } from "@/components/Topbar";
 import { db, migrate } from "@/lib/db/client";
 import { configFromEnv } from "@/lib/amazon/sp-api";
-import { runInventorySync, runRestockSync, saveShipmentTemplate, updateThreshold } from "./actions";
+import { runInventorySync, runRestockSync, updateThreshold } from "./actions";
 import { SubmitButton } from "@/components/SubmitButton";
-import { listPrepContacts } from "@/lib/db/queries/prep-contacts";
-import { listShipmentTemplates, type ShipmentTemplate } from "@/lib/db/queries/shipment-templates";
 import clsx from "clsx";
 
 interface InventoryRow {
@@ -57,12 +55,11 @@ function Row({ r }: { r: InventoryRow }) {
   const low = r.threshold !== null && total < r.threshold;
   const dead = total === 0;
   const listingUrl = publicListingUrl(r.asin);
-  const shipQty = r.amazon_recommended_quantity && r.amazon_recommended_quantity > 0
-    ? r.amazon_recommended_quantity
-    : null;
-  const shipHref = shipQty
-    ? `/shipments/new?sku=${encodeURIComponent(r.sku)}&qty=${shipQty}`
-    : `/shipments/new?sku=${encodeURIComponent(r.sku)}`;
+  // Deep-link straight to Seller Central's Manage Inventory filtered to this
+  // SKU. From there, the row's "Send to Amazon" dropdown is one click — no
+  // carton dims, prep contact, or template setup in our app. Megan still
+  // computes the quantity (Amazon Suggests column is her starting number).
+  const shipHref = `https://sellercentral.amazon.com/inventory?searchField=sku&searchStr=${encodeURIComponent(r.sku)}`;
   return (
     <tr className="border-b border-border last:border-b-0">
       <td className="px-4 py-3 font-mono text-xs">
@@ -77,13 +74,15 @@ function Row({ r }: { r: InventoryRow }) {
             {r.sku}
           </a>
           {!dead && (
-            <Link
+            <a
               href={shipHref}
+              target="_blank"
+              rel="noopener noreferrer"
               className="text-[10px] px-1.5 py-0.5 rounded border border-border text-muted hover:text-primary hover:border-primary"
-              title="Create shipment for this SKU"
+              title="Open this SKU in Seller Central — use the row's Send to Amazon dropdown"
             >
-              Ship
-            </Link>
+              Ship ↗
+            </a>
           )}
         </div>
       </td>
@@ -173,11 +172,7 @@ export default async function InventoryPage({
         : { kind: "ok" as const, text: `Synced ${sp.count} SKUs from FBA inventory.` }
     : null;
 
-  const [rows, prepContacts, templates] = await Promise.all([
-    loadInventory(),
-    listPrepContacts(),
-    listShipmentTemplates(),
-  ]);
+  const rows = await loadInventory();
   const active = rows.filter((r) => r.quantity_fba + r.quantity_inbound > 0);
   const inactive = rows.filter((r) => r.quantity_fba + r.quantity_inbound === 0);
   const visible = showAll ? rows : active;
@@ -285,186 +280,11 @@ export default async function InventoryPage({
           </table>
         </div>
 
-        {active.length > 0 && (
-          <section className="rounded-lg border border-border bg-background p-5">
-            <div className="flex items-center justify-between mb-1">
-              <h2 className="text-sm font-semibold text-foreground">Shipment templates</h2>
-              <span className="text-xs text-muted">
-                {templates.size} of {active.length} SKUs configured
-              </span>
-            </div>
-            <p className="text-xs text-muted mb-4">
-              Per-SKU defaults used when creating a shipment. Fill what you know — blanks can be filled in later.
-              {prepContacts.length === 0 && (
-                <>
-                  {" "}
-                  <Link href="/settings" className="text-primary hover:underline">
-                    Add a prep contact
-                  </Link>{" "}
-                  first so you can assign one here.
-                </>
-              )}
-            </p>
-            <div className="space-y-2">
-              {active.map((r) => (
-                <TemplateCard
-                  key={r.sku}
-                  sku={r.sku}
-                  productName={r.product_name}
-                  template={templates.get(r.sku)}
-                  prepContacts={prepContacts}
-                />
-              ))}
-            </div>
-          </section>
-        )}
+        {/* Shipment templates removed — Megan uses Amazon's Send-to-Amazon flow
+            directly, which handles carton dims, weights, and prep prompts in
+            its own UI. Our app's job is just to surface quantity recommendations
+            and deep-link into Amazon. */}
       </main>
     </>
-  );
-}
-
-function TemplateCard({
-  sku,
-  productName,
-  template,
-  prepContacts,
-}: {
-  sku: string;
-  productName: string | null;
-  template?: ShipmentTemplate;
-  prepContacts: { id: number; name: string }[];
-}) {
-  const configured =
-    template !== undefined &&
-    (template.units_per_carton !== null ||
-      template.carton_length_in !== null ||
-      template.prep_contact_id !== null);
-
-  return (
-    <details className="border border-border rounded-md">
-      <summary className="flex items-center justify-between px-4 py-3 cursor-pointer select-none">
-        <div>
-          <div className="text-sm font-medium text-foreground font-mono">{sku}</div>
-          <div className="text-xs text-muted">
-            {productName ?? "—"}
-            {configured && template ? (
-              <>
-                {" · "}
-                {template.units_per_carton && (
-                  <>
-                    <span>{template.units_per_carton}/carton</span>
-                    {template.carton_length_in && template.carton_width_in && template.carton_height_in && (
-                      <>
-                        {" · "}
-                        {template.carton_length_in}×{template.carton_width_in}×{template.carton_height_in}″
-                      </>
-                    )}
-                    {template.carton_weight_lb && <> · {template.carton_weight_lb} lb</>}
-                  </>
-                )}
-              </>
-            ) : (
-              <span className="text-warning"> · template not set</span>
-            )}
-          </div>
-        </div>
-        <span className="text-xs text-muted">edit ▾</span>
-      </summary>
-      <div className="border-t border-border px-4 py-4 bg-surface">
-        <form action={saveShipmentTemplate} className="space-y-3">
-          <input type="hidden" name="sku" value={sku} />
-          <div className="grid grid-cols-4 gap-3">
-            <NumField
-              name="units_per_carton"
-              label="Units per carton"
-              defaultValue={template?.units_per_carton ?? ""}
-              step="1"
-            />
-            <NumField
-              name="carton_length_in"
-              label="Length (in)"
-              defaultValue={template?.carton_length_in ?? ""}
-            />
-            <NumField
-              name="carton_width_in"
-              label="Width (in)"
-              defaultValue={template?.carton_width_in ?? ""}
-            />
-            <NumField
-              name="carton_height_in"
-              label="Height (in)"
-              defaultValue={template?.carton_height_in ?? ""}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <NumField
-              name="carton_weight_lb"
-              label="Weight (lb)"
-              defaultValue={template?.carton_weight_lb ?? ""}
-            />
-            <div>
-              <label className="block text-xs font-medium text-muted mb-1">Prep contact</label>
-              <select
-                name="prep_contact_id"
-                defaultValue={template?.prep_contact_id ?? ""}
-                className="w-full px-3 py-2 border border-border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-              >
-                <option value="">— none —</option>
-                {prepContacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-muted mb-1">Notes (instructions for prep person)</label>
-            <textarea
-              name="notes"
-              rows={2}
-              defaultValue={template?.notes ?? ""}
-              className="w-full px-3 py-2 border border-border rounded-md text-sm bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-              placeholder="e.g. Test each unit by pressing the clip. Polybag with suffocation warning before boxing."
-            />
-          </div>
-          <button
-            type="submit"
-            className="px-4 py-2 rounded-md bg-primary text-primary-foreground text-sm font-medium hover:bg-primary-hover transition-colors"
-          >
-            Save template
-          </button>
-        </form>
-      </div>
-    </details>
-  );
-}
-
-function NumField({
-  name,
-  label,
-  defaultValue,
-  step = "0.1",
-}: {
-  name: string;
-  label: string;
-  defaultValue?: number | string;
-  step?: string;
-}) {
-  return (
-    <div>
-      <label htmlFor={name} className="block text-xs font-medium text-muted mb-1">
-        {label}
-      </label>
-      <input
-        id={name}
-        name={name}
-        type="number"
-        step={step}
-        min={0}
-        defaultValue={defaultValue}
-        className="w-full px-3 py-2 border border-border rounded-md text-sm tabular-nums bg-background focus:outline-none focus:ring-2 focus:ring-primary focus:border-transparent"
-      />
-    </div>
   );
 }
