@@ -111,7 +111,7 @@ function Row({ r, marketplaceId }: { r: InventoryRow; marketplaceId: string }) {
       </td>
       <td className="px-4 py-3 text-right tabular-nums text-foreground">{r.quantity_inbound}</td>
       <td className="px-2 py-2 text-right">
-        <form action={updateThreshold} className="inline-flex justify-end">
+        <form action={updateThreshold} className="inline-flex justify-end items-center gap-1">
           <input type="hidden" name="sku" value={r.sku} />
           <input
             type="number"
@@ -119,9 +119,15 @@ function Row({ r, marketplaceId }: { r: InventoryRow; marketplaceId: string }) {
             defaultValue={r.threshold ?? ""}
             min={0}
             placeholder="—"
-            title="Press Enter to save"
-            className="w-16 px-2 py-1 text-right text-sm rounded-md border border-transparent hover:border-border focus:border-primary focus:outline-none focus:bg-surface tabular-nums text-foreground"
+            className="w-16 px-2 py-1 text-right text-sm rounded-md border border-border focus:border-primary focus:outline-none focus:bg-surface tabular-nums text-foreground"
           />
+          <button
+            type="submit"
+            className="px-2 py-1 text-xs rounded border border-border text-muted hover:text-primary hover:border-primary"
+            title="Save threshold"
+          >
+            Save
+          </button>
         </form>
       </td>
       <td className="px-4 py-3 text-right tabular-nums">
