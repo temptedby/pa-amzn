@@ -59,3 +59,24 @@ Drafts for review are always fine. Real sends to real people require explicit go
 - Open: confirm which Gmail (`william@besocialscene.com`) holds the forwarded rejection email, and that Amazon console access uses the `hello@phoneassured.com` seller login (separate from Gmail).
 
 ---
+
+### 2026-06-07 — Documents-first game plan to get the Ads API live the week of 2026-06-08
+
+**Context.** William wants the Ads API live *this week*, with the right documents lined up in advance so the week is execution, not discovery. He named getting the **"Hello App Phone Assured" app** (the LWA developer application under `hello@phoneassured.com`) set up as priority #1, and noted we already have SP-API access/pre-approval that we should not redo.
+
+**Options considered.**
+1. **Re-submit immediately and react to whatever bounces.** Rejected — that's how April's 6-week stall happened; one wrong field round-trips another 72h+.
+2. **Document-first: reconcile all three address surfaces and gather both required docs before re-submitting once, cleanly.** *Chosen.*
+3. **Pay a third-party agency to handle Amazon verification.** Deferred — not warranted for a single address fix.
+
+**Decision.** Wrote `confabulator/ads-api-launch-plan.md` as a living checklist. Core insight: Amazon's "address didn't match" almost always means a disagreement among **(1) Seller Central business address, (2) tax-interview/W-9 address, (3) the uploaded proof-of-address document** — and a 4th common culprit, the developer/LWA app address. The plan reconciles all four so the fix happens once. Day-by-day Mon→Fri: read rejection email + audit the address surfaces (Mon), gather a ≤180-day proof-of-address doc (Tue), re-submit (Wed), watch for approval + assign API access (Thu–Fri). Track B (bulk bridge) proceeds in parallel since it needs no approval.
+
+**Reasoning.** Each rejected re-submission costs another multi-day SLA cycle; the cheapest path to "live this week" is to make the next submission the last one by getting every address surface and both documents correct up front. SP-API is already authorized, so the work is scoped strictly to the Ads-API identity check.
+
+**Industry source / best practice.** Amazon's own [apply-for-API-access](https://advertising.amazon.com/API/docs/en-us/guides/onboarding/apply-for-access) and [SP-API identity verification](https://developer-docs.amazon.com/sp-api/docs/verify-identity-in-spp) docs: two documents required (identity + proof-of-address), proof-of-address issued within 180 days, name/address must match the tax interview and Seller Central. KYC "single source of truth for address" principle.
+
+**Trade-offs accepted.** The exact mismatched field is still unconfirmed until the rejection email is read Monday (Gmail not yet authed), so the plan covers all four surfaces rather than surgically fixing one — slightly more work, but it removes the guess. Re-application is gated on William doing the Seller-Central/document steps; Claude can't touch those.
+
+**Status / date to revisit.** Plan committed 2026-06-07. Revisit Monday 2026-06-08 after the rejection email is read. Target: approved or cleanly re-submitted by Fri 2026-06-12.
+
+---
