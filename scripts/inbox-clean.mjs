@@ -88,9 +88,13 @@ const KEEP_CUSTOMER = /(a message from|buyer message|order .*inquiry|return requ
 // Real humans at services we care about (named reps), even if Gmail bucketed them.
 const HUMAN_SENDER = (from) => /@flippa\.com/.test(from) && !/(marketing|dealdesk|support|no-?reply|notifications?)@/.test(from);
 
+// Pure-promo senders to archive even if they land in Primary.
+const ARCHIVE_SENDER = /(alibaba\.com|@email\.alibaba|aliexpress|@e\.alibaba)/i;
+
 function classify(from, subject, labels = []) {
   // Actionable or human → always keep.
   if (KEEP_SENDER.test(from) || HUMAN_SENDER(from) || KEEP_SUBJECT.test(subject) || KEEP_CUSTOMER.test(subject)) return 'keep';
+  if (ARCHIVE_SENDER.test(from)) return 'archive';
   const L = new Set(labels);
   // Gmail's own buckets for bulk/marketing/social/automated-update mail.
   if (L.has('CATEGORY_PROMOTIONS') || L.has('CATEGORY_SOCIAL') || L.has('CATEGORY_FORUMS') || L.has('CATEGORY_UPDATES')) return 'archive';

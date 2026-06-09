@@ -90,3 +90,18 @@ Don't fight MoKo (2,299 rev) / Rogue Fishing Co. (owns fishing/kayak, premium) h
 3. **Construction / industrial safety (B2B):** operators, scaffolding, drop-from-height; bulk orders, underserved.
 Also-rans: busy parents/toddlers, amusement parks, concerts (Pulpo targets festivals).
 **Action:** validate keyword demand (free), then niche-targeted titles/bullets/keywords + content + ads. Recommended first: Accessibility + Boating.
+
+## Differentiators + owned channels (2026-06-09)
+- **1-year warranty + free replacement clip — NO competitor offers this.** This is the lead trust message AND review protection: a failed cord → free replacement instead of a 1★ review. Put it front-and-center in title/bullets/A+, in the post-purchase flow, and in all content. Directly counters the retraction-failure complaint driving low ★.
+- **Owned social: @phoneassured on Instagram + Facebook** → channels ready for the free-content push (Meta posts, Reels, boating/accessibility angles) using the Drive content library + testimonials.
+
+## Convergence — the proven priority order
+Live data settles it: Doormoon sells at the SAME $9.49 with 4.5★/1,352 reviews vs our 3.8★/480. **Price is not the gap; ratings + review volume are.** So:
+1. **Review engine** (SP-API Solicitations) — #1, free, uses existing access. Build first.
+2. **Warranty/extra-clip messaging** everywhere (listing + post-purchase + content) — protects ratings, differentiates.
+3. **Stay cheap to rebuild velocity** (William), raise price after ratings recover.
+4. **Restock 3-Pack.**
+5. **Niche positioning** (Accessibility white space + Boating) via keywords/content/ads.
+6. **Free content** via owned IG/FB + Amazon Posts from the library.
+7. **Ads** once API approves (pending).
+8. **Daily ops cron:** inbox clean + labels (Shipments/Trademark/Flippa/Customers) + needs-attention digest to william@besocialscene.com + reply-from-hello@ (Resend).
