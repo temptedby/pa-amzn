@@ -66,3 +66,19 @@ SP-API can pull the **daily sales/orders trend** — the exact date sales fell p
 4. **A+ Content / Brand Story** (free, Securisee Brand Registry) → conversion.
 5. **Ads via API** (pending) → amplify once listing/ratings are stronger.
 6. **Free external traffic** — Amazon Posts + Meta/TikTok from the content library (reuse Social Scene method, not its data).
+
+## Competitive set + positioning (live scan 2026-06-09)
+
+| Product | Price | Rating | Reviews | Note |
+|---|---|---|---|---|
+| Ours Single | $9.49 | 3.8★ | 480 | cheapest + lowest-rated |
+| ClutchLoop B0FFV932ZL | $29.99 | 4.1★ | 314 | #1 sponsored — premium wins |
+| MoKo B0FXZR61Y9 | $13.99 | 4.1★ | 2,299 | social-proof leader |
+| Oaridey B0GLY1GT7M | $15.99 | 4.4★ | 52 | magnetic |
+| DINALLE B0GHKQWDZB | $12.99 | 4.0★ | 37 | ~ our Pro |
+| DINALLE Lanyard B0FXMY3894 | $13.99 | 4.4★ | 66 | |
+| Pulpo B0BNSPVHKC | $14.99 | 4.0★ | 676 | dyneema |
+
+**Reads:** market price $13-16 (ClutchLoop $29.99 at #1) — we're underpriced at $9.49; category won on quality/trust, not low price. We're lowest-rated (3.8). MoKo's 2,299 reviews = the bar.
+
+**Positioning wedge — own the WATER/MARINE niche.** No competitor targets boating; they all do generic carabiner/hiking/climbing. Phone Assured should own **boat / kayak / paddleboard / fishing / jet ski / cruise / lake** (high-stakes: overboard phone = lost). Acts on: listing keywords + title/bullets, boating content (Posts/Meta/TikTok from the library + testimonials), ad targeting to boating/fishing audiences, and justifies a price move toward $12-14 (margin). Validate keyword demand (free) before committing the listing.
