@@ -44,20 +44,24 @@ export interface ReviewRequestsResult {
   count: number; // review requests actually sent
   checked?: number;
   skipped?: number;
+  requestedOrderIds?: string[]; // confirmation: which orders got a request this run
   reason?: string;
   error?: string;
   durationMs: number;
 }
 
-export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promise<ReviewRequestsResult> {
-  const { dryRun = false } = opts;
+// dryRun: don't send (preview). catchUp: one-time backlog blast — bypass the
+// Tue-Thu and 7-day gates and send to EVERY order Amazon still allows (5-30d window).
+export async function runReviewRequests(opts: { dryRun?: boolean; catchUp?: boolean } = {}): Promise<ReviewRequestsResult> {
+  const { dryRun = false, catchUp = false } = opts;
   const start = Date.now();
+  const requested: string[] = [];
   const cfg = configFromEnv();
   if (!cfg) return { ok: false, count: 0, reason: "SP-API env vars not configured", durationMs: Date.now() - start };
   const marketplaceId = marketplaceIdFromEnv();
 
-  // Only send Tue-Thu (best engagement); other days are a no-op. Dry-run bypasses.
-  if (!dryRun && !SEND_WEEKDAYS.has(new Date().getUTCDay())) {
+  // Only send Tue-Thu (best engagement); other days are a no-op. Dry-run / catch-up bypass.
+  if (!dryRun && !catchUp && !SEND_WEEKDAYS.has(new Date().getUTCDay())) {
     return { ok: true, count: 0, skipped: 0, reason: "off-day — sends Tue-Thu only", durationMs: Date.now() - start };
   }
 
@@ -82,18 +86,19 @@ export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promis
       });
       if (seen.rows.length && seen.rows[0].status === "sent") { skipped++; continue; }
       if (o.OrderStatus === "Canceled" || o.OrderStatus === "Pending") { skipped++; continue; }
-      // Hold until ~7 days post-delivery (the data sweet spot).
-      if (Date.now() - new Date(o.PurchaseDate).getTime() < MIN_DAYS_SINCE_PURCHASE * 86_400_000) { skipped++; continue; }
+      // Hold until ~7 days post-delivery (the data sweet spot) — unless catching up the backlog.
+      if (!catchUp && Date.now() - new Date(o.PurchaseDate).getTime() < MIN_DAYS_SINCE_PURCHASE * 86_400_000) { skipped++; continue; }
 
       checked++;
       const actions = await getSolicitationActions(cfg, o.AmazonOrderId, marketplaceId);
       if (!isProductReviewAvailable(actions)) { skipped++; await sleep(1100); continue; }
 
-      if (dryRun) { sent++; await sleep(300); continue; } // eligible, but don't send
+      if (dryRun) { sent++; requested.push(o.AmazonOrderId); await sleep(300); continue; } // eligible, but don't send
 
       try {
         await requestProductReview(cfg, o.AmazonOrderId, marketplaceId);
         sent++;
+        requested.push(o.AmazonOrderId);
         await db().execute({
           sql: `INSERT INTO review_requests (amazon_order_id, status, detail, requested_at)
                 VALUES (?, 'sent', NULL, datetime('now'))
@@ -111,7 +116,7 @@ export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promis
       await sleep(1100); // respect Solicitations API ~1 req/sec
     }
 
-    return { ok: true, count: sent, checked, skipped, durationMs: Date.now() - start };
+    return { ok: true, count: sent, checked, skipped, requestedOrderIds: requested, durationMs: Date.now() - start };
   } catch (err) {
     return { ok: false, count: 0, error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - start };
   }
