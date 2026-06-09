@@ -15,9 +15,12 @@ interface OrdersResponse {
   payload?: { Orders?: AmazonOrder[]; NextToken?: string };
 }
 
-// Orders eligible for a review request were delivered 5-30 days ago, so look
-// back ~35 days of purchases. Shipped is FBA's terminal status.
-const LOOKBACK_DAYS = 35;
+// Amazon allows 5-30 days post-delivery. 2026 data: ~7-10 days post-delivery is
+// the sweet spot for physical products (used it, not forgotten) and Tue-Thu beats
+// Fri-Sun. We approximate "post-delivery" from PurchaseDate + ~2d FBA transit.
+const LOOKBACK_DAYS = 40;
+const MIN_DAYS_SINCE_PURCHASE = Number(process.env.REVIEW_MIN_DAYS ?? 9); // ≈ 7 days post-delivery
+const SEND_WEEKDAYS = new Set([2, 3, 4]); // Tue, Wed, Thu (UTC)
 const MAX_REQUESTS_PER_RUN = 60; // safety cap; Solicitations API ~1 req/sec
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -53,6 +56,11 @@ export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promis
   if (!cfg) return { ok: false, count: 0, reason: "SP-API env vars not configured", durationMs: Date.now() - start };
   const marketplaceId = marketplaceIdFromEnv();
 
+  // Only send Tue-Thu (best engagement); other days are a no-op. Dry-run bypasses.
+  if (!dryRun && !SEND_WEEKDAYS.has(new Date().getUTCDay())) {
+    return { ok: true, count: 0, skipped: 0, reason: "off-day — sends Tue-Thu only", durationMs: Date.now() - start };
+  }
+
   try {
     await migrate();
     await db().execute(`CREATE TABLE IF NOT EXISTS review_requests (
@@ -74,6 +82,8 @@ export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promis
       });
       if (seen.rows.length && seen.rows[0].status === "sent") { skipped++; continue; }
       if (o.OrderStatus === "Canceled" || o.OrderStatus === "Pending") { skipped++; continue; }
+      // Hold until ~7 days post-delivery (the data sweet spot).
+      if (Date.now() - new Date(o.PurchaseDate).getTime() < MIN_DAYS_SINCE_PURCHASE * 86_400_000) { skipped++; continue; }
 
       checked++;
       const actions = await getSolicitationActions(cfg, o.AmazonOrderId, marketplaceId);
