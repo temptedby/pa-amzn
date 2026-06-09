@@ -81,7 +81,12 @@ function extractBody(payload) {
     }
   }
   if (payload.mimeType === 'text/html' && payload.body?.data) {
-    return b64urlDecode(payload.body.data).replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    return b64urlDecode(payload.body.data)
+      .replace(/<style[\s\S]*?<\/style>/gi, ' ')   // drop CSS blocks
+      .replace(/<script[\s\S]*?<\/script>/gi, ' ') // drop scripts
+      .replace(/<[^>]+>/g, ' ')                     // strip remaining tags
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/\s+/g, ' ');
   }
   return '';
 }

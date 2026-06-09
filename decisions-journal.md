@@ -98,6 +98,30 @@ Drafts for review are always fine. Real sends to real people require explicit go
 
 **Trade-offs accepted.** William must do the ~10-min Google Cloud console steps (create project, enable Gmail API, create the Desktop OAuth client) — only he can, under the phoneassured.com Workspace. The typed in-app `src/lib/google/gmail.ts` (for cron-watching Amazon mail) is deferred; the two scripts cover the immediate need. Read-only means if we later want to send from hello@ we add `gmail.send` and re-consent.
 
-**Status / date to revisit.** Scripts + setup doc built and committed 2026-06-09 (syntax-checked; `.env.local` confirmed gitignored). Blocked on William running Part 1 (console) + Part 2 (mint token). Once the token is in `.env.local`, `find-amazon-email.mjs` reads the rejection → unblocks the address fix (Task 1).
+**Status / date to revisit.** ✅ DONE 2026-06-09 — inbox is live. William created the Google Cloud project + Desktop OAuth client, minted the refresh token, enabled the Gmail API, and `find-amazon-email.mjs` now reads hello@ end-to-end. Refresh token in `.env.local` (gitignored). Debugging lessons worth keeping: (1) the consent flow is a **browser** flow, not an email prompt — opening the URL via `open` on the Mac eliminated the confusion; (2) the repeated "Access blocked / Error 400" was a **truncated copy-paste of the auth URL** (missing `response_type`), not a redirect or propagation issue — the path-less `http://localhost:53682` Desktop redirect was correct all along; (3) the Gmail API must be explicitly **enabled** in the Cloud project (separate 403 `SERVICE_DISABLED` until done). Follow-on: re-consent with broader scopes when we wire Sheets/Drive/Calendar (Tasks 8, 10) and gmail.modify for inbox cleanup (Task 9).
+
+---
+
+### 2026-06-09 — Real Ads API rejection reason found: email-domain ↔ company-name mismatch (NOT a postal address); re-apply as "Phone Assured"
+
+**Context.** With the hello@ inbox finally readable, pulled the actual rejection (Jira ticket **AO-40501**, from S Emmanuel / Amazon Ads API Support, 2026-04-21; auto-closed "Done" 2026-04-28 for no response). It disproves the entire address-mismatch theory we'd built the week's plan around.
+
+**What Amazon actually said (verbatim).** *"We are unable to confirm the relationship between your email domain and company name used to register for the Amazon Ads API. To address this issue, ensure your Amazon login or the email used to access the Amazon Ads API registration form matches your company name. Please do not use your personal email to register."* The email opens *"Hello Douglas Dean LLC."* William's reply added *"Securisee is the company name, Phone Assured is the product, owned by Douglas Dean LLC."*
+
+**Root cause.** The application presented **three different names** (Douglas Dean LLC / Securisee / Phone Assured) and a registration email that didn't map to any of them (william@besocialscene.com appears in the thread — a personal/other-business address). Amazon's identity check (active advertiser account must match the company name and be related to the email) couldn't reconcile it. It was never about a postal address, a bank statement, or LLC paperwork — none of which Amazon requested.
+
+**Decision.** Re-apply (fresh; the old ticket is closed) with ONE consistent identity, anchored on the fact that the **Seller account already shows "Phone Assured"**:
+- Company name → **Phone Assured**
+- Registration/login email → **hello@phoneassured.com** (business email; domain `phoneassured.com` matches the company name)
+- Website → **https://www.phoneassured.com**
+- Keep "Douglas Dean LLC" / "Securisee" out of the company-name field (legal entity only where a form explicitly asks); never use besocialscene.
+
+**Reasoning.** Amazon's stated fix is to make the email domain map to the company name and avoid personal email. "Phone Assured" + hello@phoneassured.com + phoneassured.com is a single verifiable identity (the website is live, the brand sells on Amazon, the Seller account name already matches). This is the minimal change from the failed application — same email as intended, the only real fix is putting "Phone Assured" (not the legal entity) in the company-name field.
+
+**Industry source / best practice.** Primary source: the rejection email itself. Corroborated by Amazon's onboarding docs — an active advertiser account must *"match the company name submitted in your request and be related to the email address you provided,"* and to *"use the email registered to your Login with Amazon account"* ([apply for access](https://advertising.amazon.com/API/docs/en-us/guides/onboarding/apply-for-access), [onboarding guide PDF](https://m.media-amazon.com/images/G/01/decassets/Amazon_Ads_API_onboarding_guide.pdf)). KYC single-identity consistency.
+
+**Trade-offs accepted.** Using "Phone Assured" as the company name rather than the legal entity "Douglas Dean LLC" — acceptable because Amazon's check is advertiser-account-to-email consistency, and the Seller account already displays Phone Assured. If a future form step hard-requires the legal entity, we supply Douglas Dean LLC only in that explicitly-labeled field. Approval SLA for Direct Advertiser is ~2-3 business days; the inbox is now wired to catch the response automatically.
+
+**Status / date to revisit.** Re-application guidance delivered + apply pages opened for William 2026-06-09 (he submits, only he can log in as hello@). Closed the obsolete address/proof-of-address task (#6). Watch hello@ for Amazon's response; on approval, proceed to wire `ads-api.ts` (Task 4).
 
 ---

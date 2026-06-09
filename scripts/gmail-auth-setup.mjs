@@ -29,9 +29,11 @@ import http from 'node:http';
 import { readFileSync } from 'node:fs';
 import { URL } from 'node:url';
 
-// Desktop OAuth clients accept any loopback redirect; this port is arbitrary.
+// Desktop OAuth clients register the bare loopback `http://localhost`; Google
+// ignores the port but matches the rest, so use a path-less redirect (no
+// `/oauth2callback`) to avoid an "Access blocked / redirect_uri_mismatch".
 const PORT = 53682;
-const REDIRECT_URI = `http://localhost:${PORT}/oauth2callback`;
+const REDIRECT_URI = `http://localhost:${PORT}`;
 const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
 const LOGIN_HINT = 'hello@phoneassured.com';
 
@@ -76,13 +78,13 @@ console.log('2. After you approve, this script will catch the redirect and print
 
 const server = http.createServer(async (req, res) => {
   const reqUrl = new URL(req.url, REDIRECT_URI);
-  if (reqUrl.pathname !== '/oauth2callback') {
+  const code = reqUrl.searchParams.get('code');
+  const err = reqUrl.searchParams.get('error');
+  // Ignore stray requests (e.g. favicon) that carry neither code nor error.
+  if (!code && !err) {
     res.writeHead(404).end();
     return;
   }
-
-  const code = reqUrl.searchParams.get('code');
-  const err = reqUrl.searchParams.get('error');
   if (err || !code) {
     res.writeHead(400, { 'Content-Type': 'text/plain' });
     res.end(`OAuth error: ${err || 'no code returned'}`);
