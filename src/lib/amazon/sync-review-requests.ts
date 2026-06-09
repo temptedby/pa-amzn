@@ -46,7 +46,8 @@ export interface ReviewRequestsResult {
   durationMs: number;
 }
 
-export async function runReviewRequests(): Promise<ReviewRequestsResult> {
+export async function runReviewRequests(opts: { dryRun?: boolean } = {}): Promise<ReviewRequestsResult> {
+  const { dryRun = false } = opts;
   const start = Date.now();
   const cfg = configFromEnv();
   if (!cfg) return { ok: false, count: 0, reason: "SP-API env vars not configured", durationMs: Date.now() - start };
@@ -77,6 +78,8 @@ export async function runReviewRequests(): Promise<ReviewRequestsResult> {
       checked++;
       const actions = await getSolicitationActions(cfg, o.AmazonOrderId, marketplaceId);
       if (!isProductReviewAvailable(actions)) { skipped++; await sleep(1100); continue; }
+
+      if (dryRun) { sent++; await sleep(300); continue; } // eligible, but don't send
 
       try {
         await requestProductReview(cfg, o.AmazonOrderId, marketplaceId);

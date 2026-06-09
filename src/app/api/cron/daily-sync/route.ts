@@ -57,7 +57,9 @@ export async function GET(request: Request) {
 
   // 4. Compliant review requests — fire Amazon's neutral "Request a Review" on
   //    every order now inside the eligible window. Directly lifts star ratings.
-  const reviews = await runReviewRequests();
+  //    Manual call with ?dryRun=1 previews eligible count without sending.
+  const dryRun = new URL(request.url).searchParams.get("dryRun") === "1";
+  const reviews = await runReviewRequests({ dryRun });
   if (!reviews.ok) {
     failures.push(`Review requests failed: ${reviews.error ?? reviews.reason ?? "unknown"}`);
   }
