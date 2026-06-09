@@ -80,3 +80,24 @@ Drafts for review are always fine. Real sends to real people require explicit go
 **Status / date to revisit.** Plan committed 2026-06-07. Revisit Monday 2026-06-08 after the rejection email is read. Target: approved or cleanly re-submitted by Fri 2026-06-12.
 
 ---
+
+### 2026-06-09 — Enable the hello@phoneassured.com inbox the DES way (Gmail API + refresh token), not the MCP connector
+
+**Context.** To read Amazon's emails (the Ads API rejection, future approvals/verification) we need programmatic access to the `hello@phoneassured.com` inbox. I first proposed the claude.ai Gmail MCP connector; William corrected: "this is not the way we enable the inbox" — pointing to how DES and Social Scene do it. Confirmed by DNS that `hello@phoneassured.com` is a Google Workspace mailbox (MX → `aspmx.l.google.com`). Also resolved the document worry: William has a **company bank statement** (Amazon's #1 accepted proof of address) — so Douglas Dean Holdings' thin expense footprint is a non-issue; only the address on it must match the Amazon account.
+
+**Options considered.**
+1. **claude.ai Gmail MCP connector.** Rejected by William — not their established method; ties inbox access to a session connector rather than the app.
+2. **Gmail API via Google OAuth with a stored refresh token (the DES/Social Scene pattern).** *Chosen.* DES uses raw `fetch` to `oauth2.googleapis.com/token` + the Gmail REST API (no SDK), scopes `gmail.readonly/send/modify`, token stored encrypted in DB (multi-user SaaS).
+3. **Service-account domain-wide delegation** (also used in Social Scene for Forms/Drive). Rejected for this: heavier admin setup than a single mailbox warrants.
+
+**Decision.** Replicate the DES Gmail-API pattern, scoped down for PA-AMZN: a **fresh, dedicated** Google Cloud project under the phoneassured.com Workspace (William's choice — keeps the Amazon business self-contained from besocialscene); a **Desktop-app OAuth client**; **`gmail.readonly` only** (least privilege — we read Amazon mail, never send; sends stay on Resend); refresh token stored in **`.env.local` as `GMAIL_REFRESH_TOKEN`**, mirroring `SP_API_REFRESH_TOKEN` (single mailbox → env, not DB-encrypted). Built two zero-dependency Node scripts: `scripts/gmail-auth-setup.mjs` (loopback-OAuth one-time refresh-token mint) and `scripts/find-amazon-email.mjs` (search + read Amazon mail). Setup documented in `confabulator/gmail-inbox-setup.md`.
+
+**Reasoning.** Matching the proven house pattern means the integration is durable and lives in the app (so a future cron can watch for Amazon's approval automatically), not in an interactive connector. Read-only + a fresh project respects both least-privilege and William's company-separation preference. Env-based token storage matches this repo's existing SP-API convention rather than importing DES's DB-encryption machinery for one inbox.
+
+**Industry source / best practice.** Google OAuth 2.0 installed-app loopback flow (Google deprecated OOB `urn:ietf:wg:oauth:2.0:oob`; loopback is the current installed-app redirect). OAuth least-privilege scope selection. Matches DES `src/lib/gmail/client.ts` + `scripts/process-replies-from-inbox.ts`.
+
+**Trade-offs accepted.** William must do the ~10-min Google Cloud console steps (create project, enable Gmail API, create the Desktop OAuth client) — only he can, under the phoneassured.com Workspace. The typed in-app `src/lib/google/gmail.ts` (for cron-watching Amazon mail) is deferred; the two scripts cover the immediate need. Read-only means if we later want to send from hello@ we add `gmail.send` and re-consent.
+
+**Status / date to revisit.** Scripts + setup doc built and committed 2026-06-09 (syntax-checked; `.env.local` confirmed gitignored). Blocked on William running Part 1 (console) + Part 2 (mint token). Once the token is in `.env.local`, `find-amazon-email.mjs` reads the rejection → unblocks the address fix (Task 1).
+
+---
