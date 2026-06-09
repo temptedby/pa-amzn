@@ -52,3 +52,27 @@ Each content asset is repurposed into a **string of content**, not a single post
 - **Feed post** (the anchor — image or video)
 - **Story / update** (ephemeral — frequency + top-of-mind)
 Stagger them through the day (e.g., Reel AM, Feed midday, Story PM) so @phoneassured has continuous presence. The DES Meta-publishing tooling schedules each format/placement from one source asset. Apply the same atomization to Amazon Posts where it fits.
+
+## 6-step + game plan for the content engine build (saved 2026-06-09 for tomorrow)
+
+**1. Problem.** Produce on-brand graphics/videos for Phone Assured and post them to @phoneassured IG/FB (atomized: Reel + Feed + Story, staggered through the day) + Amazon Posts. Success = a daily string of free-traffic content, reusing the Drive library + AI generation, fully separate from Social Scene data.
+
+**2. Standard / what already exists (reuse the method).** DES has the whole machine: Meta Graph publishing routes (`src/app/api/events/[id]/social-share/{generate,schedule,publish,generate-week,auto-generate,sync-engagement}` + `/api/cron/social-publish`), Meta OAuth (`/api/analytics/meta/callback`,`/accounts`), and AI content-gen scripts (`scripts/social-scene-ai-graphics.ts`, `-hero-v3`, `-kontext-scenes2` (Flux/fal image gen), `-canva-*` (Canva), `-montage` (video)). Meta needs: `META_APP_ID/SECRET`, a `page_id` + page access token, `instagram_user_id` (IG business).
+
+**3. Reality.** PA has the Drive library (25 videos / 146 images) + this strategy. PA does NOT yet have Meta tokens — needs a Meta app + OAuth to connect Phone Assured's **own** FB page + IG business account (two-companies: separate accounts, separate publishing from SS; reuse method/tooling only).
+
+**4. Options.** (a) Standalone PA scripts mirroring the DES method (fast, matches our other PA scripts). (b) Port the full social-share engine into PA-AMZN. (c) Use the DES app for PA — rejected (two-companies; PA stays self-contained).
+
+**5. Recommendation: (a) standalone PA scripts mirroring DES.** Content-gen (recut the 4 proven FB ad videos first → Reels; Flux/fal for new boating/use-case creatives; Canva for graphics) + a Meta publisher (page-token feed post + IG `media_publish` + Story) + atomization. Connect PA's Meta accounts first; verify a test post before scheduling.
+
+**6. Risk/rollback.** Meta publishing permissions may need app review; start with proven assets; **do NOT post until tokens + a test post are verified.** First action: connect PA's FB page + IG to a Meta app via OAuth.
+
+### Tomorrow's game plan (informal)
+1. **Connect Meta for @phoneassured** — Meta app + OAuth → page access token + IG business id into `.env.local`.
+2. **Port content-gen** (mirror `social-scene-ai-graphics.ts` etc.) — recut existing videos + first Flux/fal boating creatives.
+3. **Meta publisher + atomizer** — one asset → Feed + Reel + Story, staggered; test post to @phoneassured.
+4. **Amazon content ideas to build:**
+   - A+ Content / Brand Story: boating + use-case lifestyle modules, warranty callout, vs-competitor comparison.
+   - Amazon Posts (Securisee Brand Registry): one lifestyle shot per use case (boat/ski/festival), staggered.
+   - **Hero-image A/B** (#24): test product-on-white vs boating-lifestyle vs warranty-badge main image via Manage Your Experiments.
+   - Listing video + copy: lead with 1-yr warranty + anti-theft/boating keywords.

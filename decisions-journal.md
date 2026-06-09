@@ -174,3 +174,23 @@ To be precise about today's live ad changes (no overstating):
 - Net live changes today = 2 pauses + 3 bid raises. Everything else (negatives, new keywords, paused-winner relaunch) is queued in the daily runner.
 
 ---
+
+### 2026-06-09 (late) — Content engine: reuse the DES method as standalone PA scripts; Meta connection is the gate
+
+**Context.** With ads live + the content strategy set (boating flagship, atomize each asset into Reel+Feed+Story), William wants to build the content engine, reusing Social Scene's content-building research/method, and confirm we can post to Phone Assured's own FB/IG.
+
+**Reality (explored DES/SS tooling).** DES already has the full machine: Meta Graph publishing routes (`social-share/*`, `/cron/social-publish`), Meta OAuth (`/analytics/meta/*`), and AI content-gen scripts (`social-scene-ai-graphics.ts`, Flux/fal `-kontext-scenes2`, Canva `-canva-*`, video `-montage`). Posting needs `META_APP_ID/SECRET` + a page access token + IG business id. **PA has none of these tokens yet** — it has the Drive library (25 videos/146 images) + the strategy, but not a Meta connection.
+
+**Options considered.** (a) Standalone PA scripts mirroring the DES method; (b) port the whole social-share engine into PA-AMZN; (c) use the DES app for PA. (c) rejected — two-companies rule (PA must be self-contained, separate Meta accounts/publishing). 
+
+**Decision.** **(a)** — build standalone PA content scripts that mirror DES's proven approach (recut existing videos → Reels first, then Flux/fal AI creatives + Canva graphics; a Meta publisher that atomizes one asset → Feed+Reel+Story, staggered). Reuse SS's *method/tooling*, never its data/audiences. **Gate:** connect Phone Assured's own FB page + IG business account via a Meta app + OAuth — that's the first action tomorrow; nothing posts until tokens + a test post are verified.
+
+**Reasoning.** Standalone scripts match how the rest of PA-AMZN is built (gmail/ads/flippa scripts), keep PA self-contained, and let us start from the proven existing ad videos (fast) before layering AI generation. Atomization (Feed=permanent anchor, Reel=discovery, Story=daily frequency) covers all audience behaviors.
+
+**Industry source / best practice.** Content atomization (Gary V's content-pillar model); Meta Graph API IG `media_publish` + page feed; reuse of the DES social-share + AI-graphics pipeline.
+
+**Trade-offs / risk.** Meta publishing permissions may need app review (verify before relying on it). Some content-gen depends on Flux/fal/Canva API keys for PA. Don't post until a verified test post.
+
+**Status / date to revisit.** Plan + 6-step saved in `content-strategy.md` for tomorrow. First action: Meta OAuth for @phoneassured. Then content-gen + publisher + first batch (4 recut videos + 2 boating creatives) + Amazon content (A+, Posts, hero-image A/B).
+
+---
