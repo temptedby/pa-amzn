@@ -3,7 +3,10 @@ import { syncInventory } from "@/lib/amazon/sync-inventory";
 import { syncRestockRecommendations } from "@/lib/amazon/sync-restock";
 import { syncShipments } from "@/lib/amazon/sync-shipments";
 import { runReviewRequests } from "@/lib/amazon/sync-review-requests";
+import { runDailyInbox, buildDigestText } from "@/lib/google/daily-inbox";
 import { sendEmail, alertRecipient } from "@/lib/email";
+
+const DIGEST_RECIPIENT = "william@besocialscene.com";
 
 // Vercel Cron invokes this once a day. The CRON_SECRET header is injected
 // automatically by Vercel; reject anything else.
@@ -64,6 +67,21 @@ export async function GET(request: Request) {
     failures.push(`Review requests failed: ${reviews.error ?? reviews.reason ?? "unknown"}`);
   }
 
+  // 5. Daily inbox ops — archive noise, label kept mail, email a needs-attention
+  //    digest to William (only when there's something to act on).
+  const inbox = await runDailyInbox();
+  if (!inbox.ok && inbox.reason !== "GMAIL_* env not configured") {
+    failures.push(`Inbox ops failed: ${inbox.error ?? inbox.reason ?? "unknown"}`);
+  }
+  const digest = buildDigestText(inbox);
+  if (digest) {
+    await sendEmail({
+      to: DIGEST_RECIPIENT,
+      subject: `Phone Assured: ${inbox.attention!.length} message(s) need a reply`,
+      text: digest,
+    }).catch((e) => console.error("[cron] digest email failed:", e));
+  }
+
   if (failures.length > 0) {
     const body = [
       `Daily sync had ${failures.length} failure${failures.length === 1 ? "" : "s"} at ${startedAt}:`,
@@ -86,6 +104,7 @@ export async function GET(request: Request) {
     restock: { ok: restock.ok, count: restock.count, durationMs: restock.durationMs, error: restock.error ?? restock.reason },
     shipments: { ok: ship.ok, count: ship.count, durationMs: ship.durationMs, error: ship.error ?? ship.reason },
     reviewRequests: { ok: reviews.ok, count: reviews.count, checked: reviews.checked, skipped: reviews.skipped, durationMs: reviews.durationMs, error: reviews.error ?? reviews.reason },
+    inbox: { ok: inbox.ok, scanned: inbox.scanned, archived: inbox.archived, attention: inbox.attention?.length ?? 0, error: inbox.error ?? inbox.reason },
     failures,
   });
 }
