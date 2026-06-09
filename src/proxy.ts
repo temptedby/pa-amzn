@@ -9,6 +9,12 @@ export async function proxy(request: NextRequest) {
     return NextResponse.next();
   }
 
+  // Cron endpoints self-authenticate via the CRON_SECRET Bearer header (Vercel
+  // injects it). They must bypass the login-cookie redirect or they 307 to /login.
+  if (pathname.startsWith("/api/cron/")) {
+    return NextResponse.next();
+  }
+
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const ok = await verifySessionValue(token);
   if (!ok) {
