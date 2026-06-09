@@ -141,3 +141,26 @@ Drafts for review are always fine. Real sends to real people require explicit go
 **Status.** Application PENDING (watch hello@). Inbox clean. Next: daily auto-clean + needs-attention digest email; Drive content once the folder is shared.
 
 ---
+
+### 2026-06-09 (evening) — Ads API APPROVED + wired LIVE; first ad optimization applied by hand before automating
+
+**Context.** Morning's diagnosis (rejection = email↔company-name mismatch, not address) led to a same-day resubmission as **Phone Assured**, **approved in ~1 hour**. Sales are down ~90% and ad spend had collapsed to ~$60/14d at 115% ACOS — the core lever. The momentum bid + harvest engines were built/tested in April but never had an API to drive.
+
+**Options considered.**
+1. **Full auto from day 1** — pull → decide() → auto-push across all 3,424 keywords. Rejected for day 1: $9.49 thin margin, and blind automation on a just-connected account is risky.
+2. **Apply the few obvious cases by hand, then build the daily runner.** *Chosen.* The report surfaced 2 unambiguous bleeders ($28 wasted on competitor term "holdmate", 0 sales) and 3 unambiguous winners (22-23% ACOS throttled at $0.37). Pausing/raising those is low-risk, high-value, and demonstrates the engine's logic on real data before automating.
+3. Preview everything first — valid, but the 5 obvious changes were worth doing immediately.
+
+**Decision.** Wired the live Ads API (`ads-api.ts` + OAuth/profile/report/apply scripts), then **applied 5 high-confidence changes to live ads with William's approval**: paused the 2 "holdmate" bleeders, raised the 3 winners +50%. Next build is the **full daily runner** (kill-switch + momentum + harvest-new-keywords + relaunch-paused-winners, preview→approve→auto).
+
+**Reasoning.** The account isn't broken — it's a switched-off agency (Adverio) structure (10 enabled / 21 paused, 3,424 mostly-dormant keywords). Fastest recovery: stop the obvious bleed, scale proven winners, then let the engine systematically re-activate the paused winners + harvest. Preview-then-apply respects the thin margin; the engine's built-in kill-switch + 6h rate-limit + soft-cap are the guardrails.
+
+**Industry source / best practice.** Standard performance-PPC: negative-out competitor/non-converting terms, scale low-ACOS winners, harvest converting search terms, prune by a spend-with-no-conversion kill switch. Amazon Ads API v3 (spTargeting reports, /sp/keywords updates).
+
+**Learnings worth keeping.** (1) Ads API scope is **`advertising::campaign_management`** (double colon), not the older `cpc_advertising:` — "unknown scope" until corrected. (2) The onboarding/binding link must be clicked in a session with **no other Amazon accounts** (the same besocialscene trap that caused the original rejection) — a fresh browser guarantees it. (3) v3 write APIs want **IDs as strings** even though reports return them as numbers ("NUMBER_VALUE can not be converted to a String"). (4) The proxy was 307'ing `/api/cron/*` to /login since April — the daily cron never ran; now exempted.
+
+**Trade-offs accepted.** Manual one-time apply (not yet automated) for the 5 cases; the daily runner generalizes it. Ad-spend monthly attribution + "Revenue from Ads" (Flippa col J) still need a couple days of Ads data / the Reporting API to backfill.
+
+**Status / date to revisit.** Ads API LIVE 2026-06-09, first optimization applied. Next: build the daily engine runner (preview→approve→auto). Then content (graphics/videos from Drive → IG/FB/Amazon Posts, Task 20) and Canada reinstatement (Task 11). Financing research (Payability/Amazon Lending, Task 23) flagged for real 6-step, no fabrication.
+
+---
