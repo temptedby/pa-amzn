@@ -41,6 +41,8 @@ export interface HarvestConfig {
   addSourceNegativeOnGraduate: boolean;
 }
 
+// Thresholds are runtime-configurable. The harvest runner will pass William's
+// "< 40% ACOS → exact + phrase" rule as config; these tested defaults stay as-is.
 export const DEFAULT_HARVEST_CONFIG: HarvestConfig = {
   minOrders: 2,
   exactAcosMaxBps: 5000,
