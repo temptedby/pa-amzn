@@ -41,3 +41,28 @@ SP-API can pull the **daily sales/orders trend** — the exact date sales fell p
 1. **You:** eyeball the Buy Box on each ASIN (5 min) — is it yours, suppressed, or someone else's?
 2. **Me:** build the SP-API daily sales-trend pull to date the drop.
 3. Then fix the confirmed P0 cause first; layer ads + content for durable recovery.
+
+## REAL-DATA UPDATE (live scan 2026-06-09 — corrects assumptions)
+
+**Listing scan (scripts/amazon-scan.mjs):**
+| Listing | Price | Rating | Reviews | Buy Box | Stock |
+|---|---|---|---|---|---|
+| Ours Single B07Y5GZP1T | $9.49 | 3.8★ | 480 | ✅ | In stock |
+| Ours 2-Pack B097MGPCPC | $13.49 | 3.7★ | 74 | ✅ | In stock |
+| Ours Pro B0CFYVNBJX | $9.49 | 3.8★ | 480* | ✅ | In stock |
+| Ours 3-Pack B097MHPL12 | $9.49 | 3.3★ | 3 | ❌ | **Currently unavailable** |
+| Comp Pulpo B0BNSPVHKC | $14.99 | 4.0★ | 676 | ✅ | In stock |
+| Comp 4-Pack B0CHFL81WR | $7.49 | 4.3★ | 56 | ✅ | In stock |
+| Comp TOLUON B0B8NTRM38 | $9.49 | 4.2★ | 9 | ❌ suppressed | — |
+
+**Corrected diagnosis:** Buy Box is INTACT on our main ASINs (not a suppression event). The real gaps: (1) **ratings 3.3-3.8★ — lowest in the category** (Pulpo 4.0 at $14.99 with 676 reviews; 4-Pack 4.3 at $7.49); the rating gap is the competitive weakness, not price. (2) **3-Pack out of stock** (zero sales). (3) Likely **collapsed paid traffic** (ads unmanaged) + organic rank decay. So this is a **rebuild around product quality + ratings**, amplified by ads (pending API) and free content.
+
+**Review policy (researched):** custom "thanks, please review" buyer-seller messages = restricted, don't send. **Amazon's Request-a-Review / Solicitations API = allowed** (neutral template, 5-30 days post-delivery, once/order, no incentives). We already have SP-API access → automate it. This is the #1 ratings lever and it's free + compliant.
+
+**Rebuild spine (priority):**
+1. **Compliant review engine** — Solicitations API auto Request-a-Review for every eligible delivered order (free, uses existing SP-API).
+2. **Fix the product complaint** (retraction failure on the tether) — root cause of low ★; William/ops.
+3. **Restock the 3-Pack** (B097MHPL12).
+4. **A+ Content / Brand Story** (free, Securisee Brand Registry) → conversion.
+5. **Ads via API** (pending) → amplify once listing/ratings are stronger.
+6. **Free external traffic** — Amazon Posts + Meta/TikTok from the content library (reuse Social Scene method, not its data).
