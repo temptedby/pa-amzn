@@ -34,7 +34,17 @@ import { URL } from 'node:url';
 // `/oauth2callback`) to avoid an "Access blocked / redirect_uri_mismatch".
 const PORT = 53682;
 const REDIRECT_URI = `http://localhost:${PORT}`;
-const SCOPE = 'https://www.googleapis.com/auth/gmail.readonly';
+// Broadened from gmail.readonly to cover the new workstreams (one re-consent):
+//   gmail.modify  — read + archive/trash for inbox cleanup (can't permanently delete; safe)
+//   drive.readonly — read Phone Assured photos/videos for content
+//   spreadsheets   — the Flippa company-sale financials sheet
+//   calendar       — scheduling
+const SCOPE = [
+  'https://www.googleapis.com/auth/gmail.modify',
+  'https://www.googleapis.com/auth/drive.readonly',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/calendar',
+].join(' ');
 const LOGIN_HINT = 'hello@phoneassured.com';
 
 // Minimal .env.local loader (this repo has no dotenv; matches its zero-dep style).

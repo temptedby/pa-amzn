@@ -41,3 +41,7 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 /data
+
+# Playwright session profile + recon artifacts (contain cookies/PII)
+.pw-profile/
+scripts/pw-*.png

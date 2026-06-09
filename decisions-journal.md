@@ -125,3 +125,19 @@ Drafts for review are always fine. Real sends to real people require explicit go
 **Status / date to revisit.** Re-application guidance delivered + apply pages opened for William 2026-06-09 (he submits, only he can log in as hello@). Closed the obsolete address/proof-of-address task (#6). Watch hello@ for Amazon's response; on approval, proceed to wire `ads-api.ts` (Task 4).
 
 ---
+
+### 2026-06-09 (later) — Ads API SUBMITTED as Phone Assured; Playwright form automation; Google access broadened; inbox 769→61
+
+**Context.** Same-day continuation after finding the real rejection reason. Goal: actually submit the corrected application, then start the content + inbox workstreams.
+
+**What happened.**
+- **Ads API SUBMITTED.** Direct Advertiser application filed as **Phone Assured** (Company legal name + Brand name), website https://www.phoneassured.com, account type *Amazon seller*, countries US/CA/MX, with own-campaign bid/keyword automation justification + consent. Confirmation email *"Amazon Ads API Registration Request Pending"* received in hello@. Awaiting review (~2–3 business days). Caveat being watched: the ad account brand displays as **Securisee** (per the payout email "Congratulations Securisee!"); we deliberately optimized for the *documented* rejection (email↔company-name, which Phone Assured satisfies vs hello@phoneassured.com). If the reviewer wants the account brand instead, we pivot — but Securisee has no matching email domain, so Phone Assured was the right first move.
+- **Playwright form automation** (`scripts/pw-ads-inspect.mjs`, `scripts/pw-ads-fill.mjs`): headed browser with a persistent profile (`.pw-profile`, gitignored) so William logs in once (no creds in code); inspect dumps every field, fill populates all data fields and **verifies each read-back before submit**. Amazon's custom checkboxes needed label/force clicks. William added CA+MX and clicked submit.
+- **Google access broadened** from `gmail.readonly` → `gmail.modify` + `drive.readonly` + `spreadsheets` + `calendar` (one re-consent) for inbox cleanup, Drive content, and the Flippa financials sheet. Token rotated in `.env.local`.
+- **Inbox cleaned 769→61.** `scripts/inbox-clean.mjs` archives Gmail's Promotions/Social/Updates buckets with KEEP overrides for personal/actionable mail + protected humans (Flippa brokers, fbareviews, Amazon `dev-reg-vetting`, buyer-seller messages). Archived 708; reversible (All Mail). Drive reader (`scripts/drive-list.mjs`) ready pending Drive-API enable + folder share to hello@.
+
+**Decisions / learnings.** For a one-time, identity-sensitive submit, Playwright = inspect + fill + *verify-gate*, with the human doing login and the final click — never blind auto-submit. For inbox cleanup, archive (reversible) not delete, and lean on Gmail's own categories with explicit human/actionable KEEP overrides.
+
+**Status.** Application PENDING (watch hello@). Inbox clean. Next: daily auto-clean + needs-attention digest email; Drive content once the folder is shared.
+
+---
