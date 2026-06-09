@@ -82,3 +82,11 @@ SP-API can pull the **daily sales/orders trend** — the exact date sales fell p
 **Reads:** market price $13-16 (ClutchLoop $29.99 at #1) — we're underpriced at $9.49; category won on quality/trust, not low price. We're lowest-rated (3.8). MoKo's 2,299 reviews = the bar.
 
 **Positioning wedge — own the WATER/MARINE niche.** No competitor targets boating; they all do generic carabiner/hiking/climbing. Phone Assured should own **boat / kayak / paddleboard / fishing / jet ski / cruise / lake** (high-stakes: overboard phone = lost). Acts on: listing keywords + title/bullets, boating content (Posts/Meta/TikTok from the library + testimonials), ad targeting to boating/fishing audiences, and justifies a price move toward $12-14 (margin). Validate keyword demand (free) before committing the listing.
+
+## Underserved audiences (research 2026-06-09)
+Don't fight MoKo (2,299 rev) / Rogue Fishing Co. (owns fishing/kayak, premium) head-on. Win underserved niches via targeted keywords + content + ads (rotate/test audiences):
+1. **Accessibility / mobility (white space):** wheelchair, crutches, elderly, tremor/Parkinson's, ADA / medical-device tether. High need, ~no Amazon brand owns it, B2B bulk channel (assisted living, clinics, OT/PT). **Top opportunity.**
+2. **Boating / marine / cruise (William's wedge):** water = total loss; room beyond Rogue's fishing focus (boat/cruise/jet ski/paddleboard).
+3. **Construction / industrial safety (B2B):** operators, scaffolding, drop-from-height; bulk orders, underserved.
+Also-rans: busy parents/toddlers, amusement parks, concerts (Pulpo targets festivals).
+**Action:** validate keyword demand (free), then niche-targeted titles/bullets/keywords + content + ads. Recommended first: Accessibility + Boating.
