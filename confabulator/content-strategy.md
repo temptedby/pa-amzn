@@ -38,3 +38,10 @@ Proven FB ad **videos**: "Protect Phone Festivals," "Protect Phone Whatever You 
 2. Connect the DES Meta plugin to @phoneassured (Meta app + tokens).
 3. First batch: recut 3-4 existing videos + 2 boating-flagship AI creatives → schedule.
 4. Confirm Securisee Brand Registry for Amazon Posts.
+
+## Drive inventory (2026-06-09) — what we have to work with
+- **25 videos.** Finished FB ad creatives (reuse first): "Protect Phone Festivals," "Protect Phone Whatever You Do," "Testimonial PA Billo," "Animation Product Details," 2 PIWT graphic ads. Plus ~15 raw lifestyle .MOV clips (IMG_*.MOV) for new edits. (Note: 2 "BPA-Day1/Day2" files are incomplete .crdownload course videos, not content.)
+- **146 images.** "PA - FB ad" graphic series (post-ready), product/brand shots ("phone secured phone assured," "phone assured pro unmatched," brand tags), and a "Smadar WANT THEEEESSE" folder of 16+ DJI drone/aerial shots (outdoor/lifestyle backdrops).
+- Reproduce anytime: `node scripts/drive-inventory.mjs`.
+
+**First content batch (recommended):** recut the 4 finished FB ad videos into IG/FB Reels; post the "PA - FB ad" graphics; produce 2 boating-flagship pieces (AI + a raw .MOV clip over a drone aerial). Then connect the DES Meta plugin to schedule @phoneassured.
