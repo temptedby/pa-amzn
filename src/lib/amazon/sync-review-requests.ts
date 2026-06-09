@@ -36,6 +36,10 @@ async function fetchRecentOrders(cfg: SpApiConfig, marketplaceId: string): Promi
     orders.push(...(data.payload?.Orders ?? []));
     nextToken = data.payload?.NextToken;
   } while (nextToken && orders.length < 500);
+  // Oldest first — the oldest eligible orders are closest to aging out of
+  // Amazon's 30-day window, so when we hit the per-run cap we defer the NEWEST
+  // (which stay eligible for tomorrow's run), never the oldest.
+  orders.sort((a, b) => new Date(a.PurchaseDate).getTime() - new Date(b.PurchaseDate).getTime());
   return orders;
 }
 
