@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { syncInventory } from "@/lib/amazon/sync-inventory";
 import { syncRestockRecommendations } from "@/lib/amazon/sync-restock";
 import { syncShipments } from "@/lib/amazon/sync-shipments";
+import { runReviewRequests } from "@/lib/amazon/sync-review-requests";
 import { sendEmail, alertRecipient } from "@/lib/email";
 
 // Vercel Cron invokes this once a day. The CRON_SECRET header is injected
@@ -54,6 +55,13 @@ export async function GET(request: Request) {
   // Inventory sync already runs runLowStockAlerts internally on success, so
   // that piece is covered.
 
+  // 4. Compliant review requests — fire Amazon's neutral "Request a Review" on
+  //    every order now inside the eligible window. Directly lifts star ratings.
+  const reviews = await runReviewRequests();
+  if (!reviews.ok) {
+    failures.push(`Review requests failed: ${reviews.error ?? reviews.reason ?? "unknown"}`);
+  }
+
   if (failures.length > 0) {
     const body = [
       `Daily sync had ${failures.length} failure${failures.length === 1 ? "" : "s"} at ${startedAt}:`,
@@ -75,6 +83,7 @@ export async function GET(request: Request) {
     inventory: { ok: inv.ok, count: inv.count, durationMs: inv.durationMs, error: inv.error ?? inv.reason },
     restock: { ok: restock.ok, count: restock.count, durationMs: restock.durationMs, error: restock.error ?? restock.reason },
     shipments: { ok: ship.ok, count: ship.count, durationMs: ship.durationMs, error: ship.error ?? ship.reason },
+    reviewRequests: { ok: reviews.ok, count: reviews.count, checked: reviews.checked, skipped: reviews.skipped, durationMs: reviews.durationMs, error: reviews.error ?? reviews.reason },
     failures,
   });
 }

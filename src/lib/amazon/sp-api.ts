@@ -116,13 +116,14 @@ export async function spRequest<T>(
     },
   });
 
+  const text = await res.text().catch(() => "");
   if (!res.ok) {
-    const text = await res.text().catch(() => "");
     console.error(`[sp-api] ${res.status} ${path}: ${text.slice(0, 2000)}`);
     throw new SpApiError(`SP-API ${res.status} ${path}`, res.status, path, text);
   }
 
-  return (await res.json()) as T;
+  // Some endpoints (e.g. Solicitations create) return 201/204 with no body.
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
 // For tests.
