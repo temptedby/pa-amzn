@@ -164,3 +164,13 @@ Drafts for review are always fine. Real sends to real people require explicit go
 **Status / date to revisit.** Ads API LIVE 2026-06-09, first optimization applied. Next: build the daily engine runner (preview→approve→auto). Then content (graphics/videos from Drive → IG/FB/Amazon Posts, Task 20) and Canada reinstatement (Task 11). Financing research (Payability/Amazon Lending, Task 23) flagged for real 6-step, no fabrication.
 
 ---
+
+### 2026-06-09 (correction, for accuracy) — exactly what changed in the ad account today
+
+To be precise about today's live ad changes (no overstating):
+- **Paused: 2 keywords** ("holdmate phone lanyard" ×2 — competitor term, $28 wasted/0 sales). Applied ✓.
+- **Raised: 3 keyword bids** ("retractable phone lanyard tether" $0.37→$0.55, "cell phone lanyard" $0.37→$0.55, "retractable cord for phone" $1.11→$1.67). Applied ✓.
+- **NO new keywords were added.** The negative-keyword "holdmate" add FAILED (sent `CAMPAIGN_NEGATIVE_PHRASE`; valid is `NEGATIVE_PHRASE`) and was **not** applied — code fixed for the daily runner, but not re-run today. **No harvest / new-keyword creation yet** — that is the next build (the daily engine runner: harvest converting search terms <40% ACOS → new exact+phrase keywords, plus re-activating paused past-winners).
+- Net live changes today = 2 pauses + 3 bid raises. Everything else (negatives, new keywords, paused-winner relaunch) is queued in the daily runner.
+
+---
