@@ -45,3 +45,10 @@ Proven FB ad **videos**: "Protect Phone Festivals," "Protect Phone Whatever You 
 - Reproduce anytime: `node scripts/drive-inventory.mjs`.
 
 **First content batch (recommended):** recut the 4 finished FB ad videos into IG/FB Reels; post the "PA - FB ad" graphics; produce 2 boating-flagship pieces (AI + a raw .MOV clip over a drone aerial). Then connect the DES Meta plugin to schedule @phoneassured.
+
+## Distribution rule — atomize every piece across formats + across the day
+Each content asset is repurposed into a **string of content**, not a single post:
+- **Reel** (vertical video — discovery/reach)
+- **Feed post** (the anchor — image or video)
+- **Story / update** (ephemeral — frequency + top-of-mind)
+Stagger them through the day (e.g., Reel AM, Feed midday, Story PM) so @phoneassured has continuous presence. The DES Meta-publishing tooling schedules each format/placement from one source asset. Apply the same atomization to Amazon Posts where it fits.
