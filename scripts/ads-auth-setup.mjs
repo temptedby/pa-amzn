@@ -21,7 +21,7 @@ import { URL } from 'node:url';
 
 const PORT = 53682;
 const REDIRECT = `http://localhost:${PORT}`;
-const SCOPE = 'cpc_advertising:campaign_management';
+const SCOPE = 'advertising::campaign_management';
 
 function loadEnv(){try{const r=readFileSync(new URL('../.env.local',import.meta.url),'utf8');for(const l of r.split('\n')){const m=l.match(/^([A-Z0-9_]+)=(.*)$/);if(m&&!(m[1]in process.env))process.env[m[1]]=m[2];}}catch{}}
 loadEnv();

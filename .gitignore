@@ -45,3 +45,5 @@ next-env.d.ts
 # Playwright session profile + recon artifacts (contain cookies/PII)
 .pw-profile/
 scripts/pw-*.png
+
+.pw-ads-onboard/
