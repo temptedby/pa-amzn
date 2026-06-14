@@ -3,6 +3,10 @@
     {
       "path": "/api/cron/daily-sync",
       "schedule": "0 14 * * *"
+    },
+    {
+      "path": "/api/cron/ad-engine",
+      "schedule": "0 */6 * * *"
     }
   ]
 }
