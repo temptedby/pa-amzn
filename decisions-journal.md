@@ -194,3 +194,141 @@ To be precise about today's live ad changes (no overstating):
 **Status / date to revisit.** Plan + 6-step saved in `content-strategy.md` for tomorrow. First action: Meta OAuth for @phoneassured. Then content-gen + publisher + first batch (4 recut videos + 2 boating creatives) + Amazon content (A+, Posts, hero-image A/B).
 
 ---
+
+---
+
+### 2026-06-10 — Daily ad engine runner built (preview-first, whole-account)
+
+**Context.** Yesterday's optimization was a one-off (`ads-apply.mjs`: 2 pauses + 3 raises). William wants the daily engine: kill-switch + momentum bids + harvest + relaunch paused winners, across all 3,424 keywords, preview→approve→auto.
+
+**Options.** (a) Generalize the working `ads-apply.mjs` into a preview-first runner using the 14d report; (b) wire the full tested `bid-engine.ts`/`harvest-engine.ts` with proper 3d/prior-3d windows via a daily-granularity report. (b) is the eventual target but needs windowed data plumbing.
+
+**Decision.** Ship (a) now as `scripts/ads-engine.mjs` — kill (≥$4/0 orders→pause), scale (ACOS<25%→+20%, <40%→+10%), cut (≥60%→−15%), relaunch paused winners; floor $0.10 / cap $2.50; preview by default, `MODE=live` to apply. Hardened report polling for Amazon's 425 duplicate-report response.
+
+**Reasoning.** The ACOS-bracket logic is the same shape that worked live yesterday, is safe, and gets a daily cadence running immediately. Today's preview was tiny and correct (kill 1 / scale 2 / cut 1), matching the account's small spend.
+
+**Industry source.** Amazon Ads API v3 (`/sp/keywords` PUT, Reporting v3 spTargeting); standard ACOS-threshold bid management.
+
+**Trade-offs / risk.** Not yet the true momentum engine (no 3d/prior-3d windows); relaunch returns 0 on 14d data. Mitigation: next add a long-lookback pass. Live writes gated behind `MODE=live` + preview.
+
+**Status.** Preview verified; apply pending William's go. Lifetime-relaunch pass queued.
+
+---
+
+### 2026-06-10 — "Lifetime words to relaunch" needs a long-lookback pass (not 14d)
+
+**Context.** William: paused keywords that did well historically should go live again. The 14d relaunch check returns 0 because paused keywords get no recent impressions.
+
+**Decision.** Add a separate relaunch pass over the **maximum report window the API allows (~60-65d, the data-retention ceiling)** to surface paused past-winners (orders + ACOS under threshold over that window), then re-enable. True "lifetime" beyond ~65d isn't available via the API (retention limit) — note that openly, don't pretend to it.
+
+**Industry source.** Amazon Ads Reporting v3 date-range + ~60-65d data-retention limits.
+
+**Trade-offs.** Can't see pre-65d history through the API; the old "Adverio" winners older than that need a manual/bulk export if we want them. Status: queued for the next engine build.
+
+---
+
+### 2026-06-10 — Canada reinstatement: canonical identity confirmed from the bank statement; Delaware unresolved
+
+**Context.** amazon.ca selling is blocked on a documents "could not align" verification. William granted Drive access and handed over statements; goal is to assemble the package and align the identity.
+
+**Reality (read the actual docs).** May 2026 PNC statement → **`Douglas Dean Holdings LLC` / `730 W Lake St, Ste 162, Chicago, IL 60661-1010`** (fresh, in Amazon's window, #1 accepted proof). The only formation docs on hand are the **2011 Illinois** Articles of Organization + 2011 EIN letter (older addresses). No Delaware Certificate of Formation found anywhere we can reach; the reported DE move is undocumented to us. A "Cynthia Lafferty W9" was her personal SSN form — wrong doc, deleted.
+
+**Options.** (a) Submit bank statement + align Seller Central name/address/state, escalate to live video verification if it bounces; (b) also produce the Delaware formation doc; (c) discover the entity is still Illinois, not Delaware.
+
+**Decision.** Prep the package around the bank statement (a). Two real mismatch roots to fix: legal name must read **"Douglas Dean Holdings LLC"** (stop dropping "Holdings"), and **state of formation must be verified** — William searches icis.corp.delaware.gov (free) to confirm DE vs IL and get the file number; orders a certified Certificate of Formation only if Amazon requires it.
+
+**Reasoning / boundary.** Bank statement is Amazon's top accepted proof; exact-match on name/address/state is what these KYC checks enforce. I do **not** log into Seller Central or upload identity documents — William's login + identity-sensitive; I assemble, he submits.
+
+**Industry source.** Amazon Global seller identity/address verification (KYC/PCMLTFA); Delaware Division of Corporations entity search + certified-copy service.
+
+**Trade-offs / risk.** If the entity was never actually converted to Delaware, Seller Central's state field and the formation doc must say Illinois — guessing "Delaware" would re-trigger the mismatch. Verify before submitting. Tooling: installed `poppler` to read scanned PDFs; added `scripts/drive-find-docs.mjs`.
+
+**Status.** Proof-of-address ready. Pending: William verifies DE/IL on the state site, aligns Seller Central, reads Amazon's exact ask, then submits.
+
+---
+
+### 2026-06-10 — Review catch-up batch crashed on Vercel; safe to retry, none sent
+
+**Context.** William wants another ~60 review requests out (oldest→newest). The production `review-requests?catchUp=1` endpoint returned **500 INTERNAL_FUNCTION_INVOCATION_FAILED** at ~42s.
+
+**Finding.** Platform-level crash, not app logic (`maxDuration=300`; engine catches its own errors). **No double-send risk on retry** — the engine checks Amazon's solicitation availability first, and Amazon blocks a second request per order. So zero reviews went out today, and a rerun is safe.
+
+**Decision.** Reroute: run the engine locally (avoids the serverless crash, full visibility) or fix the function, then send. Not done today.
+
+**Status.** Open — 0 of the intended ~60 sent.
+
+---
+
+### 2026-06-10 (cont.) — Sales-drop diagnostic: a wrong first answer, corrected to the real cause
+
+**Context.** Still down ~90%; June ACOS reported ~220% ("never seen it that bad"). William: "do a review and test everything." Need the real cause, not a guess.
+
+**What happened (and the mistake).** Built `scripts/diagnose.mjs` (SP-API inventory + Buy Box + ad conversion). First run used a hardcoded ASIN list copied from an old gameplan doc and concluded "out of stock on 3 of 4 ASINs, that's the cause." **William challenged it** (he saw 16 units on the 3-Pack). He was right and I was wrong — the script read retired/duplicate SKUs and collapsed by ASIN (last-SKU-wins).
+
+**Correction (raw all-SKU dump).** Real stock is healthy: Single B07Y5GZP1T **242** (live SKU 57-P4AJ-J4AC; the dead dupe XR-S5DA-VB4S reads 0), 2-Pack 35, black 3-Pack B097MK5VZ4 **16** (I'd queried the retired white 3-Pack B097MHPL12=0), Pro B0BLLJLSDP **28** (I'd read the old Pro ASIN B0CFYVNBJX=0). Out-of-stock retracted.
+
+**The real diagnosis (`ads-month.mjs`).** June: $32.90 spend / $10.49 sales / 56 clicks / **1 order** / 11,836 impr → **ACOS 314%, CVR 1.79%**. All spend is on the in-stock, buy-box-winning Single (not dead ASINs). Two real causes: **(1) the account is dormant** ($33/mo; the old Adverio agency left ~21 campaigns paused; 2,267 keywords sit "enabled" inside paused campaigns so they never spend), and **(2) conversion is weak** (1.79% vs ~10% healthy → the 3.8★ + listing).
+
+**Decision.** Recovery is two-pronged: **turn the account back on intelligently** (relaunch paused campaigns that historically converted, harvest converting search terms into new keywords, scale converters, kill wasters) and **lift conversion** (keep the review engine firing on the 3.8★, build A+ content, run the hero-image A/B). Bid tuning alone was never going to fix a dormant, low-converting account.
+
+**Industry source.** Amazon ad ACOS/CVR benchmarks; FBA Inventory API per-SKU truth vs. stale ASIN maps; classic "out-of-stock vs conversion vs dormancy" triage.
+
+**Trade-offs / lesson logged.** Never diagnose off a hardcoded ASIN/SKU list — pull the live inventory SKUs every time. Verify a surprising number before acting on it (the user caught this; the 6-step "open files, cite reality, don't guess" rule applies to live data too).
+
+**Status.** Cause identified. Action (relaunch + harvest + bid moves) gated on the 90-day chunked report (`ads-harvest.mjs`).
+
+---
+
+### 2026-06-10 (cont.) — Ad keyword review must be chunked into 30-day windows
+
+**Context.** William wants to know which keywords converted "over the last two and a half months" to add, turn off, or re-bid.
+
+**Reality.** Amazon Ads Reporting v3 rejects any report whose date range exceeds **31 days** ("must not exceed maximum range (31 days)"). A single 60-90d pull is impossible.
+
+**Decision.** `ads-harvest.mjs` pulls **three 30-day windows (~90d)** per report type and aggregates by searchTerm / keywordId / campaignId. Three views: (A) **campaign history** → paused campaigns that converted <40% ACOS are relaunch candidates; (B) **search-term harvest** → converting customer searches not already keywords → add as exact/phrase; (C) **keyword perf** → turn off (≥$4/0 orders), raise (ACOS<25%), lower (ACOS≥60%). Preview-first.
+
+**Industry source.** Amazon Ads API v3 reporting 31-day max range + ~60-65d data retention; standard search-term harvesting + paused-winner relaunch.
+
+**Trade-offs.** Data older than ~60-65d may be unavailable (retention) — the oldest window can come back thin. Status: running; apply on review.
+
+---
+
+### 2026-06-10 (cont.) — Content calendar built on the Social Scene cadence
+
+**Context.** William wants to start producing graphics/content for @phoneassured + Amazon, using the Social Scene method, with a 1-2 month calendar. SS posts 4x/day + an end-of-day recap; each post atomizes Feed→Reel→Story; recap is a slideshow of the day's 4.
+
+**Decision.** `confabulator/content-calendar.md`: the 4-posts + recap-slideshow model, 5 pillars (boating flagship, anti-theft, anti-drop, everyday, warranty), a weekly pillar-rotation grid, an 8-week summer→back-to-school theme arc, a fully spec'd sample Week 1 (28 posts), and a parallel Amazon track (Posts + A+ + hero A/B) fed by the same assets. Reuse the existing 25 videos / 146 images + located source docs first; AI fills gaps.
+
+**Reality (source assets, `drive-blogs.mjs`).** Found reusable PA docs: "Uses for Phone Assured for activities / other items to attach to," "Stats on phones dropped in home," "Personas/Content," "Travel Hacks," "Billo Scripts," "Nov 2020 Website Copy," "Friends & Family Reviews."
+
+**Industry source.** Content atomization (pillar model); Meta Graph IG `media_publish` + page feed; the DES social-share pipeline (method reuse only, two-companies).
+
+**Trade-offs / gate.** Building graphics needs no keys (HTML→Playwright + ffmpeg recuts); AI needs `FAL_KEY`; publishing needs @phoneassured's own Meta connection (page token + IG id) + a Blob token. Nothing posts until a verified test post.
+
+**Status.** Calendar + asset map done. Next: connect Meta, build the Week 1 batch.
+
+---
+
+### 2026-06-11 — Applied the ad optimization LIVE + built organic-growth playbook
+
+**Context.** William: "we have no sales today, work the ads account" + confirmed the strategy (add converting search terms as exact+phrase, cut $4 wasters, re-bid by ACOS, check every few hours).
+
+**Decision + action (LIVE, `scripts/ads-apply2.mjs`).** Applied to the US account: paused 3 proven wasters (`cell phone tether tab heavy duty`, `holdmate`, `leash for iphone`); added 14 keywords (7 converting search terms × exact+phrase: phone tethered, securisee phone tether, retractable phone holder for disabled person / with belt clip, cell phone case with tether strap, retractable tool tether, wired anti theft phone strap) into the Branded Manual campaign; raised 3 low-ACOS converters, lowered the high-ACOS ones. All 207-multistatus success except one archived keyword Amazon rejected (expected). Harvest keywords go to a MANUAL ad group (auto campaigns reject keywords).
+
+**Reasoning.** The 90d review (`ads-harvest.mjs`, chunked 30d windows — API max range is 31d) showed the account is dormant (21/33 campaigns paused, none converted in 90d so no data-backed relaunch), one Auto campaign carries sales, and 8 converting search terms weren't keywords. Turning those into keywords + cutting waste is the immediate, reversible lever.
+
+**Open (William's ask): run every few hours.** Next build = wrap the kill-switch + harvest + bid logic into a Vercel cron route on a few-hour schedule (currently manual scripts + the once-daily sync). Plus a health check that re-researches if the system isn't producing.
+
+**Industry source.** Amazon Ads API v3 (keyword create/update, 31-day report cap); standard search-term harvest + ACOS bid management.
+
+**Trade-offs.** New keywords at $0.50 are unproven at the keyword level (were proven as search terms); monitor. Archived-entity edits fail silently-ish (logged).
+
+---
+
+### 2026-06-11 — Organic-growth playbook (4 platforms, 2026, cited)
+
+**Decision.** `confabulator/organic-growth-playbook.md`: add TikTok + YouTube Shorts + Pinterest to IG/FB; rewrite every caption as a search result (keyword-first, not hashtag-stuffed, 3-5 niche tags); one source video → 4 placements (always strip TikTok watermark); Pinterest as the evergreen Amazon-traffic channel; micro-creator gifting wks 3-4; honest cadence caution (2-3 strong source pieces/day beats forcing 4 weak). Keyword/hashtag sets per pillar + 30-day plan + 5 metrics included.
+
+**Industry source.** 2026 best-practice across Later/Toptal/Buffer (IG), SEO Sherpa/Metricool (TikTok), JoinBrands/HashtagTools (YT), Social Media Examiner (FB), Outfy/SEO Sherpa (Pinterest), plus Amazon A10 rewarding off-Amazon traffic. Seeding-ROI figures flagged vendor/directional.
+
+**Status.** Playbook saved; fold the keyword sets + 3 new platforms into `content-calendar.md` next; publishing still gated on connecting @phoneassured's Meta + creating the TikTok/YT/Pinterest accounts.
