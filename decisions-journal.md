@@ -332,3 +332,51 @@ To be precise about today's live ad changes (no overstating):
 **Industry source.** 2026 best-practice across Later/Toptal/Buffer (IG), SEO Sherpa/Metricool (TikTok), JoinBrands/HashtagTools (YT), Social Media Examiner (FB), Outfy/SEO Sherpa (Pinterest), plus Amazon A10 rewarding off-Amazon traffic. Seeding-ROI figures flagged vendor/directional.
 
 **Status.** Playbook saved; fold the keyword sets + 3 new platforms into `content-calendar.md` next; publishing still gated on connecting @phoneassured's Meta + creating the TikTok/YT/Pinterest accounts.
+
+---
+
+### 2026-06-14 — Ad engine made autonomous (Vercel cron, every 6h)
+
+**Context.** William: "build something that runs autonomously even when my computer/terminal isn't on." The ad logic lived in manual `.mjs` scripts.
+
+**Decision.** Port the logic to `src/lib/amazon/ad-engine.ts` + a CRON_SECRET-auth route `src/app/api/cron/ad-engine`, scheduled every 6h in `vercel.json`. Reuses the existing cron + email pattern (no new dependency; chose Vercel cron over Inngest for zero-friction since infra already uses it).
+
+**Design (safe-to-repeat).** Kill-switch (≥$4/0 orders → pause) and harvest (converting terms → exact+phrase, deduped) are idempotent. Bids use **target-ACOS convergence** (toward 30%, capped ±25%/run) instead of relative nudges, so repeated runs converge rather than compounding to the cap. Emails a summary only on action/error.
+
+**Reasoning.** A few-hourly loop must not compound; target-based bidding is the standard fix. Verified: deploy → first dry-run failed (`ADS_* env not configured`, creds were local-only) → added `ADS_*` to Vercel env → redeploy → production dry-run returned sensible actions (pause 1, re-bid 5) in 118s.
+
+**Industry source.** Target-ACOS automated bidding; Vercel Cron; idempotent job design.
+
+**Trade-offs / risk.** 6h cadence requires Vercel Pro (Hobby caps at daily) — first weekend emails confirm; Inngest is the fallback. New keywords unproven at keyword level. Rollback: remove the cron entry from `vercel.json`.
+
+**Status.** Live + verified. Weekend already showed CVR 1.79%→11.1%, ACOS 314%→57% from the manual 06-11 apply.
+
+---
+
+### 2026-06-14 — Amazon content priorities; Amazon Posts is dead
+
+**Context.** William wants to build content for Amazon + IG/FB/TikTok/YouTube; "research how Amazon does content."
+
+**Reality (researched, cited).** **Amazon Posts was discontinued July 2025** — our `content-calendar.md` + plan wrongly relied on it; dropped (task #10 deleted). For a 1.79%-conversion / 3.8★ listing the ranked levers are: main image + Manage Your Experiments A/B → Vine reviews (3.8★ is the top drag) → 7-image set (+~35%) → listing video (+9-15%, UGC ~+23%) → A+ → Brand Story → Premium A+ (+8%→+20%).
+
+**Decision.** Sequence conversion work by impact-per-hour (image + reviews + images first, before spending on traffic). Build content from the Drive library (25 videos / 146 images) + repurpose into Amazon surfaces + the 4 social platforms. Posting to social still gated on connecting @phoneassured's own Meta + creating TikTok/YT/Pinterest accounts.
+
+**Industry source.** Amazon A+/Premium A+ (+8%/+20%), 7+ images ~+35%, video +9-15%, 4.5★+50 reviews ~2× conversion; MYE for content (not price) A/B. (Two aggregator stats flagged unverified-to-primary.)
+
+**Status.** Research saved (subagent output); fix `content-calendar.md` (remove Posts, add TikTok/YT/Pinterest + keyword captions) next.
+
+---
+
+### 2026-06-14 — Price + title testing: reuse DES bandit; we're sole seller on all ASINs
+
+**Context.** William: can DES Smart Pricing (price + title) work for Amazon? Research it.
+
+**Reality.** DES blends a phased model + Gallego-van Ryzin (deadline) + a **Thompson-sampling bandit** + auto-title rotation, for perishable event tickets. Reuse the bandit + the window-snapshot experiment-log; drop the deadline math and auto-title rotation (Amazon policy + new 75-char title cap on July 27). **Price scan finding: Phone Assured is the SOLE seller on every ASIN (others=0)** — so no Buy-Box-loss risk; the test can explore the $8-16 band against only a margin floor.
+
+**Decision.** Build a thin bandit price-tester: candidate prices in ~$0.50 buckets, reward = **units/rank with a hard profit-per-unit floor** (William's choice: "blend"), ~3-7 day windows, runs on the cron pattern. Add `src/lib/amazon/listings.ts` (`patchListingsItem` to set price, `getListingsItem` to read) to the generic `sp-api.ts`. Title test = ONE challenger via Manage Your Experiments (manual, ≤75 chars, policy-clean), never auto-rotated.
+
+**Industry source.** SP-API Listings Items `patchListingsItem` + Price Adjustment Automation guide; Thompson-sampling price testing; Amazon MYE (content-only A/B); 75-char title rule (July 27 2026).
+
+**Open question / trade-offs.** Need William's **unit COGS** to set the profit floor. Slow convergence at one low-volume SKU (accept patience). Rollback: kill-switch env flag + revert-to-$9.49 patch; experiment log audits every change. Live price changes = preview first, then explicit go.
+
+**Status.** Researched + scoped; `price-scan.mjs` confirms the landscape. Build pending COGS + go-ahead.
