@@ -47,3 +47,5 @@ next-env.d.ts
 scripts/pw-*.png
 
 .pw-ads-onboard/
+.pw-sc-profile/
+.pw-*/

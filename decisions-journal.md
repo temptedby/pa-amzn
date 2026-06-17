@@ -380,3 +380,33 @@ To be precise about today's live ad changes (no overstating):
 **Open question / trade-offs.** Need William's **unit COGS** to set the profit floor. Slow convergence at one low-volume SKU (accept patience). Rollback: kill-switch env flag + revert-to-$9.49 patch; experiment log audits every change. Live price changes = preview first, then explicit go.
 
 **Status.** Researched + scoped; `price-scan.mjs` confirms the landscape. Build pending COGS + go-ahead.
+
+---
+
+### 2026-06-16 — Canada blocker fully diagnosed: one invalid document (Registration Extract)
+
+**Context.** amazon.ca deactivated; the requirement was invisible (no email; behind Seller Central login). William asked me to drive Playwright into Seller Central with him logged in.
+
+**Method.** Built `scripts/seller-central-canada.mjs` (headed Playwright, persistent profile `.pw-sc-profile` gitignored; William logs in himself — credentials never touched; auto-selects the Canada marketplace) and `canada-verify-open.mjs` (opens the verification form, holds it open). Read-only discovery + leaving the form for William to submit.
+
+**Finding.** Store Deactivated for "Canada identity verification — PAST DUE." Inside the form: address on file (`730 W Lake St Unit 162, Chicago IL 60661`) matches the bank statement ✅; phone on file is the partner's 208/Idaho number William can't access (minor); **Registration Extract = "Invalid Document"** — the uploaded `Douglas Dean Account_Documents Filing.pdf` (2011 Illinois Articles + EIN) doesn't meet Amazon's "official doc showing current status" bar. Registration number on file 371953962. William confirmed the entity is a **Delaware** LLC.
+
+**Decision.** Fix = obtain a current **Delaware Certificate of Good Standing** (shows current/active status — the missing piece) and upload it via "Change"; update the phone; resubmit. Prereq flagged: must be current on DE franchise tax ($300/yr) or DE won't issue Good Standing. **William submits** — a KYC identity attestation is a legal act for the account owner, not something I do autonomously (I prep + guide to one click).
+
+**Industry source.** Amazon Canada FINTRAC/KYC seller verification (2025 update); Delaware Division of Corporations Certificate of Good Standing.
+
+**Trade-offs / risk.** If franchise tax lapsed, Good Standing is blocked until paid. Delaware doc not in Drive/inbox (likely with the accountant — a TaxDome thread is the lead). Rollback: none needed (read-only on our side; William controls the submit).
+
+**Status.** Diagnosis complete; awaiting William to pull the DE certificate, then submit.
+
+---
+
+### 2026-06-16 — Inbox learned + cleaned (trash, reversible)
+
+**Context.** William: clean hello@, delete the not-needed mail "like the scheduled messages from us."
+
+**Decision.** `scripts/inbox-trash.mjs` — trashes (reversible 30d, not permanent-delete) only our own `[PA-AMZN]` scheduled emails + cold third-party marketing; a PROTECT list hard-guards Amazon account/customer/financial/named-rep/personal mail. Trashed 17, kept 38. Left `fbareviews.com` (18) for William's call (possible paid service). Existing `inbox-clean.mjs` (archive-only) left intact.
+
+**Reasoning.** Deleting is destructive; used Trash (recoverable) + a conservative protect-list so no real Amazon/customer/financial mail can be lost. Honored the explicit "delete the scheduled messages from us."
+
+**Status.** Done; fbareviews pending a yes/no.
