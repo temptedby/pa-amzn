@@ -1,5 +1,6 @@
 import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
+import { db } from "@/lib/db/client";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
 // so every action is SAFE TO REPEAT:
@@ -125,10 +126,28 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       if (bidOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: bidOps }, KW_CT); if (!r.ok) out.errors.push(`bid: ${r.status}`); }
       if (addOps.length) { const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT); if (!r.ok) out.errors.push(`add: ${r.status}`); }
     } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+    // Persist every action to the decision log so the algorithm is auditable + trackable over time.
+    try { await persistLog(out); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   out.ok = true; out.durationMs = Date.now() - start;
   return out;
+}
+
+// Decision log — one row per add/cut/re-bid, queryable history of what the engine did.
+async function persistLog(r: AdEngineResult): Promise<void> {
+  await db().execute(`CREATE TABLE IF NOT EXISTS ad_engine_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL, action TEXT NOT NULL,
+    keyword TEXT, match_type TEXT, from_bid REAL, to_bid REAL, acos REAL, spend REAL)`);
+  const runAt = new Date().toISOString();
+  const rows: Array<[string, string | null, string | null, number | null, number | null, number | null, number | null]> = [
+    ...r.killed.map((k) => ["kill", k.text, null, null, null, null, k.spend] as [string, string, null, null, null, null, number]),
+    ...r.added.map((a) => ["add", a.text, a.matchType, null, null, null, null] as [string, string, string, null, null, null, null]),
+    ...r.bids.map((b) => ["rebid", b.text, null, b.from, b.to, b.acos, null] as [string, string, null, number, number, number, null]),
+  ];
+  for (const [action, kw, mt, fb, tb, acos, spend] of rows) {
+    await db().execute({ sql: "INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend) VALUES (?,?,?,?,?,?,?,?)", args: [runAt, action, kw, mt, fb, tb, acos, spend] });
+  }
 }
 
 export function summarizeAdEngine(r: AdEngineResult): string {

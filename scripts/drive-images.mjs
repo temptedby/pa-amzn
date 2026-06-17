@@ -13,7 +13,12 @@ async function crawl(id,path,d){if(d>4||seen.has(id))return;seen.add(id);for(con
 for(const r of ROOTS) await crawl(r,'',0);
 imgs.sort((a,b)=>(b.w*b.h)-(a.w*a.h));
 const land=imgs.filter(i=>i.w>=1000&&i.w>=i.h), port=imgs.filter(i=>i.h>i.w&&i.h>=1000);
+const dim=i=>(`${i.w}x${i.h}`).padEnd(11);
 console.log(`total images ${imgs.length}\n=== LARGE LANDSCAPE (good for slideshow frames) ===`);
-land.slice(0,18).forEach(i=>console.log(`  ${String(i.w)+'x'+i.h).padEnd(11)} ${i.name.slice(0,38).padEnd(38)} ${i.path.slice(-24)}  ${i.id}`));
+land.slice(0,18).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,40).padEnd(40)} ${i.path.slice(-22)}  ${i.id}`));
 console.log('=== LARGE PORTRAIT/VERTICAL ===');
-port.slice(0,10).forEach(i=>console.log(`  ${String(i.w)+'x'+i.h).padEnd(11)} ${i.name.slice(0,38).padEnd(38)} ${i.path.slice(-24)}  ${i.id}`));
+port.slice(0,12).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,40).padEnd(40)} ${i.path.slice(-22)}  ${i.id}`));
+// likely brand/product/logo assets by name
+const brand=imgs.filter(i=>/tag|logo|product|graphic|brand|secured|assured|pro |clip|hero|main/i.test(i.name));
+console.log('\n=== LIKELY BRAND / PRODUCT / LOGO ASSETS ===');
+brand.slice(0,20).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,44).padEnd(44)}  ${i.id}`));
