@@ -11,7 +11,21 @@
       "sources": ["on-case.jpg (Drive)"],
       "basis": "Benefits = product features (anti-theft/drop/loss) + the real 1-yr warranty doc; Amazon image policy (no price/badge/contact) via amazon-image-compliance.md linter",
       "compliant": true,
-      "status": "draft",
+      "status": "superseded",
+      "created": "2026-06-22",
+      "newly_built": true,
+      "note": "v1 basic blue-header design — superseded by v2-callouts (pro annotated style)"
+    },
+    {
+      "id": "sec-callouts-v2",
+      "file": "/tmp/pa-graphics/v2-callouts.jpg",
+      "type": "secondary-image",
+      "angle": "annotated-callouts",
+      "headline": "KEEPS YOUR PHONE SECURE (annotated product callouts)",
+      "sources": ["PA Black 1/Packof1.jpg (clip isolated)"],
+      "basis": "Research-backed spec (confabulator design brief): Anton condensed display + Montserrat body, SVG leader-line callouts, brand #0B3D91, one-message, 4 callouts, WCAG-contrast, 2000px. Claims truthful (zinc-alloy carabiner, 27in cord, quick-release buckle from existing product copy). Compliance linter passed.",
+      "compliant": true,
+      "status": "review",
       "created": "2026-06-22",
       "newly_built": true
     },
