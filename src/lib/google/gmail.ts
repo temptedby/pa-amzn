@@ -87,6 +87,34 @@ export async function batchModify(ids: string[], addLabelIds: string[], removeLa
   }
 }
 
+/** Move a message to Trash (reversible 30 days). Use only on classified noise. */
+export async function trashMessage(id: string): Promise<void> {
+  await gmailApi(`/messages/${id}/trash`, { method: "POST" });
+}
+
+export interface ReplyCtx { threadId: string; messageId: string; from: string; subject: string; }
+
+/** Fetch the headers needed to thread a reply draft to a message. */
+export async function getReplyContext(id: string): Promise<ReplyCtx> {
+  const m = await gmailApi<{ threadId: string; payload?: { headers?: { name: string; value: string }[] } }>(
+    `/messages/${id}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-ID`,
+  );
+  return { threadId: m.threadId, messageId: headerOf(m, "message-id"), from: headerOf(m, "from"), subject: headerOf(m, "subject") };
+}
+
+/** Create a DRAFT reply in the message's thread (never sends — William reviews + sends). */
+export async function createReplyDraft(ctx: ReplyCtx, bodyText: string, fromAddr = "Phone Assured <hello@phoneassured.com>"): Promise<string> {
+  const subject = /^re:/i.test(ctx.subject) ? ctx.subject : `Re: ${ctx.subject}`;
+  const raw = [
+    `From: ${fromAddr}`, `To: ${ctx.from}`, `Subject: ${subject}`,
+    `In-Reply-To: ${ctx.messageId}`, `References: ${ctx.messageId}`,
+    "Content-Type: text/plain; charset=UTF-8", "", bodyText,
+  ].join("\r\n");
+  const b64 = Buffer.from(raw, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const d = await gmailApi<{ id: string }>("/drafts", { method: "POST", body: JSON.stringify({ message: { threadId: ctx.threadId, raw: b64 } }) });
+  return d.id;
+}
+
 export async function ensureLabel(name: string): Promise<string> {
   const { labels = [] } = await gmailApi<{ labels?: { id: string; name: string }[] }>("/labels");
   const found = labels.find((l) => l.name === name);
