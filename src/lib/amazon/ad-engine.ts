@@ -12,7 +12,7 @@ import { db } from "@/lib/db/client";
 const BASE = "https://advertising-api.amazon.com";
 const KW_CT = "application/vnd.spKeyword.v3+json";
 const RPT_CT = "application/vnd.createasyncreportrequest.v3+json";
-const TARGET_ACOS = 0.30;     // low-margin product
+const TARGET_ACOS = 0.50;     // RECOVERY setting (William 2026-06-22, "up to 50%"): buy back visibility/rank during the ~90% drop. Break-even ~42% (sale $9.49, COGS $0.62, Amazon fees ~$5). Tighten back toward 0.30 once rank recovers.
 const KILL_SPEND = 4;         // $ with 0 orders -> pause
 const FLOOR = 0.10, CAP = 2.50, MAX_STEP = 0.25; // ±25% per run
 const NEW_KW_BID = 0.50, WINDOW_DAYS = 30;
