@@ -2,6 +2,11 @@
 
 Purpose: never produce an image that violates Amazon policy and risks the account. The content generator codes against this checklist; nothing ships that fails it.
 
+## ⛔ TWO ABSOLUTE GATES for any LISTING image (William 2026-06-22)
+1. **It MUST feature the actual product** — the **black clip** or the **Pro clip**. A graphic that does not clearly show our product is NOT eligible as a listing image (at most it's off-Amazon social, and even then on-brand only).
+2. **It MUST be compliant** (everything below). A non-compliant graphic is NOT an image — it does not get used as a listing image, period.
+A graphic that fails either gate is rejected by the generator and never enters the content registry as listing-eligible.
+
 ## MAIN image (slot 1) — strictest
 - Pure **white background**, RGB 255,255,255.
 - **Real product only**, fills **≥85%** of the frame. No props/accessories not included in the purchase.

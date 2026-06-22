@@ -12,7 +12,7 @@ No assumptions. Every meaningful decision or build, foreground or autonomous, mu
 
 ## How it binds the BACKGROUND/automated work
 - **Every autonomous build carries its cited basis** in the commit message, the decisions-journal entry, or the relevant log — not just code. A reviewer (or Bear) can trace any change to its data/source.
-- **The ad engine** acts only on its own validated report pulls (≤31-day Ads reports, the `ad_engine_log` records each action + the ACOS/spend that justified it). Targets are computed from real numbers (e.g. break-even ACOS ~42% derived from sale $9.49 − COGS $0.62 − Amazon fees ~$5), never picked by feel.
+- **The ad engine** acts only on its own validated report pulls (≤31-day Ads reports, the `ad_engine_log` records each action + the ACOS/spend that justified it). Targets are computed from real numbers — e.g. Single break-even ACOS = **52%**, validated via SP-API `getMyFeesEstimate` (sale $9.49 − COGS $0.62 − referral $1.42 − FBA $2.52 = $4.93 contribution; 4.93/9.49), never picked by feel or an assumed fee.
 - **Content/graphics** cite the stat or claim behind any text and pass the `amazon-image-compliance.md` linter (sourced from Amazon's image policy). No unverified statistics on any asset.
 - **Price/title moves** trace to the bandit's logged experiment data + Amazon pricing/MYE constraints (cited), preview-first.
 - **Research deliverables** (Delaware process, Vine, organic growth, Amazon content) ship with source URLs; vendor/aggregator figures are flagged as directional, not primary.

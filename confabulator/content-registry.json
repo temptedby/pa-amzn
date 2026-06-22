@@ -1,0 +1,71 @@
+{
+  "_comment": "Every Phone Assured content asset we create or curate for the listing/social. Prevents duplication (check 'angle' before building) and tracks approval. status: draft -> approved -> live. Nothing goes live without William's approval.",
+  "updated": "2026-06-22",
+  "assets": [
+    {
+      "id": "sec-benefits-01",
+      "file": "/tmp/pa-graphics/secondary-benefits.png",
+      "type": "secondary-image",
+      "angle": "benefits-overview",
+      "headline": "ONE CLIP. PHONE SECURED.",
+      "sources": ["on-case.jpg (Drive)"],
+      "basis": "Benefits = product features (anti-theft/drop/loss) + the real 1-yr warranty doc; Amazon image policy (no price/badge/contact) via amazon-image-compliance.md linter",
+      "compliant": true,
+      "status": "draft",
+      "created": "2026-06-22",
+      "newly_built": true
+    },
+    {
+      "id": "main-candidate-packof1",
+      "file": "/tmp/pa-brand/cand-packof1.jpg",
+      "type": "main-image-candidate",
+      "angle": "product-on-white",
+      "headline": "(needs no-text version for true main image)",
+      "sources": ["PA Black 1/Packof1.jpg (Drive, 2500x2500)"],
+      "basis": "Amazon main-image rule: product-only, pure white, >=85% fill, no text. This has a '1-PACK' overlay -> use the no-text render.",
+      "compliant": false,
+      "status": "review",
+      "created": "existing",
+      "newly_built": false
+    },
+    {
+      "id": "current-main-live",
+      "file": "/tmp/pa-brand/main-image.jpg",
+      "type": "main-image-live",
+      "angle": "lifestyle-lanyard",
+      "headline": "CURRENT LIVE MAIN IMAGE",
+      "sources": ["phone assured lanyard main image.jpg (Drive)"],
+      "basis": "Currently live; lifestyle/model -> NON-compliant for main image + tied to CTR drop 0.78%->0.60%. Replace.",
+      "compliant": false,
+      "status": "live",
+      "created": "existing",
+      "newly_built": false
+    },
+    {
+      "id": "sec-install-img8",
+      "file": "/tmp/pa-brand/cand-img8.jpg",
+      "type": "secondary-image",
+      "angle": "how-to-install",
+      "headline": "EASY INSTALLATION (4 steps)",
+      "sources": ["PA Black 1/Image 8.jpg (Drive)"],
+      "basis": "Existing compliant infographic (no price/contact). Reuse.",
+      "compliant": true,
+      "status": "review",
+      "created": "existing",
+      "newly_built": false
+    },
+    {
+      "id": "sec-features-unmatched",
+      "file": "/tmp/pa-brand/pro-unmatched.jpg",
+      "type": "secondary-image",
+      "angle": "features-specs",
+      "headline": "UNMATCHED DURABILITY & SECURITY",
+      "sources": ["phone assured pro unmatched.jpg (Drive)"],
+      "basis": "Existing compliant features image (fiber/zinc alloy/27in). Reuse.",
+      "compliant": true,
+      "status": "review",
+      "created": "existing",
+      "newly_built": false
+    }
+  ]
+}
