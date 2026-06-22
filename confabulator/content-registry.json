@@ -16,6 +16,32 @@
       "newly_built": true
     },
     {
+      "id": "hero-A-single-clip",
+      "file": "/tmp/pa-graphics/hero-A-clip.jpg",
+      "type": "main-image-candidate",
+      "angle": "product-on-white-single",
+      "headline": "NEW HERO A: single black clip on pure white",
+      "sources": ["PA Black 1/Packof1.jpg (clip isolated via sharp crop, text removed)"],
+      "basis": "Amazon 2026 main-image spec (RGB 255,255,255, >=85% fill, 2000px, NO text/logos). Verified by inspection: product-only, white, no text. Listing is NOT suppressed (validated, 0 issues) — this is a CTR lever (CTR fell 0.78%->0.60%), not a suppression fix.",
+      "compliant": true,
+      "status": "review",
+      "created": "2026-06-22",
+      "newly_built": true
+    },
+    {
+      "id": "hero-B-three-angle",
+      "file": "/tmp/pa-graphics/hero-B-clips.jpg",
+      "type": "main-image-candidate",
+      "angle": "product-on-white-multi",
+      "headline": "NEW HERO B: black clip, 3 angles, pure white",
+      "sources": ["PA Black 1/Packof1.jpg (clips isolated via sharp crop, '1-PACK' phone+text removed)"],
+      "basis": "Same Amazon 2026 spec; good as main or as a secondary. Verified product-only/white/no-text by inspection.",
+      "compliant": true,
+      "status": "review",
+      "created": "2026-06-22",
+      "newly_built": true
+    },
+    {
       "id": "main-candidate-packof1",
       "file": "/tmp/pa-brand/cand-packof1.jpg",
       "type": "main-image-candidate",
