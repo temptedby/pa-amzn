@@ -63,6 +63,7 @@ note bid brackets obsolete; canada-roadmap.md), memory `project_bid_strategy.md`
 - Buyer-message replies = draft + approve, never auto-sent.
 - Ad/price changes are preview-first + idempotent + capped; money is INTEGER cents.
 - Do NOT build competing orchestration vs the "AMZN Agent" (= Bear) — this IS that; stay synced.
+- **Research discipline (HARDWIRED):** no assumptions, ever. Every meaningful decision/build — foreground or autonomous — traces to validated data (DB / Amazon reports / Seller Central / financials) or a citable industry source, and carries that basis in the commit/journal/log. Follow the 6-step gate. Full rule: `confabulator/research-discipline.md`.
 - [NEEDS WILLIAM: other absolute nevers?]
 
 ### Finances (William, 2026-06-23)

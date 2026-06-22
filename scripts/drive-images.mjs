@@ -18,7 +18,15 @@ console.log(`total images ${imgs.length}\n=== LARGE LANDSCAPE (good for slidesho
 land.slice(0,18).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,40).padEnd(40)} ${i.path.slice(-22)}  ${i.id}`));
 console.log('=== LARGE PORTRAIT/VERTICAL ===');
 port.slice(0,12).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,40).padEnd(40)} ${i.path.slice(-22)}  ${i.id}`));
-// likely brand/product/logo assets by name
-const brand=imgs.filter(i=>/tag|logo|product|graphic|brand|secured|assured|pro |clip|hero|main/i.test(i.name));
-console.log('\n=== LIKELY BRAND / PRODUCT / LOGO ASSETS ===');
-brand.slice(0,20).forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,44).padEnd(44)}  ${i.id}`));
+// MAIN-IMAGE candidates: ~square (1:1) OR name suggests a clean listing/white shot
+const sq=i=>i.w&&i.h&&Math.abs(i.w/i.h-1)<0.06;
+const mainCand=imgs.filter(i=>sq(i)||/white|main|listing|amazon|hero|front|back|\b0?0?1\b|clean|cut.?out/i.test(i.name));
+console.log('\n=== MAIN-IMAGE CANDIDATES (square 1:1 or named main/white/listing) ===');
+mainCand.forEach(i=>console.log(`  ${dim(i)} ${i.name.slice(0,46).padEnd(46)} ${i.path.slice(-22)}  ${i.id}`));
+// FULL dump grouped by folder
+const byFolder={}; for(const i of imgs){(byFolder[i.path]??=[]).push(i);}
+console.log('\n=== ALL PHONE ASSURED IMAGES BY FOLDER ('+imgs.length+') ===');
+for(const [folder,list] of Object.entries(byFolder).sort()){
+  console.log(`\n  ▸ ${folder||'(root)'}  [${list.length}]`);
+  list.forEach(i=>console.log(`      ${dim(i)} ${i.name.slice(0,52)}  ${i.id}`));
+}
