@@ -49,3 +49,8 @@ scripts/pw-*.png
 .pw-ads-onboard/
 .pw-sc-profile/
 .pw-*/
+
+# Bear agent working data (track charter.md + backlog.md; ignore stores)
+.agent/memory.jsonl
+.agent/PROJECT-DIGEST.md
+.agent/questions-for-William.md
