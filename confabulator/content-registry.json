@@ -30,6 +30,19 @@
       "newly_built": true
     },
     {
+      "id": "sec-editorial-v3",
+      "file": "/tmp/pa-graphics/v3-editorial.jpg",
+      "type": "secondary-image",
+      "angle": "editorial-features",
+      "headline": "BUILT TO KEEP YOUR PHONE CLOSE (editorial layout + contact shadow)",
+      "sources": ["PA Black 1/Packof1.jpg (luminance cutout)"],
+      "basis": "Deep design study (cited): editorial layout (drop radiating-line cliche), synthesized contact shadow + studio-sweep bg = the free quality wins. HONEST CEILING: a truly GREAT relit HERO photo needs a ~$5 fal.ai key (BiRefNet cutout + IC-Light relight + upscale) or a lightbox reshoot. This is the best 'good/professional' without it. Compliant + truthful.",
+      "compliant": true,
+      "status": "review",
+      "created": "2026-06-23",
+      "newly_built": true
+    },
+    {
       "id": "hero-A-single-clip",
       "file": "/tmp/pa-graphics/hero-A-clip.jpg",
       "type": "main-image-candidate",
