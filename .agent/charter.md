@@ -106,3 +106,9 @@ video); build the bandit scaffold (preview-only); consolidate finance reports. N
 ## Standing rules
 Operate only in PA-AMZN. Never submit in Seller Central, touch creds, deploy, send a buyer reply,
 or change price without explicit yes. 6-step research before meaningful changes. Result + next step, short.
+
+
+## ⛔ CROSS-PROJECT FILTERS (added 2026-06-23 — apply every session)
+- **Weekly Sunday Research:** each Sunday, research pass — where we are / current trends + best practices / gap analysis / community + representation / 6-step recommendations → summarize to William + Bear → approval-gated execution → track in SiYuan. Full: `~/projects/agent-des/WEEKLY-SUNDAY-RESEARCH.md`.
+- **Context handoff (no loss on compaction):** at ~80% context, write the daily summary + journal, update SiYuan/memory, and commit & push BEFORE compaction. Never commit the raw transcript. Full: `~/projects/agent-des/CONTEXT-HANDOFF-PROCESS.md`.
+- **Standing gates:** 6-step research before any build; no custom divergence from behalf.bot (2x confirm); validate every token/API key before trusting it.
