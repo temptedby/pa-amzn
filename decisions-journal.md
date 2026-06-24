@@ -480,3 +480,21 @@ To be precise about today's live ad changes (no overstating):
 **Industry source.** Amazon 2026 image specs (Seller Labs/ListingForge); design brief (typography/hierarchy/annotation, cited).
 
 **Status.** System built; image quality under deeper study overnight; nothing pushed to the live listing.
+
+---
+
+### 2026-06-24 — Flippa buyer-reply drafts + all-time units, validated
+
+**Context.** Five Flippa buyers (Sami, Mark/broker, Jack, Jessica, Alex) are in active diligence with questions in hello@ (payout cadence, screenshots, store-only structure, price, units sold, account access). Need accurate, on-brand reply drafts and a real all-time-units figure.
+
+**Options.** (1) Answer from memory/guesses — fast but risks wrong figures in a live M&A negotiation. (2) Pull units from SP-API + research best practices, then draft — slower but defensible. (3) Defer to William entirely. Chose (2), keeping every William-only decision in `[brackets]`.
+
+**Decision.** Built `scripts/flippa-drafts.mjs`: five plain-text, em-dash-free, threaded Gmail drafts (reply to no-reply@flippa.com routes back into the Flippa thread), idempotent (clears prior Flippa drafts before creating). Grounded answers in a sourced FBA-sale best-practices brief (Quiet Light, FE International, DueDilio, Empire Flippers, Amazon G901, Flippa-scam guides): stage disclosure behind NDA + broker; no raw Payments screenshots (verified screen-share + view-only/time-limited Seller Central access instead); store-only is standard with inventory priced separately at landed cost via a close-out count; disclose the recent dip honestly with recovery evidence.
+
+**Reasoning.** Drafts-only respects the never-send-without-William rule; bracketed decisions keep price/NDA/contact in his hands; sourced answers protect the deal and the account. The no-screenshot + NDA-gated-access posture is the documented industry default and also the safer security stance.
+
+**Industry source.** SP-API Reports (Sales & Traffic, all-orders) + Orders API; Amazon Seller Central User Permissions G901; broker DD guides cited above.
+
+**Trade-offs / lesson.** All-time units via API is gated: Sales & Traffic = 403 (app lacks Brand-Analytics role), all-orders flat-file = 0 rows (date-range cap), Orders API too rate-limited for a 2-year session pull. So the human-held figure wins: William confirmed 8,926 ad-attributed lifetime units and ~18,000 total (ads + organic). The ~even split = roughly half organic, a real valuation strength. Earlier ~7,500/~8,500 guesses were wrong and dropped — known-and-real only.
+
+**Status.** 5 drafts in hello@ Drafts, signed William, awaiting his bracket-fills + send. Nothing sent. Optional follow-up: request Brand-Analytics role or run a long Orders-API job if an exact API unit count is ever needed.
