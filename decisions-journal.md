@@ -498,3 +498,19 @@ To be precise about today's live ad changes (no overstating):
 **Trade-offs / lesson.** All-time units via API is gated: Sales & Traffic = 403 (app lacks Brand-Analytics role), all-orders flat-file = 0 rows (date-range cap), Orders API too rate-limited for a 2-year session pull. So the human-held figure wins: William confirmed 8,926 ad-attributed lifetime units and ~18,000 total (ads + organic). The ~even split = roughly half organic, a real valuation strength. Earlier ~7,500/~8,500 guesses were wrong and dropped — known-and-real only.
 
 **Status.** 5 drafts in hello@ Drafts, signed William, awaiting his bracket-fills + send. Nothing sent. Optional follow-up: request Brand-Analytics role or run a long Orders-API job if an exact API unit count is ever needed.
+
+---
+
+### 2026-06-24 (PM) — All-time units + ad-share: data-source limits, and a process miss
+
+**Context.** William wanted the true lifetime units/sales and the ad share of sales over 2 years (to estimate lifetime total and understand ad dependence for the Flippa sale).
+
+**Decision / what was validated.** Built `scripts/alltime-report.mjs` (stitches ~31-day all-orders windows): **2-year total = 8,134 units / $127,456**, reachable to 2024-05-08 (Amazon's ~2-year order-data retention wall). Lifetime ad-attributed = **8,926 units** (William's Campaign Manager figure), which exceeds the 2-year total -> ads are the dominant channel and lifetime > 2 years.
+
+**Reasoning / the hard limit.** Researched (cited): Amazon Ads API caps Sponsored Products history at ~60-95 days (Amazon GitHub support thread; Intentwise; SellerApp). The 2025 unified-reporting API (6-yr monthly) is still in beta as of 2026-06. So 2-year ad units/$ are retrievable ONLY from the Campaign Manager console (Campaign report ~5 yr) or other console/tax sources (Payments Date Range to inception; 1099-K stack). Not an API/coding problem.
+
+**Industry source.** Amazon SP-API order-report 2-yr retention (developer-docs); Amazon Ads v3 reporting lookback (GitHub discussion #157); unBoxed 2025 unified reporting (advertising.amazon.com, ppc.land).
+
+**Trade-offs / lesson (William's feedback).** I spent ~an hour writing reactive probes (units-alltime 403, orders-report empty, ad-share/adtest failing) before doing the research that would have said up front "console-only." Recorded the corrective in `research-discipline.md`: for any "can the data even be pulled" question, run the documented 6-step (step 2 industry-standard + step 3 cited reality) BEFORE building probes. This was the right answer reached the slow, wrong way.
+
+**Status.** 2-yr total validated + written to `confabulator/alltime-sales-report-2026-06-24.md`. Built `scripts/pw-date-range.mjs` to pull the lifetime figure directly from the Payments Date Range Report in William's logged-in browser session (so he doesn't run it himself). Pending: run that pull (needs the Mac awake; a headed browser briefly takes the session).
