@@ -1,0 +1,7 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      { "matcher": "*", "hooks": [ { "type": "command", "command": "/Users/williamholdeman/projects/PA-AMZN/.claude/hooks/guardrails.sh" } ] }
+    ]
+  }
+}
