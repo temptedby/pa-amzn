@@ -24,3 +24,11 @@ William: doesn't have it, can't find where to apply on Delaware's site.
   2. STATE DIRECT: Division of Corporations (corp.delaware.gov) Document Upload Service + cover memo, ~$50 short form; needs the entity FILE NUMBER (on the formation certificate).
 - Prereqs: DE franchise tax must be current; name must read exactly "Douglas Dean Holdings LLC".
 - BEAR TASK (overnight, research-only): produce a step-by-step checklist — exact corp.delaware.gov page/URL, current fee, how to find the file number, registered-agent option, and the order for Amazon Canada. Cite sources. William then orders it (his action).
+
+## CONFIRMED from documents (2026-06-25)
+- EXACT legal name (from 2019 DE Certificate of Good Standing): **DOUGLAS DEAN HOLDINGS LLC** (with "Holdings"). The amzn-clicks "Douglas Dean LLC" is a confirmed MISMATCH to correct.
+- Delaware FILE NUMBER: **7603115** (SR# 20197698822). Formed under DE law; good standing as of 10-29-2019.
+- Registered agent / formation: **E-Government LLC, dba Delawarefile.com** (info@delawarefile.com); client portal "My Client Management". Formed Sept 2019 ($414).
+- 2025 registered-agent payment on file (confirms agent active; franchise tax likely current).
+- Saved (gitignored, NOT committed): .docs/legal/ has the 2019 Good Standing + 2025 payment PDFs.
+- NEED: an UPDATED Certificate of Good Standing (2019 is too old for Amazon). Draft request to delawarefile.com is in hello@ Drafts (review+send). Use file number 7603115.

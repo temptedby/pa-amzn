@@ -54,3 +54,6 @@ scripts/pw-*.png
 .agent/memory.jsonl
 .agent/PROJECT-DIGEST.md
 .agent/questions-for-William.md
+
+# Legal/identity docs - never commit (may contain payment/PII)
+.docs/
