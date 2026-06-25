@@ -35,3 +35,19 @@ Needs the Delaware Certificate of Good Standing + KYC (William's identity/legal 
 
 ## Open questions -> .agent/questions-for-William.md
 Shared vs separate overnight loop; william@ OAuth; AI content key (which + budget); Shopify cancel timing; which pillars to sequence first.
+
+## Shared layer: agent-amzn <-> agent-des (William, 2026-06-25)
+Goal: the two Bear agents share tools + cross-applicable information and support each other, WITHOUT mixing company data.
+
+SHARE (tooling + knowledge that applies to both):
+- The Bear runtime itself (already shared: agent-des/router worker-loop, channels.json, guardrail hooks, mcp configs).
+- Reusable tools: Gmail inbox-agent helpers, Meta social-posting plugin (DES -> reuse for @phoneassured), graphics/BRC filter tooling (Social Scene -> reuse the TOOLING for amzn content), SP-API/report-stitch patterns, cron/Vercel scaffolding.
+- Cross-applicable info: research-discipline + 6-step, KNOWN-GOTCHAS-AND-BEST-PRACTICES (living), weekly Sunday research, platform/API gotchas (Amazon/Meta/Google), process templates.
+
+DO NOT SHARE (company-isolated, two-companies rule extends here):
+- Business data, financials, customer/email content, tokens/credentials, dashboards/reports/surfaces. AMZN data != DES data != Social Scene data. Each agent keeps its own secrets + outputs.
+
+MECHANISM (to DESIGN in the foundation phase, not build yet):
+- A shared tools/knowledge hub (agent-des as the hub or a shared-lib) that each project IMPORTS; data + secrets stay per-project.
+- Cross-agent handoffs via the existing inbox-handoff-from-bear pattern.
+- Add to the foundation governance spec (queue item 6): the sharing contract + what crosses the boundary.
