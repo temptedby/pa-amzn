@@ -16,3 +16,11 @@
 
 ## Open question
 - Which documents did amazon.ca specifically reject / request? (drives the exact list)
+
+## DE Certificate of Good Standing — William can't find how to order (2026-06-25)
+William: doesn't have it, can't find where to apply on Delaware's site.
+- Reality: Delaware has no simple checkout button. Two paths:
+  1. REGISTERED AGENT (fastest): the LLC's required DE registered agent can pull it in minutes. Find the agent on the formation docs / franchise-tax notice; ask for "Certificate of Good Standing for Douglas Dean Holdings LLC".
+  2. STATE DIRECT: Division of Corporations (corp.delaware.gov) Document Upload Service + cover memo, ~$50 short form; needs the entity FILE NUMBER (on the formation certificate).
+- Prereqs: DE franchise tax must be current; name must read exactly "Douglas Dean Holdings LLC".
+- BEAR TASK (overnight, research-only): produce a step-by-step checklist — exact corp.delaware.gov page/URL, current fee, how to find the file number, registered-agent option, and the order for Amazon Canada. Cite sources. William then orders it (his action).
