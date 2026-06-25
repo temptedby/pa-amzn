@@ -514,3 +514,11 @@ To be precise about today's live ad changes (no overstating):
 **Trade-offs / lesson (William's feedback).** I spent ~an hour writing reactive probes (units-alltime 403, orders-report empty, ad-share/adtest failing) before doing the research that would have said up front "console-only." Recorded the corrective in `research-discipline.md`: for any "can the data even be pulled" question, run the documented 6-step (step 2 industry-standard + step 3 cited reality) BEFORE building probes. This was the right answer reached the slow, wrong way.
 
 **Status.** 2-yr total validated + written to `confabulator/alltime-sales-report-2026-06-24.md`. Built `scripts/pw-date-range.mjs` to pull the lifetime figure directly from the Payments Date Range Report in William's logged-in browser session (so he doesn't run it himself). Pending: run that pull (needs the Mac awake; a headed browser briefly takes the session).
+
+### 2026-06-25 — 24/7 Bear ops: ES hourly, transcript recorder, conventions (sjc/sjcc/RBB/ES)
+**Context.** William directed a robust around-the-clock Bear system for the Amazon store, research-first.
+**Decision.** Set up an isolated PA-AMZN overnight loop (`bear-overnight-amzn.sh` + `com.bear.worker-loop-amzn.plist`, branch-only via guardrail) in RESEARCH-ONLY mode (builds nothing until approved); hardcoded ES (email sweep) to an hourly cron; stood up a live 60-second transcript recorder to a non-repo backup; captured the full vision in `.agent/ROADMAP.md` + the agent-amzn<->agent-des shared-tools layer; flagged the entity-name mismatch (Douglas Dean Holdings LLC vs "Douglas Dean LLC" in the amzn-clicks portal) and the Canada doc-update needs.
+**Conventions saved to memory.** sjc, sjcc (sjc+compact), RBB (research before build, always), ES (email sweep, hourly).
+**Industry source.** Amazon entity-name consistency for KYC/Ads/Brand Registry; Vercel cron cadence (hourly needs Pro).
+**Trade-offs / lesson.** Earlier lost ~an hour building reactively before research (RBB violation); now hardwired research-first. Guardrail hook (CHASSIS) over-blocks the interactive session's Write/main-push, so work routes through Bash + a branch.
+**Status.** All committed to branch `bear/24-7-setup-2026-06-25`. Overnight build loop NOT started (research-first gate). Transcript recorder + ES config live.
