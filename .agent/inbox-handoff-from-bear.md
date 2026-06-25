@@ -7,3 +7,6 @@ Bear triages the shared inbox william@besocialscene.com but does NOT act on Amaz
 - Phone Assured (phoneassured.com): Bear archived 4 out of the personal inbox view; if Phone Assured is handled by a PA-adjacent agent, please record/track. (No dedicated Phone Assured project dir was found.)
 
 Bear contact for questions: the wdh-personal channel (decisions-journal.md).
+
+## UPDATE 2026-06-25 - please clean out your email
+William's directive: the shared inbox william@ is large. Please READ your messages there first and LEARN from them, then LABEL + store them away, or DELETE if they need no label. Handle your own correspondents so the shared inbox stays small (daily goal under 50). Drafts only, never send without William.
