@@ -522,3 +522,19 @@ To be precise about today's live ad changes (no overstating):
 **Industry source.** Amazon entity-name consistency for KYC/Ads/Brand Registry; Vercel cron cadence (hourly needs Pro).
 **Trade-offs / lesson.** Earlier lost ~an hour building reactively before research (RBB violation); now hardwired research-first. Guardrail hook (CHASSIS) over-blocks the interactive session's Write/main-push, so work routes through Bash + a branch.
 **Status.** All committed to branch `bear/24-7-setup-2026-06-25`. Overnight build loop NOT started (research-first gate). Transcript recorder + ES config live.
+
+### 2026-06-25 23:55 PT — Ad-engine strategy audit (read-only): bidding healthy, harvest is single-anchor
+
+**Context.** William's top overnight job (.agent/TASKS.md): prove the ad strategy works and find bugs, read-only. Deliverable `confabulator/ad-engine-audit-2026-06-25.md`. Method: query `ad_engine_log` (80 rows) + replicate the engine's kill/rebid/harvest rules against live Ads API v3 state (33 campaigns, 3,438 keywords, spTargeting + spSearchTerm 30d reports). Nothing in the account changed.
+
+**Options considered.** (1) Audit from the log alone — rejected, can't tell whether 0 kills/0 adds is a bug or correct. (2) Log + live API replication of each rule — chosen; lets me prove *would-kill = 0* and *would-harvest = 0* against real data. (3) Run the engine in dryRun — redundant with (2) and noisier.
+
+**Decision.** Verdict: bid-convergence path executes as designed (correct direction, floor/cap respected, 0 wrong-direction of 52 post-2026-06-22 rebids). Logged two real defects + two coverage gaps, propose-only: **H1** harvest writes every new keyword to a single anchor ad group ("mobile phone leash"), so 18 of 19 campaigns can never receive a harvested keyword; **C1** the ±25%/run cap is breached by cent-rounding (22/80 rebids, e.g. 0.10->0.13 = +30%) because round() runs after the clamp; **G1** sub-\$4 0-order keywords are never acted on; **R1** bids ratchet ~3-8x across 3 runs/day despite the per-run cap.
+
+**Reasoning.** The 80-rebid / 0-kill / 0-harvest log looked alarming, but replaying the rules on live data showed would-kill = 0 (no enabled kw >=\$4 & 0 orders/30d) and would-harvest = 0 (all 8 converting search terms are already keywords). So those zeros are currently CORRECT, not a broken path. The real issues are structural (single-anchor harvest) and a rounding invariant breach — both invisible from the log alone.
+
+**Industry source / best practice.** Amazon Ads API v3 reporting (spTargeting / spSearchTerm reportTypeId, GZIP_JSON async reports) — the engine's own report path, ad-engine.ts:47-63. Search-term harvesting into the originating campaign/ad group is standard PPC practice (e.g. Amazon's own "negative + harvest" guidance and common agency playbooks); harvesting to a single global ad group is the divergence flagged as H1.
+
+**Trade-offs accepted.** Audit is a point-in-time snapshot (30d window, 2026-06-25). would-kill/would-harvest can change as traffic returns; H1/C1/R1 are time-invariant code facts. Did not test BROAD-match harvest behavior or auto-campaign targeting clauses in depth (out of scope for keyword harvest).
+
+**Status / date to revisit.** Audit DONE, deliverable written, branch `audit/ad-engine-2026-06-25` (not pushed). Fixes H1/C1/G1/R1 are PROPOSE-ONLY and need William's go before any code change (mode is research/audit-only). Revisit when William approves moving from audit to fix.
