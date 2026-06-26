@@ -5,7 +5,10 @@ import { db } from "@/lib/db/client";
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
 // so every action is SAFE TO REPEAT:
 //   - KILL switch: ENABLED keyword, >= $4 spend & 0 orders (30d)  -> pause (idempotent)
-//   - HARVEST: converting search terms not yet keywords -> add exact+phrase (deduped)
+//   - HARVEST: a search term with >= $4 spend AND ACOS <= 50% (ROAS >= 2x) over the trailing
+//          ~60d -> add it as EXACT + PHRASE keywords IN THE AD GROUP IT CONVERTED IN (H1 fix:
+//          was a single global anchor ad group, so 18/19 campaigns could never receive a harvest).
+//          Rule: ad-engine-harvest-rule.md (William 2026-06-26); deduped per ad group; idempotent.
 //   - BID: target-ACOS convergence, capped ±25%/run (whole-cent, never breaches the cap -> C1 fix),
 //          floor/cap. NOT compounding WITHIN a run (does ratchet across runs -> audit R1, parked).
 // Apply is gated behind dryRun. Reuses the LWA token + region from ads-api.ts.
@@ -17,11 +20,18 @@ const TARGET_ACOS = 0.50;     // RECOVERY setting (William 2026-06-22, "up to 50
 const KILL_SPEND = 4;         // $ with 0 orders -> pause
 const FLOOR = 0.10, CAP = 2.50, MAX_STEP = 0.25; // ±25% per run
 const NEW_KW_BID = 0.50, WINDOW_DAYS = 30;
+// Harvest rule (ad-engine-harvest-rule.md, William 2026-06-26): a search term qualifies at
+// >= $4 spend AND ACOS <= 50% (== ROAS >= 2x == sales >= 2*cost), measured over the trailing window.
+export const HARVEST_MIN_SPEND = 4;          // $ spend bar before a term is worth harvesting
+export const HARVEST_MAX_ACOS = 0.50;        // <= break-even ACOS (~52% Single, validated); keeps margin
+const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 interface Kw { keywordId: string; keywordText: string; matchType: string; state: string; bid: number; campaignId: string; adGroupId: string }
-interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number }
+interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
+export interface SearchTermRow { searchTerm?: string; campaignId?: string | number; adGroupId?: string | number; cost?: number; sales14d?: number; purchases14d?: number }
+export interface HarvestAdd { campaignId: string; adGroupId: string; keywordText: string; matchType: "EXACT" | "PHRASE"; state: "ENABLED"; bid: number }
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
   killed: { text: string; spend: number }[];
@@ -73,6 +83,46 @@ export function clampBidStep(currentBid: number, rawTarget: number): number {
   return Math.max(lo, Math.min(hi, +rawTarget.toFixed(2)));
 }
 
+// Trailing window split into non-overlapping <=31-day chunks (Ads API caps reports at ~31 days).
+// HARVEST_WINDOW_DAYS=60 -> [now-30, now] and [now-60, now-31].
+export function harvestWindows(days: number, now: number): [string, string][] {
+  const MS = 864e5, CHUNK = 30, wins: [string, string][] = [];
+  for (let end = 0; end < days; end += CHUNK + 1) {
+    wins.push([iso(new Date(now - Math.min(end + CHUNK, days) * MS)), iso(new Date(now - end * MS))]);
+  }
+  return wins;
+}
+
+// Pure harvest selector (H1 fix). Aggregates spSearchTerm rows by (campaign|adGroup|term), then
+// applies William's rule (ad-engine-harvest-rule.md): cost >= HARVEST_MIN_SPEND AND ACOS <= HARVEST_MAX_ACOS.
+// Each qualifying term is harvested as EXACT + PHRASE INTO THE AD GROUP IT CONVERTED IN, skipping any
+// (adGroup, matchType, text) already present. `existing` keys are `${adGroupId}|${matchType}|${lowerText}`.
+export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID): HarvestAdd[] {
+  const agg = new Map<string, { cid: string; agid: string; term: string; cost: number; sales: number }>();
+  for (const r of rows) {
+    const term = (r.searchTerm || "").trim();
+    const cid = r.campaignId != null ? String(r.campaignId) : "";
+    const agid = r.adGroupId != null ? String(r.adGroupId) : "";
+    if (!term || !cid || !agid) continue;            // need the source ad group to harvest into
+    if (/^b0[a-z0-9]{8}$/i.test(term)) continue;     // ASIN, not a customer search phrase
+    const key = `${cid}|${agid}|${term.toLowerCase()}`;
+    const o = agg.get(key) ?? { cid, agid, term, cost: 0, sales: 0 };
+    o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0;
+    agg.set(key, o);
+  }
+  const adds: HarvestAdd[] = [];
+  for (const o of agg.values()) {
+    if (o.cost < HARVEST_MIN_SPEND) continue;                          // >= $4 spend
+    if (!(o.sales > 0 && o.cost / o.sales <= HARVEST_MAX_ACOS)) continue; // ACOS <= 50% (ROAS >= 2x)
+    const t = o.term.toLowerCase();
+    for (const mt of ["EXACT", "PHRASE"] as const) {
+      if (existing.has(`${o.agid}|${mt}|${t}`)) continue;
+      adds.push({ campaignId: o.cid, adGroupId: o.agid, keywordText: o.term, matchType: mt, state: "ENABLED", bid });
+    }
+  }
+  return adds;
+}
+
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
@@ -90,9 +140,8 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     next = r.json?.nextToken;
   } while (next);
   const byId = new Map(kws.map((k) => [String(k.keywordId), k]));
-  const have = new Set(kws.map((k) => k.matchType + "|" + (k.keywordText || "").toLowerCase().trim()));
-  // harvest target: an enabled manual (exact/phrase) keyword's ad group
-  const anchor = kws.find((k) => k.state === "ENABLED" && (k.matchType === "EXACT" || k.matchType === "PHRASE") && k.campaignId && k.adGroupId);
+  // per-ad-group keyword index so harvest only skips a term already present IN THAT ad group (H1).
+  const haveByAg = new Set(kws.map((k) => `${k.adGroupId}|${k.matchType}|${(k.keywordText || "").toLowerCase().trim()}`));
 
   const ed = iso(new Date()), sd = iso(new Date(Date.now() - WINDOW_DAYS * 864e5));
 
@@ -110,22 +159,19 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     }
   }
 
-  // (2) search terms -> harvest
-  let addOps: any[] = [];
-  if (anchor) {
-    const st = await report(cfg, token, "spSearchTerm", ["searchTerm"], ["searchTerm", "keyword", "matchType", "clicks", "cost", "sales14d", "purchases14d"], sd, ed);
-    const agg = new Map<string, { ord: number }>();
-    for (const r of st) { if (!r.searchTerm) continue; const o = agg.get(r.searchTerm) ?? { ord: 0 }; o.ord += r.purchases14d ?? 0; agg.set(r.searchTerm, o); }
-    for (const [term, o] of agg) {
-      const t = term.toLowerCase().trim();
-      if (o.ord <= 0 || /^b0[a-z0-9]{8}$/i.test(term)) continue;
-      for (const mt of ["EXACT", "PHRASE"]) {
-        if (have.has(mt + "|" + t)) continue;
-        addOps.push({ campaignId: String(anchor.campaignId), adGroupId: String(anchor.adGroupId), keywordText: term, matchType: mt, state: "ENABLED", bid: NEW_KW_BID });
-        out.added.push({ text: term, matchType: mt });
-      }
+  // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
+  // Wrapped so a harvest-report failure (timeout, 4xx) can never block the kill/bid apply above.
+  let addOps: HarvestAdd[] = [];
+  try {
+    const stRows: SearchTermRow[] = [];
+    for (const [csd, ced] of harvestWindows(HARVEST_WINDOW_DAYS, Date.now())) {
+      const chunk = await report(cfg, token, "spSearchTerm", ["searchTerm"],
+        ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+      for (const r of chunk) stRows.push(r as SearchTermRow);
     }
-  }
+    addOps = harvestCandidates(stRows, haveByAg, NEW_KW_BID);
+    for (const a of addOps) out.added.push({ text: a.keywordText, matchType: a.matchType });
+  } catch (e) { out.errors.push("harvest: " + (e instanceof Error ? e.message : String(e))); }
 
   if (!dryRun) {
     try {
@@ -163,7 +209,7 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     "",
   ];
   if (r.killed.length) { lines.push("PAUSED (>=$4 spend, 0 orders, 30d):"); r.killed.forEach((k) => lines.push(`  $${k.spend} wasted  ${k.text}`)); lines.push(""); }
-  if (r.added.length) { lines.push("ADDED keywords (converting search terms):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
+  if (r.added.length) { lines.push("HARVESTED keywords (>=$4 spend, ACOS<=50%, into source ad group):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
   if (r.bids.length) { lines.push("BID changes (toward 30% ACOS target):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");

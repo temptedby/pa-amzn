@@ -57,3 +57,94 @@ describe("clampBidStep — C1 cap-rounding fix", () => {
     }
   });
 });
+
+import { harvestCandidates, harvestWindows, HARVEST_MIN_SPEND, HARVEST_MAX_ACOS, type SearchTermRow } from "./ad-engine";
+
+// H1 fix (confabulator/ad-engine-audit-2026-06-25.md + .agent/ad-engine-harvest-rule.md):
+// harvest a converting search term INTO THE AD GROUP IT CONVERTED IN (not one global anchor),
+// qualifying on William's rule: cost >= $4 AND ACOS <= 50% (ROAS >= 2x == sales >= 2*cost).
+const NEW_KW_BID = 0.5;
+const row = (o: Partial<SearchTermRow>): SearchTermRow => ({ campaignId: "C1", adGroupId: "A1", cost: 0, sales14d: 0, ...o });
+
+describe("harvestCandidates — H1 harvest into source ad group + $4/50%-ACOS rule", () => {
+  it("harvests a qualifying term as EXACT + PHRASE into its OWN ad group", () => {
+    const adds = harvestCandidates([row({ searchTerm: "phone tether clip", cost: 4, sales14d: 12 })], new Set());
+    expect(adds.map((a) => a.matchType).sort()).toEqual(["EXACT", "PHRASE"]);
+    expect(adds.every((a) => a.campaignId === "C1" && a.adGroupId === "A1")).toBe(true);
+    expect(adds.every((a) => a.keywordText === "phone tether clip" && a.bid === NEW_KW_BID && a.state === "ENABLED")).toBe(true);
+  });
+
+  it("H1 CORE: the SAME term converting in two ad groups harvests into BOTH, separately", () => {
+    const rows = [
+      row({ searchTerm: "retractable clip", campaignId: "C1", adGroupId: "A1", cost: 5, sales14d: 20 }),
+      row({ searchTerm: "retractable clip", campaignId: "C2", adGroupId: "A2", cost: 6, sales14d: 30 }),
+    ];
+    const adds = harvestCandidates(rows, new Set());
+    expect(adds.filter((a) => a.adGroupId === "A1")).toHaveLength(2);
+    expect(adds.filter((a) => a.adGroupId === "A2")).toHaveLength(2);
+  });
+
+  it("excludes a term below the $4 spend bar", () => {
+    expect(harvestCandidates([row({ searchTerm: "cheap", cost: 3.99, sales14d: 100 })], new Set())).toHaveLength(0);
+  });
+
+  it("excludes a term with ACOS > 50% even at high spend (sales < 2*cost)", () => {
+    // cost 10, sales 19 -> ACOS 52.6% > 50% -> not a winner
+    expect(harvestCandidates([row({ searchTerm: "bleeder", cost: 10, sales14d: 19 })], new Set())).toHaveLength(0);
+  });
+
+  it("includes the exact 50%-ACOS boundary (sales == 2*cost)", () => {
+    expect(harvestCandidates([row({ searchTerm: "edge", cost: 4, sales14d: 8 })], new Set())).toHaveLength(2);
+  });
+
+  it("excludes $4-spend term with ZERO sales (infinite ACOS)", () => {
+    expect(harvestCandidates([row({ searchTerm: "noconv", cost: 5, sales14d: 0 })], new Set())).toHaveLength(0);
+  });
+
+  it("aggregates the chunked 60d windows: two sub-$4 rows of the same term+ad group sum to qualify", () => {
+    const rows = [
+      row({ searchTerm: "phone leash", cost: 2.5, sales14d: 8 }),
+      row({ searchTerm: "phone leash", cost: 2.0, sales14d: 7 }),
+    ]; // summed: cost 4.5 >= 4, sales 15, ACOS 30%
+    expect(harvestCandidates(rows, new Set())).toHaveLength(2);
+  });
+
+  it("skips a match type already present IN THAT ad group, but still adds the missing one", () => {
+    const existing = new Set(["A1|EXACT|phone tether clip"]);
+    const adds = harvestCandidates([row({ searchTerm: "phone tether clip", cost: 4, sales14d: 12 })], existing);
+    expect(adds.map((a) => a.matchType)).toEqual(["PHRASE"]);
+  });
+
+  it("allows harvesting a term into ad group A2 even if it already exists in A1 (per-ad-group dedup)", () => {
+    const existing = new Set(["A1|EXACT|clip", "A1|PHRASE|clip"]);
+    const adds = harvestCandidates([row({ searchTerm: "clip", campaignId: "C2", adGroupId: "A2", cost: 5, sales14d: 20 })], existing);
+    expect(adds).toHaveLength(2);
+    expect(adds.every((a) => a.adGroupId === "A2")).toBe(true);
+  });
+
+  it("skips ASIN-looking search terms (b0xxxxxxxx)", () => {
+    expect(harvestCandidates([row({ searchTerm: "b0abcd1234", cost: 9, sales14d: 50 })], new Set())).toHaveLength(0);
+  });
+
+  it("skips rows missing the source ad group (can't know where to harvest)", () => {
+    expect(harvestCandidates([{ searchTerm: "orphan", cost: 9, sales14d: 50 } as SearchTermRow], new Set())).toHaveLength(0);
+  });
+
+  it("uses the configured rule constants", () => {
+    expect(HARVEST_MIN_SPEND).toBe(4);
+    expect(HARVEST_MAX_ACOS).toBe(0.5);
+  });
+});
+
+describe("harvestWindows — chunked <=31d trailing windows", () => {
+  const NOW = Date.parse("2026-06-26T00:00:00Z");
+  it("splits 60 days into two non-overlapping <=31d chunks", () => {
+    const w = harvestWindows(60, NOW);
+    expect(w).toHaveLength(2);
+    expect(w[0]).toEqual(["2026-05-27", "2026-06-26"]); // [now-30, now]
+    expect(w[1]).toEqual(["2026-04-27", "2026-05-26"]); // [now-60, now-31]
+  });
+  it("returns a single window for 30 days", () => {
+    expect(harvestWindows(30, NOW)).toHaveLength(1);
+  });
+});
