@@ -11,6 +11,10 @@
     {
       "path": "/api/cron/inbox-agent",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/cron/ad-engine-reactivate",
+      "schedule": "0 15 1 * *"
     }
   ]
 }

@@ -25,6 +25,10 @@ const NEW_KW_BID = 0.50, WINDOW_DAYS = 30;
 export const HARVEST_MIN_SPEND = 4;          // $ spend bar before a term is worth harvesting
 export const HARVEST_MAX_ACOS = 0.50;        // <= break-even ACOS (~52% Single, validated); keeps margin
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
+// Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable
+// any PAUSED keyword whose trailing 65 days still holds cost >= $4 AND ACOS <= 50% (ROAS >= 2x) -
+// same winner bar as harvest, so a keyword the kill-switch paused but that has since recovered comes back.
+export const REACT_WINDOW_DAYS = 65;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -32,6 +36,12 @@ interface Kw { keywordId: string; keywordText: string; matchType: string; state:
 interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
 export interface SearchTermRow { searchTerm?: string; campaignId?: string | number; adGroupId?: string | number; cost?: number; sales14d?: number; purchases14d?: number }
 export interface HarvestAdd { campaignId: string; adGroupId: string; keywordText: string; matchType: "EXACT" | "PHRASE"; state: "ENABLED"; bid: number }
+export interface ReactivationCandidate { keywordId: string; keywordText: string; matchType: string; cost: number; acos: number }
+export interface ReactivationResult {
+  ok: boolean; dryRun: boolean;
+  reactivated: { text: string; matchType: string; cost: number; acos: number }[];
+  errors: string[]; durationMs: number; reason?: string;
+}
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
   killed: { text: string; spend: number }[];
@@ -123,6 +133,26 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
   return adds;
 }
 
+// Pure reactivation selector (ad-engine-harvest-rule.md step 4). From the currently PAUSED keywords
+// + their trailing-window performance (aggregated per keywordId), pick those to re-enable: a paused
+// keyword qualifies when its trailing 65d holds cost >= HARVEST_MIN_SPEND AND ACOS <= HARVEST_MAX_ACOS
+// (same winner bar as harvest). Only PAUSED keywords are considered, so re-running is idempotent.
+export function reactivationCandidates(
+  paused: { keywordId: string; keywordText: string; matchType: string; state: string }[],
+  perfById: Map<string, { cost: number; sales: number }>,
+): ReactivationCandidate[] {
+  const out: ReactivationCandidate[] = [];
+  for (const k of paused) {
+    if (k.state !== "PAUSED") continue;                         // never touch an already-ENABLED keyword
+    const p = perfById.get(String(k.keywordId));
+    if (!p) continue;                                            // no recent spend -> nothing to prove it recovered
+    if (p.cost < HARVEST_MIN_SPEND) continue;                   // >= $4 spend
+    if (!(p.sales > 0 && p.cost / p.sales <= HARVEST_MAX_ACOS)) continue; // ACOS <= 50% (ROAS >= 2x)
+    out.push({ keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType, cost: +p.cost.toFixed(2), acos: +(p.cost / p.sales).toFixed(4) });
+  }
+  return out;
+}
+
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
@@ -201,6 +231,77 @@ async function persistLog(r: AdEngineResult): Promise<void> {
   for (const [action, kw, mt, fb, tb, acos, spend] of rows) {
     await db().execute({ sql: "INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend) VALUES (?,?,?,?,?,?,?,?)", args: [runAt, action, kw, mt, fb, tb, acos, spend] });
   }
+}
+
+// Monthly reactivation job (ad-engine-harvest-rule.md step 4). Separate cadence from runAdEngine
+// (which runs every 6h): this is invoked once a month. Lists PAUSED keywords, pulls their trailing
+// 65d performance (chunked into <=31d Ads-API reports), and re-enables any that recovered to the
+// >= $4 spend / ACOS <= 50% winner bar. dryRun previews without applying. Idempotent.
+export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): Promise<ReactivationResult> {
+  const dryRun = opts.dryRun ?? false;
+  const start = Date.now();
+  const out: ReactivationResult = { ok: false, dryRun, reactivated: [], errors: [], durationMs: 0 };
+  const cfg = adsConfigFromEnv();
+  if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
+  const token = await getAdsAccessToken(cfg);
+
+  // paused keywords only
+  const paused: Kw[] = [];
+  let next: string | undefined;
+  do {
+    const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, stateFilter: { include: ["PAUSED"] }, ...(next ? { nextToken: next } : {}) }, KW_CT);
+    (r.json?.keywords ?? []).forEach((k: any) => { if (k.state === "PAUSED") paused.push(k); });
+    next = r.json?.nextToken;
+  } while (next);
+  if (!paused.length) { out.ok = true; out.durationMs = Date.now() - start; return out; }
+
+  // trailing 65d keyword performance, aggregated per keywordId across the chunked windows
+  const perfById = new Map<string, { cost: number; sales: number }>();
+  try {
+    for (const [csd, ced] of harvestWindows(REACT_WINDOW_DAYS, Date.now())) {
+      const chunk = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+      for (const r of chunk) {
+        if (r.keywordId == null) continue;
+        const id = String(r.keywordId);
+        const o = perfById.get(id) ?? { cost: 0, sales: 0 };
+        o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0;
+        perfById.set(id, o);
+      }
+    }
+  } catch (e) { out.errors.push("reactivation report: " + (e instanceof Error ? e.message : String(e))); out.durationMs = Date.now() - start; return out; }
+
+  const cands = reactivationCandidates(paused, perfById);
+  for (const c of cands) out.reactivated.push({ text: c.keywordText, matchType: c.matchType, cost: c.cost, acos: c.acos });
+
+  if (!dryRun && cands.length) {
+    try {
+      const ops = cands.map((c) => ({ keywordId: c.keywordId, state: "ENABLED" }));
+      const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: ops }, KW_CT);
+      if (!r.ok) out.errors.push(`reactivate: ${r.status}`);
+    } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+    try { await persistReactivation(out); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  out.ok = true; out.durationMs = Date.now() - start;
+  return out;
+}
+
+// Log each reactivation to the same auditable ad_engine_log (action = "reactivate").
+async function persistReactivation(r: ReactivationResult): Promise<void> {
+  await db().execute(`CREATE TABLE IF NOT EXISTS ad_engine_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL, action TEXT NOT NULL,
+    keyword TEXT, match_type TEXT, from_bid REAL, to_bid REAL, acos REAL, spend REAL)`);
+  const runAt = new Date().toISOString();
+  for (const a of r.reactivated) {
+    await db().execute({ sql: "INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend) VALUES (?,?,?,?,?,?,?,?)", args: [runAt, "reactivate", a.text, a.matchType, null, null, a.acos, a.cost] });
+  }
+}
+
+export function summarizeReactivation(r: ReactivationResult): string {
+  const lines = [`Monthly reactivation ${r.dryRun ? "(preview)" : "ran"} — ${r.reactivated.length} keywords re-enabled. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`, ""];
+  if (r.reactivated.length) { lines.push("RE-ENABLED (paused but trailing 65d holds >=$4 spend, ACOS<=50%):"); r.reactivated.forEach((a) => lines.push(`  ${a.matchType}  ACOS ${(a.acos * 100).toFixed(0)}%  $${a.cost} spend  ${a.text}`)); lines.push(""); }
+  if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
+  return lines.join("\n");
 }
 
 export function summarizeAdEngine(r: AdEngineResult): string {

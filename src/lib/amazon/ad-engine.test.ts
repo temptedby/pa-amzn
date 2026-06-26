@@ -148,3 +148,51 @@ describe("harvestWindows — chunked <=31d trailing windows", () => {
     expect(harvestWindows(30, NOW)).toHaveLength(1);
   });
 });
+
+
+import { reactivationCandidates, REACT_WINDOW_DAYS } from "./ad-engine";
+
+// Monthly reactivation (ad-engine-harvest-rule.md step 4, William 2026-06-26): re-enable a PAUSED
+// keyword whose trailing 65d recovered to the same winner bar as harvest (cost >= $4 AND ACOS <= 50%).
+const pk = (o: Partial<{ keywordId: string; keywordText: string; matchType: string; state: string }>) =>
+  ({ keywordId: "K1", keywordText: "phone clip", matchType: "EXACT", state: "PAUSED", ...o });
+const perf = (entries: [string, number, number][]) =>
+  new Map(entries.map(([id, cost, sales]) => [id, { cost, sales }]));
+
+describe("reactivationCandidates — monthly re-enable of recovered paused keywords", () => {
+  it("re-enables a PAUSED keyword that recovered to >=$4 spend AND ACOS<=50%", () => {
+    const out = reactivationCandidates([pk({})], perf([["K1", 6, 20]])); // ACOS 30%
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ keywordId: "K1", matchType: "EXACT", cost: 6, acos: 0.3 });
+  });
+
+  it("never reactivates an ENABLED keyword (only PAUSED are considered)", () => {
+    expect(reactivationCandidates([pk({ state: "ENABLED" })], perf([["K1", 9, 50]]))).toHaveLength(0);
+  });
+
+  it("skips a paused keyword below the $4 spend bar", () => {
+    expect(reactivationCandidates([pk({})], perf([["K1", 3.99, 100]]))).toHaveLength(0);
+  });
+
+  it("skips a paused keyword whose trailing ACOS is still > 50% (sales < 2*cost)", () => {
+    // cost 10, sales 19 -> ACOS 52.6% -> stays paused
+    expect(reactivationCandidates([pk({})], perf([["K1", 10, 19]]))).toHaveLength(0);
+  });
+
+  it("includes the exact 50%-ACOS boundary (sales == 2*cost)", () => {
+    expect(reactivationCandidates([pk({})], perf([["K1", 4, 8]]))).toHaveLength(1);
+  });
+
+  it("skips a paused keyword with zero sales (infinite ACOS)", () => {
+    expect(reactivationCandidates([pk({})], perf([["K1", 5, 0]]))).toHaveLength(0);
+  });
+
+  it("skips a paused keyword with NO recent performance data (nothing proves recovery)", () => {
+    expect(reactivationCandidates([pk({ keywordId: "K9" })], perf([["K1", 9, 50]]))).toHaveLength(0);
+  });
+
+  it("uses a 65-day trailing window split into <=31d report chunks", () => {
+    expect(REACT_WINDOW_DAYS).toBe(65);
+    expect(harvestWindows(REACT_WINDOW_DAYS, Date.parse("2026-06-26T00:00:00Z")).length).toBeGreaterThanOrEqual(3);
+  });
+});
