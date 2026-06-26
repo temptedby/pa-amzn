@@ -543,3 +543,19 @@ To be precise about today's live ad changes (no overstating):
 **Context.** William heading to bed; wants Canada/Good-Standing pushed overnight, "if stopped find other research."
 **Decision.** From his own docs: confirmed entity DOUGLAS DEAN HOLDINGS LLC, DE file 7603115, registered agent E-Government LLC dba Delawarefile.com (portal "My Client Management"), 2025 agent payment on file; 2019 Good Standing cert saved (gitignored .docs/legal). Drafted (not sent) a Good Standing request to info@delawarefile.com. Re-pointed the overnight loop to a Canada-first read-only research queue (exact updated-cert steps, amazon.ca doc requirements, entity-name-mismatch remediation) with research fallbacks, then restarted it.
 **Status.** Overnight loop running; draft in hello@ Drafts; all on branch bear/24-7-setup-2026-06-25. Need William: order updated cert + fix name mismatch.
+
+### 2026-06-26 — Built the C1 fix: ad-engine ±25%/run cap no longer breached by cent-rounding (branch-only)
+
+**Context.** The 2026-06-25 read-only ad-engine audit logged bug **C1**: the ±25%/run bid cap was breached in 22 of 80 logged rebids because `round()` (whole-cent) ran AFTER the clamp, so small bids slipped past the cap — `0.10->0.13` (+30%), `0.30->0.22` (-26.7%), `0.11->0.14` (+27.3%). Severity low (cents) but it violates the engine's stated invariant. Overnight autonomous build cycle picked it as the single highest-priority UNBLOCKED item: a pure correctness fix with one right answer, strictly safer, no strategy decision required (unlike H1/G1/R1, which need William's call).
+
+**Options.** (1) Re-clamp to [lo,hi] after rounding. (2) Round the band edges INWARD (lo up, hi down) so the whole-cent result is mathematically guaranteed to stay inside [base*0.75, base*1.25]. (3) Do nothing (cosmetic). Chose (2): it makes the cap a hard invariant rather than a best-effort, and is the cleaner extraction.
+
+**Decision.** Extracted `clampBidStep(currentBid, rawTarget)` (exported, pure) in `src/lib/amazon/ad-engine.ts`, replacing the inline `round`/clamp at the old lines 99-102: `lo = max(FLOOR, ceil(base*0.75))`, `hi = min(CAP, floor(base*1.25))`, return `clamp(round(target))`. Added `src/lib/amazon/ad-engine.test.ts` (7 tests): the three exact audit failure cases, FLOOR/CAP bounds, whole-cent output, pass-through inside band, and a property test sweeping bid 0.10->2.50 x 9 target factors asserting no result ever breaches ±25%. Added `vitest.config.ts` to resolve the tsconfig `@/*` alias (ad-engine imports `@/lib/db/client`; DB is lazy so import is side-effect-free). Corrected the misleading "NOT compounding" header comment (item 5). Also fixed the per-run ratchet doc to point at parked audit R1.
+
+**Reasoning.** Inward rounding gives a provable cap (the property test enforces it), not a patched symptom. Scoped tightly to C1: H1 (single-anchor harvest) needs William's ad-group strategy + the new harvest spec; G1 (sub-$4 bleed) and R1 (cross-run ratchet / cadence) are policy choices, not bugs — left parked per the audit's "what NOT to do."
+
+**Industry source.** The engine's own validated invariant (`ad-engine.ts` FLOOR/CAP/MAX_STEP constants) + the cited ad-engine-audit-2026-06-25.md replication (live Ads API v3 + 80-row `ad_engine_log`). Amazon Ads bids are whole-cent, so cent-rounding is mandatory and must round inside the cap.
+
+**Trade-offs / rollback.** Behavior change is strictly MORE conservative (a few rebids/run land 1 cent lower/higher than before, always inside the cap) — never more aggressive, so no new spend risk. Not deployed: branch only. Rollback = revert the branch (never merged). The new `vitest.config.ts` is additive and made the full suite pass 45/45.
+
+**Status.** Built + tested on branch `fix/ad-engine-c1-cap-rounding` (NOT pushed, NOT merged). 45/45 tests green, `tsc --noEmit` clean. **Needs William: merge approval** — it touches the live autonomous engine. H1/G1/R1 remain propose-only.

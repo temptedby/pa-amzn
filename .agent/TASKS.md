@@ -14,6 +14,7 @@ MODE: research/audit only. No deploy/push/prod, no live Seller Central change, n
 
 ## NEXT (if top job blocked or done) — read-only research
 A. Ad-engine audit FIXES as proposals only (H1 harvest single-ad-group, C1 cent-rounding cap breach, G1 sub-$4 bleed, R1 intraday ratchet) — write the fix design, do NOT change live code paths' behavior.
+   - [x] C1 BUILT on branch `fix/ad-engine-c1-cap-rounding` (2026-06-26): `clampBidStep()` + 7 tests + vitest.config; branch-only, needs William merge approval. H1/G1/R1 still propose-only.
 B. Profitable-Amazon-store process + structure gap analysis (cited).
 C. Validated-data baseline doc (8,134 units/$127,456, fees, inventory, ~18k lifetime, ad 8,926).
 D. Content/traffic foundation plan (Drive creative, Social Scene BRC tooling reuse, AI options, blog/SEO).

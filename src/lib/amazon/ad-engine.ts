@@ -6,7 +6,8 @@ import { db } from "@/lib/db/client";
 // so every action is SAFE TO REPEAT:
 //   - KILL switch: ENABLED keyword, >= $4 spend & 0 orders (30d)  -> pause (idempotent)
 //   - HARVEST: converting search terms not yet keywords -> add exact+phrase (deduped)
-//   - BID: target-ACOS convergence (toward 30%), capped ±25%/run, floor/cap -> NOT compounding
+//   - BID: target-ACOS convergence, capped ±25%/run (whole-cent, never breaches the cap -> C1 fix),
+//          floor/cap. NOT compounding WITHIN a run (does ratchet across runs -> audit R1, parked).
 // Apply is gated behind dryRun. Reuses the LWA token + region from ads-api.ts.
 
 const BASE = "https://advertising-api.amazon.com";
@@ -62,7 +63,15 @@ async function report(cfg: AdsConfig, token: string, reportTypeId: string, group
   return JSON.parse(gunzipSync(buf).toString());
 }
 
-const round = (n: number) => Math.max(FLOOR, Math.min(CAP, +n.toFixed(2)));
+// Clamp a raw target bid to the ±MAX_STEP/run band and global [FLOOR, CAP], rounded to whole cents.
+// C1 fix (ad-engine-audit-2026-06-25.md): round the band edges INWARD - lo UP, hi DOWN - so rounding
+// a small bid to cents can never push it past the ±25%/run cap (e.g. 0.10->0.13 was +30%; now <=0.12).
+export function clampBidStep(currentBid: number, rawTarget: number): number {
+  const base = currentBid || NEW_KW_BID;
+  const lo = Math.max(FLOOR, Math.ceil(base * (1 - MAX_STEP) * 100) / 100);
+  const hi = Math.min(CAP, Math.floor(base * (1 + MAX_STEP) * 100) / 100);
+  return Math.max(lo, Math.min(hi, +rawTarget.toFixed(2)));
+}
 
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
@@ -96,9 +105,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     if (cost >= KILL_SPEND && ord === 0) { killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" }); out.killed.push({ text: k.keywordText, spend: +cost.toFixed(2) }); continue; }
     if (ord > 0 && sales > 0) {
       const acos = cost / sales;
-      let target = (k.bid || NEW_KW_BID) * (TARGET_ACOS / acos);          // converge to target ACOS
-      const lo = (k.bid || NEW_KW_BID) * (1 - MAX_STEP), hi = (k.bid || NEW_KW_BID) * (1 + MAX_STEP);
-      target = round(Math.max(lo, Math.min(hi, target)));                  // cap step ±25%/run
+      const target = clampBidStep(k.bid || NEW_KW_BID, (k.bid || NEW_KW_BID) * (TARGET_ACOS / acos)); // converge to target ACOS, capped ±25%/run
       if (Math.abs(target - (k.bid || 0)) >= 0.02) { bidOps.push({ keywordId: String(k.keywordId), bid: target }); out.bids.push({ text: k.keywordText, from: k.bid, to: target, acos: +(acos * 100).toFixed(0) / 100 }); }
     }
   }
