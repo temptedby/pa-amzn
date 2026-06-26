@@ -538,3 +538,8 @@ To be precise about today's live ad changes (no overstating):
 **Trade-offs accepted.** Audit is a point-in-time snapshot (30d window, 2026-06-25). would-kill/would-harvest can change as traffic returns; H1/C1/R1 are time-invariant code facts. Did not test BROAD-match harvest behavior or auto-campaign targeting clauses in depth (out of scope for keyword harvest).
 
 **Status / date to revisit.** Audit DONE, deliverable written, branch `audit/ad-engine-2026-06-25` (not pushed). Fixes H1/C1/G1/R1 are PROPOSE-ONLY and need William's go before any code change (mode is research/audit-only). Revisit when William approves moving from audit to fix.
+
+### 2026-06-25 (late) — Registered agent + Good Standing found; overnight research queued
+**Context.** William heading to bed; wants Canada/Good-Standing pushed overnight, "if stopped find other research."
+**Decision.** From his own docs: confirmed entity DOUGLAS DEAN HOLDINGS LLC, DE file 7603115, registered agent E-Government LLC dba Delawarefile.com (portal "My Client Management"), 2025 agent payment on file; 2019 Good Standing cert saved (gitignored .docs/legal). Drafted (not sent) a Good Standing request to info@delawarefile.com. Re-pointed the overnight loop to a Canada-first read-only research queue (exact updated-cert steps, amazon.ca doc requirements, entity-name-mismatch remediation) with research fallbacks, then restarted it.
+**Status.** Overnight loop running; draft in hello@ Drafts; all on branch bear/24-7-setup-2026-06-25. Need William: order updated cert + fix name mismatch.
