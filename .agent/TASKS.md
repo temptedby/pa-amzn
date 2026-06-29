@@ -14,7 +14,7 @@ Read-only: query the log + Ads API reports; change NOTHING in the live account.
 ## Foundation research queue (after the audit — all read-only, output = a brief)
 A. Understand the business via email discovery (sent + labeled hello@).
 B. Profitable-Amazon-store process + structure -> gap analysis (cited). ✅ DONE 2026-06-29 -> confabulator/profitable-store-gap-analysis-2026-06-29.md (branch research/profitable-store-gap-analysis-2026-06-29, off main, not pushed).
-C. Validated-data baseline (8,134 units/$127,456, fees, inventory) as one source of truth.
+C. Validated-data baseline (8,134 units/$127,456, fees, inventory) as one source of truth. ✅ DONE 2026-06-29 -> confabulator/validated-data-baseline-2026-06-29.md + scripts/baseline.mjs (branch research/validated-data-baseline-2026-06-29, off main, not pushed).
 D. Content + traffic foundation plan (Drive creative, Social Scene BRC tooling, AI options, blog/SEO).
 E. phoneassured.com migration research (off Shopify, SEO-preserving) — plan only.
 F. Autonomous-with-checks governance spec + the agent-amzn<->agent-des shared-tools contract.
