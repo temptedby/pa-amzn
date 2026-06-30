@@ -24,3 +24,4 @@ F. Seller financing (Payability / Amazon Lending) brief.
 
 ## Parked — needs William
 Ordering/downloading the updated cert (his login/payment); william@ OAuth token; AI key+budget; any build/go-live; sending the delawarefile draft.
+- [x] 2026-06-30 cycle 15 - BUILT the SHIP-PLAN TOOL (attacks the validated #1 bottleneck: 29->69 unmerged branches, merge map went stale). Tested pure `src/lib/ship-plan.ts` (classifyConflict / collapseStacks / codeFileOverlap; 9 tests) + read-only `scripts/ship-plan.mjs` (git merge-tree trial-merge). Live: 69 unmerged -> 35 units (7 clean / 21 doc-only / 7 code-conflict; 30 colliding files); reconfirms the two ad-engine lineages collide on ad-engine.ts + bid-damping.ts. Branch `chore/ship-plan-tool-2026-06-30`, 76/76 green, tsc clean, INDEPENDENT file set. Deliverable `confabulator/ship-plan-2026-06-30.md`. Needs William: run the review+merge pass (regenerable via `node scripts/ship-plan.mjs`).
