@@ -75,3 +75,96 @@ describe("codeFileOverlap", () => {
     expect(codeFileOverlap(collapseStacks([A, B])).size).toBe(0);
   });
 });
+
+// --- merge runbook ----------------------------------------------------------
+import {
+  buildMergeRunbook,
+  UNION_DRIVER_FRAGMENT,
+  type RunbookUnit,
+} from "./ship-plan";
+
+/** Build a RunbookUnit directly (the script attaches verdict from a trial-merge). */
+function ru(
+  tip: string,
+  verdict: "clean" | "doc-only" | "code",
+  files: string[],
+  opts: { ahead?: number; date?: string; code?: string[]; docs?: string[] } = {},
+): RunbookUnit {
+  return {
+    tip,
+    subsumes: [],
+    files,
+    date: opts.date ?? "2026-06-29",
+    ahead: opts.ahead ?? 1,
+    verdict,
+    codeConflicts: opts.code ?? [],
+    docConflicts: opts.docs ?? [],
+  };
+}
+
+describe("buildMergeRunbook", () => {
+  it("auto-merges clean collision-free units, each gated by a test run", () => {
+    const A = ru("featA", "clean", ["src/a.ts"]);
+    const B = ru("featB", "clean", ["src/b.ts"]);
+    const overlap = codeFileOverlap(collapseStacks([] as BranchInfo[])); // empty
+    const rb = buildMergeRunbook([A, B], overlap);
+    const merges = rb.autoSteps.filter((s) => s.kind === "merge").map((s) => s.tip);
+    expect(merges).toEqual(["featA", "featB"]);
+    // every merge is followed by a test gate
+    expect(rb.autoSteps.filter((s) => s.kind === "test")).toHaveLength(2);
+    expect(rb.clusters).toEqual([]);
+  });
+
+  it("lands the union driver FIRST, then the doc-only units", () => {
+    const driver = ru(`chore/${UNION_DRIVER_FRAGMENT}-2026-06-28`, "doc-only", [".agent/TASKS.md"], {
+      docs: [".agent/TASKS.md"],
+    });
+    const doc = ru("audit/x", "doc-only", ["decisions-journal.md"], { docs: ["decisions-journal.md"] });
+    const rb = buildMergeRunbook([doc, driver], new Map());
+    expect(rb.unionDriverTip).toBe(driver.tip);
+    const mergeOrder = rb.autoSteps.filter((s) => s.kind === "merge").map((s) => s.tip);
+    expect(mergeOrder[0]).toBe(driver.tip); // driver before any doc-only
+    expect(mergeOrder).toContain("audit/x");
+  });
+
+  it("never auto-merges code-colliding units — they become a manual cluster", () => {
+    const A = ru("featA", "clean", ["src/lib/amazon/ad-engine.ts"], { ahead: 4 });
+    const B = ru("featB", "code", ["src/lib/amazon/ad-engine.ts"], {
+      ahead: 2,
+      code: ["src/lib/amazon/ad-engine.ts"],
+    });
+    const overlap = new Map([["src/lib/amazon/ad-engine.ts", ["featA", "featB"]]]);
+    const rb = buildMergeRunbook([A, B], overlap);
+    // neither colliding tip appears in the auto (executable) steps
+    expect(rb.autoSteps.some((s) => s.tip === "featA" || s.tip === "featB")).toBe(false);
+    expect(rb.clusters).toHaveLength(1);
+    expect(rb.clusters[0].members).toEqual(["featA", "featB"]);
+    expect(rb.clusters[0].files).toEqual(["src/lib/amazon/ad-engine.ts"]);
+    // most-ahead tip is recommended to land first (others rebase onto it)
+    expect(rb.clusters[0].recommendFirst).toBe("featA");
+  });
+
+  it("groups a transitive collision chain into ONE cluster (connected component)", () => {
+    // A-B share file1, B-C share file2 => {A,B,C} one cluster even though A,C are disjoint
+    const A = ru("A", "clean", ["f1.ts"], { ahead: 1 });
+    const B = ru("B", "code", ["f1.ts", "f2.ts"], { ahead: 3, code: ["f1.ts"] });
+    const C = ru("C", "clean", ["f2.ts"], { ahead: 1 });
+    const overlap = new Map([
+      ["f1.ts", ["A", "B"]],
+      ["f2.ts", ["B", "C"]],
+    ]);
+    const rb = buildMergeRunbook([A, B, C], overlap);
+    expect(rb.clusters).toHaveLength(1);
+    expect(rb.clusters[0].members).toEqual(["A", "B", "C"]);
+    expect(rb.clusters[0].files).toEqual(["f1.ts", "f2.ts"]);
+    expect(rb.clusters[0].recommendFirst).toBe("B"); // most ahead
+  });
+
+  it("tie-breaks recommendFirst by oldest date when ahead is equal", () => {
+    const A = ru("A", "clean", ["f.ts"], { ahead: 2, date: "2026-06-29" });
+    const B = ru("B", "clean", ["f.ts"], { ahead: 2, date: "2026-06-25" });
+    const overlap = new Map([["f.ts", ["A", "B"]]]);
+    const rb = buildMergeRunbook([A, B], overlap);
+    expect(rb.clusters[0].recommendFirst).toBe("B"); // older
+  });
+});

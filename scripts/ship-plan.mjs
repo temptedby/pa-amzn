@@ -135,3 +135,83 @@ const outPath = `confabulator/ship-plan-${today}.md`;
 writeFileSync(outPath, L.join("\n") + "\n");
 console.log(`Wrote ${outPath}`);
 console.log(`${branches.length} unmerged -> ${units.length} units | clean ${cleanUnits.length} / doc-only ${docUnits.length} / code ${codeUnits.length} | ${overlap.size} colliding files`);
+
+// ---- merge runbook (regenerable execution plan) ----------------------------
+// Convert the classified units + collision matrix into an ordered, test-gated
+// command sequence. Auto-steps are independent units only; collisions stay manual.
+const runbookUnits = units.map((u) => ({
+  ...u,
+  verdict: u.conflict.verdict,
+  codeConflicts: u.conflict.codeConflicts,
+  docConflicts: u.conflict.docConflicts,
+}));
+const runbook = lib.buildMergeRunbook(runbookUnits, overlap);
+
+// (a) append a runbook section to the ship-plan markdown
+const R = [];
+R.push("");
+R.push("## Merge runbook (regenerable session plan)");
+R.push("");
+R.push(`Executable copy-paste below, also written to \`merge-runbook-${today}.sh\`.`);
+R.push("It performs LOCAL merges only and NEVER pushes; review each diff first, and let the");
+R.push("`npm test` gate halt the run on any red. Phase 3 (code collisions) is human-decided.");
+R.push("");
+R.push(`Union driver: ${runbook.unionDriverTip ? "`" + runbook.unionDriverTip + "`" : "_(none found — resolve doc conflicts by keeping both sides)_"}`);
+R.push("");
+R.push("### Phases 0-2 — auto-mergeable (independent units, test-gated)");
+R.push("```sh");
+let lastPhase = null;
+for (const s of runbook.autoSteps) {
+  if (s.phase !== lastPhase) {
+    R.push(`# --- phase ${s.phase} ---`);
+    lastPhase = s.phase;
+  }
+  R.push(s.note ? `${s.command}    # ${s.note}` : s.command);
+}
+if (!runbook.autoSteps.length) R.push("# (no independent units to auto-merge this run)");
+R.push("```");
+R.push("");
+R.push("### Phase 3 — code-collision clusters (land one, rebase the rest; do NOT merge blind)");
+R.push("");
+if (!runbook.clusters.length) {
+  R.push("- _(no code-collision clusters)_");
+} else {
+  for (const c of runbook.clusters) {
+    R.push(`- **Land \`${c.recommendFirst}\` first**, then rebase the rest onto the new main:`);
+    R.push(`  - members: ${c.members.map((m) => "`" + m + "`").join(", ")}`);
+    R.push(`  - shared files: ${c.files.map((f) => "`" + f + "`").join(", ")}`);
+  }
+}
+R.push("");
+writeFileSync(outPath, L.join("\n") + "\n" + R.join("\n") + "\n");
+
+// (b) write the executable shell runbook
+const SH = [];
+SH.push("#!/usr/bin/env bash");
+SH.push(`# Merge runbook — PA-AMZN — generated ${today} by scripts/ship-plan.mjs`);
+SH.push("# LOCAL merges only. This script NEVER pushes. Review each diff first.");
+SH.push("# Run deliberately, line by line or whole; the test gate halts on any failure.");
+SH.push("# Phase 3 (code collisions) is NOT here — it needs a human lineage decision.");
+SH.push("set -euo pipefail");
+SH.push(`git checkout ${BASE}`);
+SH.push("");
+lastPhase = null;
+for (const s of runbook.autoSteps) {
+  if (s.phase !== lastPhase) {
+    SH.push(`echo "=== phase ${s.phase} ==="`);
+    lastPhase = s.phase;
+  }
+  if (s.note) SH.push(`# ${s.note}`);
+  SH.push(s.command);
+}
+if (!runbook.autoSteps.length) SH.push("echo 'no independent units to auto-merge'");
+SH.push("");
+SH.push('echo "=== phase 3 (manual — code-collision clusters) ==="');
+for (const c of runbook.clusters) {
+  SH.push(`# cluster: land ${c.recommendFirst} first, then rebase: ${c.members.join(", ")}`);
+  SH.push(`#   shared files: ${c.files.join(", ")}`);
+}
+SH.push(`echo "Done. Nothing was pushed. Review 'git log --oneline ${BASE}' before any push."`);
+const shPath = `confabulator/merge-runbook-${today}.sh`;
+writeFileSync(shPath, SH.join("\n") + "\n");
+console.log(`Wrote ${shPath} (${runbook.autoSteps.filter((s) => s.kind === "merge").length} auto-merges, ${runbook.clusters.length} manual clusters)`);
