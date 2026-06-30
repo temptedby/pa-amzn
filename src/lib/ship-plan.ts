@@ -132,7 +132,7 @@ export interface RunbookUnit extends ShipUnit {
 
 export interface RunbookStep {
   phase: string; // "0 union driver" | "1 clean" | "2 doc-only"
-  kind: "merge" | "test";
+  kind: "prep" | "merge" | "test";
   tip?: string;
   command: string;
   note?: string;
@@ -227,14 +227,28 @@ export function buildMergeRunbook(
 
   const autoSteps: RunbookStep[] = [];
 
-  // Phase 0 — land the union driver first so doc-only conflicts auto-resolve.
+  // Phase 0 — activate the merge=union driver BEFORE any merge. Empirically validated
+  // (integration-clean-units-2026-06-30): `git merge` of the union-driver branch halts
+  // because .gitattributes isn't in the tree yet, so the union driver is inactive and the
+  // driver branch's own journal/TASKS appends conflict. Fix: copy .gitattributes out of the
+  // driver branch and commit it FIRST; with the driver live, the subsequent merges (incl.
+  // the driver branch itself) auto-resolve their append-only doc conflicts.
   if (unionDriver) {
+    autoSteps.push({
+      phase: "0 union driver",
+      kind: "prep",
+      tip: unionDriver.tip,
+      command:
+        `git checkout ${unionDriver.tip} -- .gitattributes && git add .gitattributes && ` +
+        `(git diff --cached --quiet || git commit -m "chore: activate merge=union driver before doc-heavy merges")`,
+      note: "land .gitattributes FIRST so merge=union is active before any merge (else phase-0 halts)",
+    });
     autoSteps.push({
       phase: "0 union driver",
       kind: "merge",
       tip: unionDriver.tip,
       command: `git merge --no-ff ${unionDriver.tip}`,
-      note: "merge=union .gitattributes — makes journal/TASKS re-append conflicts auto-resolve",
+      note: "merge=union now active — driver branch's journal/TASKS appends auto-resolve",
     });
     autoSteps.push({ phase: "0 union driver", kind: "test", command: TEST_CMD });
   }

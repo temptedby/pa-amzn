@@ -115,6 +115,29 @@ describe("buildMergeRunbook", () => {
     expect(rb.clusters).toEqual([]);
   });
 
+  it("activates .gitattributes (prep) BEFORE merging the union driver, so phase-0 doesn't halt", () => {
+    const driver = ru(`chore/${UNION_DRIVER_FRAGMENT}-2026-06-28`, "doc-only", [".gitattributes", ".agent/TASKS.md"], {
+      docs: [".agent/TASKS.md"],
+    });
+    const rb = buildMergeRunbook([driver], new Map());
+    const phase0 = rb.autoSteps.filter((s) => s.phase === "0 union driver");
+    // order must be: prep (copy+commit .gitattributes) -> merge -> test
+    expect(phase0.map((s) => s.kind)).toEqual(["prep", "merge", "test"]);
+    const prep = phase0[0];
+    expect(prep.command).toContain(`git checkout ${driver.tip} -- .gitattributes`);
+    expect(prep.command).toContain("git add .gitattributes");
+    expect(prep.command).toContain("git commit");
+    // the merge of the driver branch still happens, AFTER the prep
+    expect(phase0[1].command).toBe(`git merge --no-ff ${driver.tip}`);
+  });
+
+  it("emits NO prep step when there is no union-driver branch", () => {
+    const doc = ru("audit/x", "doc-only", ["decisions-journal.md"], { docs: ["decisions-journal.md"] });
+    const rb = buildMergeRunbook([doc], new Map());
+    expect(rb.unionDriverTip).toBeNull();
+    expect(rb.autoSteps.some((s) => s.kind === "prep")).toBe(false);
+  });
+
   it("lands the union driver FIRST, then the doc-only units", () => {
     const driver = ru(`chore/${UNION_DRIVER_FRAGMENT}-2026-06-28`, "doc-only", [".agent/TASKS.md"], {
       docs: [".agent/TASKS.md"],
