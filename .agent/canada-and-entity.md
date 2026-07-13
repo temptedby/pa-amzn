@@ -32,3 +32,13 @@ William: doesn't have it, can't find where to apply on Delaware's site.
 - 2025 registered-agent payment on file (confirms agent active; franchise tax likely current).
 - Saved (gitignored, NOT committed): .docs/legal/ has the 2019 Good Standing + 2025 payment PDFs.
 - NEED: an UPDATED Certificate of Good Standing (2019 is too old for Amazon). Draft request to delawarefile.com is in hello@ Drafts (review+send). Use file number 7603115.
+
+## DE Certificate of Good Standing — route chosen (William, 2026-07-09)
+- William's 2026-06-25 request went to the REGISTERED AGENT (delawarefile.com / E-Government LLC) and got NO response in ~2 weeks. Decision: bypass the agent, order STATE-DIRECT.
+- ROUTE: state-direct, $50 short form. Portal: https://icis.corp.delaware.gov/ecorp2 -> "Document Filing and Certificate Request".
+- Entity: DOUGLAS DEAN HOLDINGS LLC, DE file number 7603115.
+- Prereq confirmed in-flow: DE franchise tax must be current or the cert won't issue (likely why the agent request stalled). Pay in same portal if owed.
+- Recommend EXPEDITED processing (state mails the official cert; standard is slow). Short form only ($50); long form ($175) not needed for Amazon.
+- Free/cheap status check (optional, $10-20): https://icis.corp.delaware.gov/Ecorp/EntitySearch/NameSearch.aspx
+- DE Division of Corporations support: (302) 739-3073.
+- SUPERSEDES the earlier "email delawarefile.com" draft plan.

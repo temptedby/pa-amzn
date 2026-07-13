@@ -627,3 +627,27 @@ To be precise about today's live ad changes (no overstating):
 ### 2026-06-30 (later) — Stopped all Resend emails (prod), confirmed no OpenAI
 **Decision.** William asked to stop all Resend email. Removed RESEND_API_KEY from Vercel production + redeployed the existing prod commit (no new code) so sendEmail no-ops; crons keep running. Reversible. Verified no OpenAI key/package/usage in the project.
 **Status.** Emails OFF in production. Ad-engine email-gate change (adds/pauses/errors only) still on branch for the eventual deploy. Bottleneck remains the one deploy PR (C1/H1/reactivation/negative-harvest/ES draft-only).
+
+---
+
+### 2026-07-13 14:00 PT — Bypass the silent registered agent: order the Delaware Certificate of Good Standing state-direct
+
+- **Context** — The Amazon Canada reactivation is blocked on a current Delaware Certificate of Good Standing for DOUGLAS DEAN HOLDINGS LLC (file #7603115). William's 2026-06-25 request went to the registered agent (delawarefile.com / E-Government LLC) and got no response in over two weeks. He asked for research and a better link.
+- **Options considered** — (1) Keep chasing the registered agent — rejected, already 2+ weeks silent. (2) Same-day commercial filing service (Harvard Business Services / delawareinc.com) — fastest but adds a service fee. (3) State-direct via the DE eCorp portal, $50 short form — self-serve, cheapest, no third party. (4) Do nothing / wait.
+- **Decision** — State-direct (option 3). William chose it explicitly. Short-form Certificate of Good Standing, $50, via https://icis.corp.delaware.gov/ecorp2 -> "Document Filing and Certificate Request". Delivered a complete fill-in sheet and updated `.agent/canada-and-entity.md`.
+- **Reasoning** — The certificate is orderable directly from the state by credit card; the registered agent was an unnecessary middleman that had already cost two weeks. Short form is all Amazon KYC needs (entity name + current status). The exact-string entity name ("Holdings" included) and file number were already validated from the 2019 cert on file.
+- **Industry source / best practice** — Delaware Division of Corporations official ordering pages (corp.delaware.gov/onlinestatus, corp.delaware.gov/directweb): short form $50 / long form $175; franchise tax must be current or the certificate will not issue. Cross-checked against Harvard Business Services and Bizee ordering guides.
+- **Trade-offs accepted** — State-direct mails the certificate and standard processing can be slow, so recommended paying for expedite; declined the faster commercial service to avoid the extra fee. Cannot complete it for William (his eCorp login + credit card are required, and payment/government filing is a user-gated action).
+- **Status / revisit** — Awaiting William to place the order. Revisit once the certificate arrives -> feed into the Amazon Canada verification upload.
+
+---
+
+### 2026-07-13 14:10 PT — Ad-engine audit: kill-switch healthy, harvest dormant; propose lower add-bar + bid cap (not yet applied)
+
+- **Context** — William asked to check whether the ad strategy is correctly turning keywords off and adding them. Audited `ad_engine_log` via scripts/ad-log.mjs.
+- **Options considered** — (1) Leave as-is. (2) Lower the harvest spend bar so more winning search terms get added. (3) Add a per-run bid-change cap to stop the oscillation. (4) Both 2+3.
+- **Decision** — Recommend both (option 4) but apply NOTHING without William's go (RBB gate). Documented the audit; no code changed.
+- **Reasoning** — Data: kill-switch fired correctly (killed a $4.20/0-order term on 07-08), but only 4 keyword adds all-time and none in ~2 weeks because HARVEST_MIN_SPEND=$4 is too high for the account's low spend. Separately, `phone tethered` oscillated $0.11->$0.99->$0.55 across two weeks — the unstable bid loop previously diagnosed as the drop root-cause is still active. Lowering the add-bar to ~$2 and capping bid moves at +/-15%/run addresses both without raising the ACOS target.
+- **Industry source / best practice** — Amazon Ads search-term harvesting convention (promote converting terms as exact+phrase); standard bid-throttling / rate-limiting to prevent oscillation on noisy daily conversion data. Consistent with the project's own ad-engine-harvest-rule.md.
+- **Trade-offs accepted** — Lowering the spend bar admits terms on thinner evidence (more noise); the bid cap slows response to genuine ACOS spikes. Both reversible one-line changes. Held pending approval rather than shipping to prod.
+- **Status / revisit** — Awaiting William yes/no. If yes: prep -> test on localhost -> deploy, then watch the next few cron runs for add count + reduced bid swings.
