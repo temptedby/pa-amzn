@@ -1,6 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
+import { decide, type Perf } from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
 // so every action is SAFE TO REPEAT:
@@ -16,10 +17,11 @@ import { db } from "@/lib/db/client";
 const BASE = "https://advertising-api.amazon.com";
 const KW_CT = "application/vnd.spKeyword.v3+json";
 const RPT_CT = "application/vnd.createasyncreportrequest.v3+json";
-const TARGET_ACOS = 0.50;     // RECOVERY setting (William 2026-06-22, "up to 50%"): buy back visibility/rank during the ~90% drop. Break-even ACOS = 52% (VALIDATED via SP-API getMyFeesEstimate: $9.49 - COGS $0.62 - referral $1.42 - FBA $2.52 = $4.93 contribution; 4.93/9.49). So 50% is profitable (~$0.19/unit after ads). Tighten toward 0.30 once rank recovers.
-const KILL_SPEND = 4;         // $ with 0 orders -> pause
+// Kill + bid rules now live in ad-rules.ts (William 2026-07-24): $4-MTD kill + ±10% bid at the 50%
+// ACOS pivot. Break-even ~52% (VALIDATED via SP-API getMyFeesEstimate: $9.49 - COGS $0.62 - referral
+// $1.42 - FBA $2.52 = $4.93 contribution; 4.93/9.49), so the 50% pivot keeps every kept keyword profitable.
 const FLOOR = 0.10, CAP = 2.50, MAX_STEP = 0.25; // ±25% per run
-const NEW_KW_BID = 0.50, WINDOW_DAYS = 30;
+const NEW_KW_BID = 0.50;
 // Harvest rule (ad-engine-harvest-rule.md, William 2026-06-26): a search term qualifies at
 // >= $4 spend AND ACOS <= 50% (== ROAS >= 2x == sales >= 2*cost), measured over the trailing window.
 export const HARVEST_MIN_SPEND = 4;          // $ spend bar before a term is worth harvesting
@@ -166,27 +168,25 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   let next: string | undefined;
   do {
     const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, ...(next ? { nextToken: next } : {}) }, KW_CT);
-    (r.json?.keywords ?? []).forEach((k: any) => kws.push(k));
+    (r.json?.keywords ?? []).forEach((k: Kw) => kws.push(k));
     next = r.json?.nextToken;
   } while (next);
   const byId = new Map(kws.map((k) => [String(k.keywordId), k]));
   // per-ad-group keyword index so harvest only skips a term already present IN THAT ad group (H1).
   const haveByAg = new Set(kws.map((k) => `${k.adGroupId}|${k.matchType}|${(k.keywordText || "").toLowerCase().trim()}`));
 
-  const ed = iso(new Date()), sd = iso(new Date(Date.now() - WINDOW_DAYS * 864e5));
+  const now = new Date();
+  const ed = iso(now), sd = iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))); // month-to-date
 
   // (1) keyword performance -> kill + bid
   const kt = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"], sd, ed);
-  const killOps: any[] = [], bidOps: any[] = [];
+  const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
-    const cost = r.cost ?? 0, ord = r.purchases14d ?? 0, sales = r.sales14d ?? 0;
-    if (cost >= KILL_SPEND && ord === 0) { killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" }); out.killed.push({ text: k.keywordText, spend: +cost.toFixed(2) }); continue; }
-    if (ord > 0 && sales > 0) {
-      const acos = cost / sales;
-      const target = clampBidStep(k.bid || NEW_KW_BID, (k.bid || NEW_KW_BID) * (TARGET_ACOS / acos)); // converge to target ACOS, capped ±25%/run
-      if (Math.abs(target - (k.bid || 0)) >= 0.02) { bidOps.push({ keywordId: String(k.keywordId), bid: target }); out.bids.push({ text: k.keywordText, from: k.bid, to: target, acos: +(acos * 100).toFixed(0) / 100 }); }
-    }
+    const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
+    const v = decide(k.bid || NEW_KW_BID, perf); // $4-MTD kill + ±10% bid at the 50% pivot (ad-rules.ts)
+    if (v.action === "kill") { killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" }); out.killed.push({ text: k.keywordText, spend: +perf.spend.toFixed(2) }); }
+    else if (v.action === "bid") { const acos = perf.sales > 0 ? perf.spend / perf.sales : 0; bidOps.push({ keywordId: String(k.keywordId), bid: v.bid }); out.bids.push({ text: k.keywordText, from: k.bid, to: v.bid, acos: +(acos * 100).toFixed(0) / 100 }); }
   }
 
   // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
@@ -250,7 +250,7 @@ export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): P
   let next: string | undefined;
   do {
     const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, stateFilter: { include: ["PAUSED"] }, ...(next ? { nextToken: next } : {}) }, KW_CT);
-    (r.json?.keywords ?? []).forEach((k: any) => { if (k.state === "PAUSED") paused.push(k); });
+    (r.json?.keywords ?? []).forEach((k: Kw) => { if (k.state === "PAUSED") paused.push(k); });
     next = r.json?.nextToken;
   } while (next);
   if (!paused.length) { out.ok = true; out.durationMs = Date.now() - start; return out; }
@@ -309,9 +309,9 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     `Ad engine ${r.dryRun ? "(preview)" : "ran"} — ${r.killed.length} paused, ${r.bids.length} bid changes, ${r.added.length} keywords added. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
     "",
   ];
-  if (r.killed.length) { lines.push("PAUSED (>=$4 spend, 0 orders, 30d):"); r.killed.forEach((k) => lines.push(`  $${k.spend} wasted  ${k.text}`)); lines.push(""); }
+  if (r.killed.length) { lines.push("PAUSED (>=$4 MTD spend, no sale or ACOS>=50%):"); r.killed.forEach((k) => lines.push(`  $${k.spend} wasted  ${k.text}`)); lines.push(""); }
   if (r.added.length) { lines.push("HARVESTED keywords (>=$4 spend, ACOS<=50%, into source ad group):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
-  if (r.bids.length) { lines.push("BID changes (toward 30% ACOS target):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
+  if (r.bids.length) { lines.push("BID changes (±10% at the 50% ACOS pivot):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");
 }
