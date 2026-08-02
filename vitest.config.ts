@@ -8,7 +8,7 @@ export default defineConfig({
     // The unit suite is src/ only. scripts/ holds one-off LIVE harnesses that make real Amazon API
     // calls (scripts/live-reintro-preview.spec.mts) — they must never run in the default suite or
     // in CI, where they would hang on Amazon's report queue. Run those explicitly:
-    //   npx vitest run --include 'scripts/live-reintro-preview.spec.mts' --testTimeout=3600000
+    //   npx vitest run --config vitest.live.config.ts --testTimeout=600000
     include: ["src/**/*.{test,spec}.{ts,tsx}"],
   },
   resolve: {

@@ -5,7 +5,7 @@ import { runReintroduction, summarizeReintroduction } from "../src/lib/amazon/ad
 // One-off LIVE PREVIEW harness. Deliberately lives in scripts/ with a .spec.mts extension so the
 // default vitest glob (src/**/*.test.ts) never picks it up — it makes real Amazon API calls and
 // would hang CI. Read-only: dryRun true means nothing is applied.
-//   REINTRO_OUT=/tmp/x.txt npx vitest run scripts/live-reintro-preview.spec.mts --testTimeout=3600000
+//   REINTRO_OUT=/tmp/x.txt npx vitest run --config vitest.live.config.ts --testTimeout=600000
 for (const l of readFileSync(new URL("../.env.local", import.meta.url), "utf8").split("\n")) {
   const m = l.match(/^([A-Z0-9_]+)=(.*)$/);
   if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
