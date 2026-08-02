@@ -15,6 +15,10 @@
     {
       "path": "/api/cron/ad-engine-reactivate",
       "schedule": "0 15 1 * *"
+    },
+    {
+      "path": "/api/cron/ad-engine-reintroduce",
+      "schedule": "30 15 * * *"
     }
   ]
 }

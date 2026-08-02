@@ -1,7 +1,11 @@
 import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
-import { decide, isValidKeywordText, shortenToValidKeyword, type Perf } from "./ad-rules";
+import {
+  decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions,
+  BID_FLOOR, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, REINTRO_MONTHLY_SPEND_CAP, KILL_SPEND,
+  type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
+} from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
 // so every action is SAFE TO REPEAT:
@@ -34,6 +38,10 @@ const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=
 // any PAUSED keyword whose trailing 65 days still holds cost >= $4 AND ACOS <= 50% (ROAS >= 2x) -
 // same winner bar as harvest, so a keyword the kill-switch paused but that has since recovered comes back.
 export const REACT_WINDOW_DAYS = 65;
+// Reintroduction history window. Amazon's Ads API retains SP report history for roughly 60-95 days;
+// true lifetime figures exist only in the Campaign Manager console. 90d is the longest we can
+// reliably stitch, so "lifetime" in Rule 4 means "the longest window the API will give us".
+export const REINTRO_HISTORY_DAYS = 90;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
@@ -252,6 +260,147 @@ async function persistLog(r: AdEngineResult, applied: { kill: boolean; bid: bool
   for (const k of r.killed) await ins("kill", k.text, null, null, null, null, k.spend, applied.kill);
   for (const a of r.added) await ins("add", a.text, a.matchType, null, null, null, null, applied.add);
   for (const b of r.bids) await ins("rebid", b.text, null, b.from, b.to, b.acos, null, applied.bid);
+}
+
+// ---------------------------------------------------------------------------
+// Rule 4 — REINTRODUCTION of keywords stuck at the $0.10 floor
+// ---------------------------------------------------------------------------
+// 1,840 of 2,275 enabled keywords bid exactly $0.10 while July CPC was $0.59, so they win nothing
+// and can never generate the ACOS signal any bid rule needs. This job walks them back on, at most
+// REINTRO_PER_DAY a day, and only when they never spent or spent at ACOS < 50%.
+//
+// Every promoted keyword is recorded in `ad_reintro_cohort` so the three throttles can be measured
+// from reality on each run rather than trusted from a cache:
+//   perDay            — promoted today
+//   maxInTrial        — promoted, still under the $4 kill bar, still no conversion
+//   monthlySpendCap   — month-to-date spend of the whole cohort
+// A promoted keyword then lives under Rule 1 like everything else: $4 of rope, then off.
+
+export interface ReintroRunResult {
+  ok: boolean; dryRun: boolean;
+  promoted: ReintroPick[];
+  eligible: number;
+  blockedBy: string[];
+  state: ReintroState;
+  errors: string[]; durationMs: number; reason?: string;
+}
+
+async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
+  await db().execute(`CREATE TABLE IF NOT EXISTS ad_reintro_cohort (
+    keyword_id TEXT PRIMARY KEY, keyword_text TEXT, match_type TEXT,
+    promoted_at TEXT NOT NULL, from_bid REAL, to_bid REAL, reason TEXT)`);
+  const r = await db().execute("SELECT keyword_id, promoted_at FROM ad_reintro_cohort");
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const ids = new Set<string>();
+  let today = 0;
+  for (const row of r.rows as unknown as { keyword_id: string; promoted_at: string }[]) {
+    ids.add(String(row.keyword_id));
+    if (String(row.promoted_at).slice(0, 10) === todayIso) today++;
+  }
+  return { ids, today };
+}
+
+/** Bring floored keywords back, throttled. dryRun previews the exact batch without applying. */
+export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promise<ReintroRunResult> {
+  const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
+  const start = Date.now();
+  const out: ReintroRunResult = {
+    ok: false, dryRun, promoted: [], eligible: 0, blockedBy: [],
+    state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, errors: [], durationMs: 0,
+  };
+  const cfg = adsConfigFromEnv();
+  if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
+  const token = await getAdsAccessToken(cfg);
+
+  try {
+    // (1) every ENABLED keyword sitting AT the floor
+    const kws: Kw[] = [];
+    let next: string | undefined;
+    do {
+      const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, stateFilter: { include: ["ENABLED"] }, ...(next ? { nextToken: next } : {}) }, KW_CT);
+      (r.json?.keywords ?? []).forEach((k: Kw) => { if (k.state === "ENABLED" && (k.bid ?? 0) <= BID_FLOOR) kws.push(k); });
+      next = r.json?.nextToken;
+    } while (next);
+
+    // (2) longest history the API allows, stitched from <=31d chunks
+    const hist = new Map<string, { cost: number; sales: number; orders: number }>();
+    for (const [csd, ced] of harvestWindows(REINTRO_HISTORY_DAYS, Date.now())) {
+      const chunk = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+      for (const r of chunk) {
+        const id = String(r.keywordId ?? "");
+        if (!id) continue;
+        const o = hist.get(id) ?? { cost: 0, sales: 0, orders: 0 };
+        o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0; o.orders += r.purchases14d ?? 0;
+        hist.set(id, o);
+      }
+    }
+
+    // (3) month-to-date spend, used for the cohort cap and the in-trial count
+    const now = new Date();
+    const mtd = new Map<string, { cost: number; orders: number }>();
+    for (const r of await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"],
+      iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))), iso(now))) {
+      const id = String(r.keywordId ?? "");
+      if (id) mtd.set(id, { cost: r.cost ?? 0, orders: r.purchases14d ?? 0 });
+    }
+
+    // (4) measure the throttle state from reality
+    const { ids: cohort, today } = await reintroCohort();
+    let cohortMonthSpend = 0, inTrial = 0;
+    for (const id of cohort) {
+      const m = mtd.get(id);
+      if (!m) { inTrial++; continue; }                       // promoted, no spend yet -> still on trial
+      cohortMonthSpend += m.cost;
+      if (m.cost < KILL_SPEND && m.orders === 0) inTrial++;  // rope not yet used up
+    }
+    out.state = { introducedToday: today, inTrial, cohortMonthSpend: +cohortMonthSpend.toFixed(2) };
+
+    // (5) decide
+    const candidates: ReintroCandidate[] = kws
+      .filter((k) => !cohort.has(String(k.keywordId)))       // never re-promote the same keyword
+      .map((k) => {
+        const h = hist.get(String(k.keywordId));
+        return {
+          keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
+          bid: k.bid ?? 0, histSpend: h?.cost ?? 0, histSales: h?.sales ?? 0, histOrders: h?.orders ?? 0,
+        };
+      });
+    const plan = selectReintroductions(candidates, out.state);
+    out.promoted = plan.promote;
+    out.eligible = plan.eligible;
+    out.blockedBy = plan.blockedBy;
+
+    // (6) apply
+    if (!dryRun && plan.promote.length) {
+      const ops = plan.promote.map((p) => ({ keywordId: p.keywordId, bid: p.toBid }));
+      const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: ops }, KW_CT);
+      if (!r.ok) { out.errors.push(`reintro: ${r.status}`); out.promoted = []; }
+      else {
+        const at = new Date().toISOString();
+        for (const p of plan.promote) {
+          await db().execute({
+            sql: "INSERT OR IGNORE INTO ad_reintro_cohort (keyword_id,keyword_text,match_type,promoted_at,from_bid,to_bid,reason) VALUES (?,?,?,?,?,?,?)",
+            args: [p.keywordId, p.keywordText, p.matchType, at, p.fromBid, p.toBid, p.reason],
+          });
+        }
+      }
+    }
+    out.ok = true;
+  } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+  out.durationMs = Date.now() - start;
+  return out;
+}
+
+export function summarizeReintroduction(r: ReintroRunResult): string {
+  const lines = [
+    `Reintroduction ${r.dryRun ? "(preview)" : "ran"} — ${r.promoted.length} promoted of ${r.eligible} eligible. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
+    `Throttles: ${r.state.introducedToday}/${REINTRO_PER_DAY} today, ${r.state.inTrial}/${REINTRO_MAX_IN_TRIAL} on trial, $${r.state.cohortMonthSpend}/$${REINTRO_MONTHLY_SPEND_CAP} cohort spend MTD.`,
+    r.blockedBy.length ? `Stopped by: ${r.blockedBy.join(", ")}.` : "",
+    "",
+  ];
+  r.promoted.forEach((p) => lines.push(`  ${p.reason.toUpperCase().padEnd(8)} $${p.fromBid} -> $${p.toBid}  [${p.matchType}] ${p.keywordText}`));
+  if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
+  return lines.join("\n");
 }
 
 // Monthly reactivation job (ad-engine-harvest-rule.md step 4). Separate cadence from runAdEngine
