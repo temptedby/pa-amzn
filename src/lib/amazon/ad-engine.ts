@@ -3,7 +3,7 @@ import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
 import {
   decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions,
-  BID_FLOOR, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, REINTRO_MONTHLY_SPEND_CAP, KILL_SPEND,
+  BID_FLOOR, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, KILL_SPEND,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
 } from "./ad-rules";
 
@@ -271,10 +271,13 @@ async function persistLog(r: AdEngineResult, applied: { kill: boolean; bid: bool
 //
 // Every promoted keyword is recorded in `ad_reintro_cohort` so the three throttles can be measured
 // from reality on each run rather than trusted from a cache:
-//   perDay            — promoted today
-//   maxInTrial        — promoted, still under the $4 kill bar, still no conversion
-//   monthlySpendCap   — month-to-date spend of the whole cohort
-// A promoted keyword then lives under Rule 1 like everything else: $4 of rope, then off.
+//   perDay      — promoted today
+//   maxInTrial  — promoted, still under the $4 kill bar, still no conversion (UNPROVEN exposure)
+// There is no total spend cap: a keyword that is making money spends freely (William 2026-08-02).
+// Cohort month-to-date spend is still measured and reported, just not used as a gate.
+// A promoted keyword then lives under Rule 1 like everything else: $4 of rope, then off. It leaves
+// the trial pool by converting (proven) or by being killed at $4 (dead), so winners and losers both
+// free their slot and the only bounded quantity is money at risk on UNPROVEN keywords right now.
 
 export interface ReintroRunResult {
   ok: boolean; dryRun: boolean;
@@ -394,7 +397,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
 export function summarizeReintroduction(r: ReintroRunResult): string {
   const lines = [
     `Reintroduction ${r.dryRun ? "(preview)" : "ran"} — ${r.promoted.length} promoted of ${r.eligible} eligible. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
-    `Throttles: ${r.state.introducedToday}/${REINTRO_PER_DAY} today, ${r.state.inTrial}/${REINTRO_MAX_IN_TRIAL} on trial, $${r.state.cohortMonthSpend}/$${REINTRO_MONTHLY_SPEND_CAP} cohort spend MTD.`,
+    `Throttles: ${r.state.introducedToday}/${REINTRO_PER_DAY} today, ${r.state.inTrial}/${REINTRO_MAX_IN_TRIAL} unproven on trial (max $${(REINTRO_MAX_IN_TRIAL * KILL_SPEND).toFixed(0)} at risk). Cohort spend MTD $${r.state.cohortMonthSpend} (reported, not capped).`,
     r.blockedBy.length ? `Stopped by: ${r.blockedBy.join(", ")}.` : "",
     "",
   ];

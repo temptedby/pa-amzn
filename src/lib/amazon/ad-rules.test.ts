@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   shouldKill, nextBid, decide, acosOf, ACOS_PIVOT,
   isValidKeywordText, shortenToValidKeyword, KEYWORD_MAX_CHARS, KEYWORD_MAX_WORDS,
-  selectReintroductions, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, REINTRO_MONTHLY_SPEND_CAP,
+  selectReintroductions, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, KILL_SPEND,
   type ReintroCandidate, type ReintroState,
 } from "./ad-rules";
 
@@ -151,11 +151,11 @@ describe("selectReintroductions", () => {
     expect(plan.blockedBy).toContain("maxInTrial");
   });
 
-  it("stops dead at the monthly cohort spend cap", () => {
+  it("does NOT cap on total spend — a profitable cohort keeps expanding (William 2026-08-02)", () => {
     const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
-    const plan = selectReintroductions(cands, { ...fresh, cohortMonthSpend: REINTRO_MONTHLY_SPEND_CAP });
-    expect(plan.promote).toHaveLength(0);
-    expect(plan.blockedBy).toContain("monthlySpendCap");
+    const plan = selectReintroductions(cands, { ...fresh, cohortMonthSpend: 10_000 });
+    expect(plan.promote).toHaveLength(REINTRO_PER_DAY);   // spend is reported, never a gate
+    expect(plan.blockedBy).toEqual(["perDay"]);
   });
 
   it("excludes a keyword that spent at ACOS >= 50%", () => {
@@ -206,6 +206,14 @@ describe("selectReintroductions", () => {
       expect(trial).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL);
     }
     expect(promotedTotal).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL);
-    expect(trial * 4).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL * 4); // <= $160 open exposure
+    expect(trial * KILL_SPEND).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL * KILL_SPEND); // <= $160 at risk
+  });
+
+  it("a converting keyword frees its trial slot, so winners make room for more", () => {
+    // 40 on trial -> blocked. Once 10 of them convert they leave the pool and the next run flows.
+    const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
+    expect(selectReintroductions(cands, { ...fresh, inTrial: REINTRO_MAX_IN_TRIAL }).promote).toHaveLength(0);
+    const after = selectReintroductions(cands, { ...fresh, inTrial: REINTRO_MAX_IN_TRIAL - 10 });
+    expect(after.promote).toHaveLength(10);
   });
 });

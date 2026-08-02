@@ -37,12 +37,24 @@ export const BID_CAP = 2.50;
 export const KEYWORD_MAX_CHARS = 80;
 export const KEYWORD_MAX_WORDS = 10;
 
-// Reintroduction throttles. All three must pass before a keyword is switched on, so the worst case
-// is bounded: REINTRO_MAX_IN_TRIAL * KILL_SPEND = $160 of open exposure, and the cohort can never
-// spend more than REINTRO_MONTHLY_SPEND_CAP in a month.
+// Reintroduction throttles (William 2026-08-02). There is deliberately NO cap on total spend:
+// a keyword that is making money should be free to spend. What IS capped is UNPROVEN exposure —
+// keywords that have not yet earned a conversion and are burning their $4 of rope.
+//
+// The pool self-regulates. A keyword leaves the trial pool the moment it either converts (it is
+// now proven, and spends without limit under the kill rule) or hits $4 without converting (it is
+// killed). Winners and losers both free their slot, so the only thing bounded is how much money
+// can be at risk on unproven keywords at any one instant:
+//   REINTRO_MAX_IN_TRIAL * KILL_SPEND  =  worst-case open, unproven exposure.
+// That is the answer to "I don't want 1000 keywords spending $4 and putting us deep into negative"
+// without also throttling the profitable spend we actually want.
+//
+// REINTRO_PER_DAY = 10 is William's number (2026-08-02).
+// REINTRO_MAX_IN_TRIAL is NOT yet his — the value below is PROVISIONAL, chosen only so the code
+// compiles and previews. Reintroduction stays gated off until he sets it, and no worst-case dollar
+// figure should be quoted until then (CBC: confirm before claim).
 export const REINTRO_PER_DAY = 10;
-export const REINTRO_MAX_IN_TRIAL = 40;
-export const REINTRO_MONTHLY_SPEND_CAP = 150;
+export const REINTRO_MAX_IN_TRIAL = 40;   // PROVISIONAL — awaiting William
 export const REINTRO_MAX_ACOS = 0.50;   // William: eligible if never spent, or spent at ACOS < 50%
 export const REINTRO_START_BID = 0.50;  // $0.10 wins nothing; July SP CPC was $0.59
 
@@ -159,14 +171,13 @@ export interface ReintroState {
   introducedToday: number;
   /** Keywords currently on trial: reintroduced, still under $4 spend, not yet converted. */
   inTrial: number;
-  /** Month-to-date spend by the whole reintroduced cohort, $. */
+  /** Month-to-date spend by the whole reintroduced cohort, $. Reported for visibility; NOT a gate. */
   cohortMonthSpend: number;
 }
 
 export interface ReintroOpts {
   perDay?: number;
   maxInTrial?: number;
-  monthlySpendCap?: number;
   maxAcos?: number;
   startBid?: number;
   floor?: number;
@@ -176,8 +187,8 @@ export interface ReintroPick { keywordId: string; keywordText: string; matchType
 
 export interface ReintroPlan {
   promote: ReintroPick[];
-  /** Why the batch stopped, when it stopped early. Empty when the per-day quota was the only limit. */
-  blockedBy: ("perDay" | "maxInTrial" | "monthlySpendCap")[];
+  /** Why the batch stopped, when it stopped early. */
+  blockedBy: ("perDay" | "maxInTrial")[];
   eligible: number;
 }
 
@@ -186,9 +197,10 @@ export interface ReintroPlan {
  *
  * Eligibility (William 2026-08-02): the keyword never spent, OR it spent at ACOS < 50%.
  * Ordering: proven performers first (converted, lowest ACOS first), then never-spent ones, so the
- * capped budget is spent on the strongest evidence available.
- * Throttles: per-day count, concurrent-in-trial count, and the cohort's month-to-date spend. ALL
- * must pass — the batch stops at whichever binds first, and says which one it was.
+ * limited number of trial slots goes to the strongest evidence available.
+ * Throttles: per-day count and concurrent-UNPROVEN-in-trial count. There is no total spend cap —
+ * a keyword that is making money spends freely. The batch stops at whichever throttle binds first
+ * and says which one it was.
  */
 export function selectReintroductions(
   candidates: ReintroCandidate[],
@@ -197,15 +209,13 @@ export function selectReintroductions(
 ): ReintroPlan {
   const perDay = opts.perDay ?? REINTRO_PER_DAY;
   const maxInTrial = opts.maxInTrial ?? REINTRO_MAX_IN_TRIAL;
-  const monthlyCap = opts.monthlySpendCap ?? REINTRO_MONTHLY_SPEND_CAP;
   const maxAcos = opts.maxAcos ?? REINTRO_MAX_ACOS;
   const startBid = opts.startBid ?? REINTRO_START_BID;
   const floor = opts.floor ?? BID_FLOOR;
 
-  const blocked = new Set<"perDay" | "maxInTrial" | "monthlySpendCap">();
+  const blocked = new Set<"perDay" | "maxInTrial">();
 
   // Hard stops that apply before we look at any candidate.
-  if (state.cohortMonthSpend >= monthlyCap) blocked.add("monthlySpendCap");
   if (state.inTrial >= maxInTrial) blocked.add("maxInTrial");
   if (state.introducedToday >= perDay) blocked.add("perDay");
 
@@ -234,7 +244,6 @@ export function selectReintroductions(
   for (const c of eligible) {
     if (today >= perDay) { blocked.add("perDay"); break; }
     if (trial >= maxInTrial) { blocked.add("maxInTrial"); break; }
-    if (state.cohortMonthSpend >= monthlyCap) { blocked.add("monthlySpendCap"); break; }
     promote.push({
       keywordId: c.keywordId,
       keywordText: c.keywordText,

@@ -95,20 +95,39 @@ They then live under Rule 1 like everything else: $4 of rope, then off.
 
 ### The rate limits, and why they exist
 
-William's constraint, verbatim: "I don't want 1000 keywords spending $4 and putting us deep
-into negative." 1,840 eligible keywords at $4 each is $7,360 of theoretical exposure against
-a store doing roughly $414/month of contribution. So reintroduction is throttled three ways
-at once, and all three must pass:
+William's intent, verbatim: "I just want to roll keywords out slowly that haven't been spent to
+make sure we don't fail at them all at once," and "I don't want 1000 keywords spending $4 and
+putting us deep into negative."
 
-| Guard | Default | What it caps |
-|---|---|---|
-| `REINTRO_PER_DAY` | 10 | new keywords switched on per day |
-| `REINTRO_MAX_IN_TRIAL` | 40 | keywords simultaneously on trial (spent < $4, no conversion yet), so open exposure never exceeds 40 x $4 = $160 |
-| `REINTRO_MONTHLY_SPEND_CAP` | $150 | total month-to-date spend by the reintroduced cohort; at the cap, no new introductions until next month |
+So the thing being throttled is **unproven** exposure, not spend. There is deliberately **no cap on
+total spend** — William, 2026-08-02: "I don't need a $150 spend cap, spend as long as words are
+making money." A keyword that is converting profitably should be free to spend; it is already
+governed by Rule 1, which turns it off the moment it stops paying.
 
-Ordering: keywords with proven history (converted, ACOS under 50%) go first, best ACOS first,
-then never-spent keywords. So the strongest evidence is tested first and the cap is spent on
-the most likely winners.
+Two throttles, both of which must pass:
+
+| Guard | Value | Status | What it caps |
+|---|---|---|---|
+| `REINTRO_PER_DAY` | 10 | **confirmed by William 2026-08-02** | new keywords switched on per day |
+| `REINTRO_MAX_IN_TRIAL` | not set | **AWAITING WILLIAM** | keywords simultaneously **unproven** (promoted, still under $4, no conversion yet) |
+
+The pool self-regulates, which is what makes this safe without a spend cap. A keyword leaves the
+trial pool in one of two ways:
+
+- **it converts** — now proven, it leaves the pool and spends freely under Rule 1, and its slot
+  opens for the next candidate; or
+- **it hits $4 with no conversion** — Rule 1 kills it, and its slot opens too.
+
+So winners and losers both free capacity, and the only bounded quantity is money at risk on
+unproven keywords at any one instant, which is `REINTRO_MAX_IN_TRIAL x KILL_SPEND`. Once the cap is
+set, that product is the worst case and it is the number to sanity-check against the store's
+monthly contribution. **The cap is not set yet** — the code carries a provisional value marked as
+such, and reintroduction stays in preview until William picks it. Do not quote a worst-case dollar
+figure before then.
+
+Ordering: keywords with proven history (converted, ACOS under 50%) go first, best ACOS first, then
+never-spent keywords. The scarce resource is trial slots, so they go to the strongest evidence
+available.
 
 ### The history window is not "lifetime"
 
