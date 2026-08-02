@@ -1,6 +1,6 @@
-import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
+import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
@@ -53,6 +53,7 @@ export interface ReactivationCandidate { keywordId: string; keywordText: string;
 export interface ReactivationResult {
   ok: boolean; dryRun: boolean;
   reactivated: { text: string; matchType: string; cost: number; acos: number }[];
+  notes: string[];
   errors: string[]; durationMs: number; reason?: string;
 }
 export interface AdEngineResult {
@@ -60,6 +61,8 @@ export interface AdEngineResult {
   killed: { text: string; spend: number }[];
   bids: { text: string; from: number; to: number; acos: number }[];
   added: { text: string; matchType: string }[];
+  /** Report-readiness lines. A pass with data still queued is normal, so it is a note, not an error. */
+  notes: string[];
   errors: string[]; durationMs: number; reason?: string;
 }
 
@@ -78,22 +81,21 @@ async function ads(cfg: AdsConfig, token: string, path: string, method: string, 
   return { ok: res.ok, status: res.status, json: text ? JSON.parse(text) : null };
 }
 
-async function report(cfg: AdsConfig, token: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string): Promise<Row[]> {
-  const cfgBody = { name: "eng", startDate: sd, endDate: ed, configuration: { adProduct: "SPONSORED_PRODUCTS", groupBy, columns, reportTypeId, timeUnit: "SUMMARY", format: "GZIP_JSON" } };
-  const cr = await ads(cfg, token, "/reporting/reports", "POST", cfgBody, RPT_CT);
-  let rid: string | undefined = cr.json?.reportId;
-  if (!rid && cr.json?.code === "425") rid = String(cr.json.detail || "").match(/([0-9a-f-]{36})/)?.[1];
-  if (!rid) throw new Error(`report create failed: ${JSON.stringify(cr.json).slice(0, 200)}`);
-  let url: string | undefined;
-  for (let i = 0; i < 28; i++) {           // ~28 * 5s = 140s budget per report
-    await sleep(5000);
-    const s = await ads(cfg, token, `/reporting/reports/${rid}`, "GET", null, RPT_CT);
-    if (s.json?.status === "COMPLETED") { url = s.json.url; break; }
-    if (s.json?.status === "FAILURE") throw new Error("report FAILURE");
-  }
-  if (!url) throw new Error("report timed out");
-  const buf = Buffer.from(await (await fetch(url)).arrayBuffer());
-  return JSON.parse(gunzipSync(buf).toString());
+
+// Deferred report accessor. Wraps ads-reports.getReport so an engine pass NEVER blocks on Amazon's
+// queue (measured ~9 min on this account against the old 140s inline budget). Returns [] plus a
+// human-readable note when the data is not ready yet — that is a normal outcome, not an error.
+const SP_COLS = ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"];
+async function deferredRows(
+  cfg: AdsConfig, token: string, notes: string[],
+  purpose: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string,
+): Promise<{ rows: Row[]; ready: boolean }> {
+  const spec: ReportSpec = { purpose, adProduct: "SPONSORED_PRODUCTS", reportTypeId, groupBy, columns, startDate: sd, endDate: ed };
+  const r = await getReport<Row>(cfg, token, spec);
+  if (r.state === "ready") { notes.push(`${purpose}: ready (${r.rows.length} rows, ${r.ageHours}h old)`); return { rows: r.rows, ready: true }; }
+  if (r.state === "failed") { notes.push(`${purpose}: FAILED — ${r.reason}`); return { rows: [], ready: false }; }
+  notes.push(`${purpose}: ${r.state}, collect on a later run`);
+  return { rows: [], ready: false };
 }
 
 // Clamp a raw target bid to the ±MAX_STEP/run band and global [FLOOR, CAP], rounded to whole cents.
@@ -173,7 +175,7 @@ export function reactivationCandidates(
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
-  const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], added: [], errors: [], durationMs: 0 };
+  const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], added: [], notes: [], errors: [], durationMs: 0 };
   const cfg = adsConfigFromEnv();
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
@@ -194,7 +196,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   const ed = iso(now), sd = iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))); // month-to-date
 
   // (1) keyword performance -> kill + bid
-  const kt = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"], sd, ed);
+  const kt = (await deferredRows(cfg, token, out.notes, "engine-mtd", "spTargeting", ["targeting"], SP_COLS, sd, ed)).rows;
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
@@ -209,9 +211,10 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   let addOps: HarvestAdd[] = [];
   try {
     const stRows: SearchTermRow[] = [];
-    for (const [csd, ced] of harvestWindows(HARVEST_WINDOW_DAYS, Date.now())) {
-      const chunk = await report(cfg, token, "spSearchTerm", ["searchTerm"],
-        ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+    const hw = harvestWindows(HARVEST_WINDOW_DAYS, Date.now());
+    for (let i = 0; i < hw.length; i++) {
+      const { rows: chunk } = await deferredRows(cfg, token, out.notes, `engine-harvest-${i}`, "spSearchTerm", ["searchTerm"],
+        ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"], hw[i][0], hw[i][1]);
       for (const r of chunk) stRows.push(r as SearchTermRow);
     }
     addOps = harvestCandidates(stRows, haveByAg, NEW_KW_BID);
@@ -285,6 +288,7 @@ export interface ReintroRunResult {
   eligible: number;
   blockedBy: string[];
   state: ReintroState;
+  notes: string[];
   errors: string[]; durationMs: number; reason?: string;
 }
 
@@ -309,7 +313,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
   const start = Date.now();
   const out: ReintroRunResult = {
     ok: false, dryRun, promoted: [], eligible: 0, blockedBy: [],
-    state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, errors: [], durationMs: 0,
+    state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, notes: [], errors: [], durationMs: 0,
   };
   const cfg = adsConfigFromEnv();
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
@@ -327,8 +331,15 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
 
     // (2) longest history the API allows, stitched from <=31d chunks
     const hist = new Map<string, { cost: number; sales: number; orders: number }>();
-    for (const [csd, ced] of harvestWindows(REINTRO_HISTORY_DAYS, Date.now())) {
-      const chunk = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+    // SAFETY: a missing history window would make a keyword that spent badly look "never spent"
+    // and therefore eligible. So every window must be READY before anything is promoted — a
+    // partially-collected history is worse than none.
+    let historyComplete = true;
+    const rw = harvestWindows(REINTRO_HISTORY_DAYS, Date.now());
+    for (let i = 0; i < rw.length; i++) {
+      const [csd, ced] = rw[i];
+      const { rows: chunk, ready } = await deferredRows(cfg, token, out.notes, `reintro-history-${i}`, "spTargeting", ["targeting"], SP_COLS, csd, ced);
+      if (!ready) historyComplete = false;
       for (const r of chunk) {
         const id = String(r.keywordId ?? "");
         if (!id) continue;
@@ -341,10 +352,18 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
     // (3) month-to-date spend, used for the cohort cap and the in-trial count
     const now = new Date();
     const mtd = new Map<string, { cost: number; orders: number }>();
-    for (const r of await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"],
-      iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))), iso(now))) {
+    const mtdOut = await deferredRows(cfg, token, out.notes, "reintro-mtd", "spTargeting", ["targeting"], SP_COLS,
+      iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))), iso(now));
+    for (const r of mtdOut.rows) {
       const id = String(r.keywordId ?? "");
       if (id) mtd.set(id, { cost: r.cost ?? 0, orders: r.purchases14d ?? 0 });
+    }
+
+    if (!historyComplete || !mtdOut.ready) {
+      out.reason = "reports not collected yet — promoting nothing this run (incomplete history would misjudge eligibility)";
+      out.notes.push(out.reason);
+      out.ok = true; out.durationMs = Date.now() - start;
+      return out;
     }
 
     // (4) measure the throttle state from reality
@@ -402,6 +421,7 @@ export function summarizeReintroduction(r: ReintroRunResult): string {
     "",
   ];
   r.promoted.forEach((p) => lines.push(`  ${p.reason.toUpperCase().padEnd(8)} $${p.fromBid} -> $${p.toBid}  [${p.matchType}] ${p.keywordText}`));
+  if (r.notes.length) { lines.push("Reports: " + r.notes.join(" | ")); lines.push(""); }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");
 }
@@ -413,7 +433,7 @@ export function summarizeReintroduction(r: ReintroRunResult): string {
 export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): Promise<ReactivationResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
-  const out: ReactivationResult = { ok: false, dryRun, reactivated: [], errors: [], durationMs: 0 };
+  const out: ReactivationResult = { ok: false, dryRun, reactivated: [], notes: [], errors: [], durationMs: 0 };
   const cfg = adsConfigFromEnv();
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
@@ -428,11 +448,16 @@ export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): P
   } while (next);
   if (!paused.length) { out.ok = true; out.durationMs = Date.now() - start; return out; }
 
-  // trailing 65d keyword performance, aggregated per keywordId across the chunked windows
+  // trailing 65d keyword performance, aggregated per keywordId across the chunked windows.
+  // SAFETY: reactivation only re-enables keywords that PROVE recovery, so a missing window can
+  // only ever under-qualify, never wrongly re-enable. Still, acting on half a history would give
+  // a misleading picture, so every window must be collected before anything is re-enabled.
+  let reactivateReady = true;
   const perfById = new Map<string, { cost: number; sales: number }>();
   try {
     for (const [csd, ced] of harvestWindows(REACT_WINDOW_DAYS, Date.now())) {
-      const chunk = await report(cfg, token, "spTargeting", ["targeting"], ["keywordId", "clicks", "cost", "sales14d", "purchases14d"], csd, ced);
+      const { rows: chunk, ready: chunkReady } = await deferredRows(cfg, token, out.notes, `reactivate-${csd}`, "spTargeting", ["targeting"], SP_COLS, csd, ced);
+      if (!chunkReady) reactivateReady = false;
       for (const r of chunk) {
         if (r.keywordId == null) continue;
         const id = String(r.keywordId);
@@ -442,6 +467,13 @@ export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): P
       }
     }
   } catch (e) { out.errors.push("reactivation report: " + (e instanceof Error ? e.message : String(e))); out.durationMs = Date.now() - start; return out; }
+
+  if (!reactivateReady) {
+    out.reason = "reports not collected yet — re-enabling nothing this run";
+    out.notes.push(out.reason);
+    out.ok = true; out.durationMs = Date.now() - start;
+    return out;
+  }
 
   const cands = reactivationCandidates(paused, perfById);
   for (const c of cands) out.reactivated.push({ text: c.keywordText, matchType: c.matchType, cost: c.cost, acos: c.acos });
