@@ -93,41 +93,37 @@ longest history the Ads API will give us:
 Eligible keywords are raised off the $0.10 floor to a bid that can actually win a click.
 They then live under Rule 1 like everything else: $4 of rope, then off.
 
-### The rate limits, and why they exist
+### The rate limit, and why it is the only one
 
 William's intent, verbatim: "I just want to roll keywords out slowly that haven't been spent to
 make sure we don't fail at them all at once," and "I don't want 1000 keywords spending $4 and
 putting us deep into negative."
 
-So the thing being throttled is **unproven** exposure, not spend. There is deliberately **no cap on
-total spend** — William, 2026-08-02: "I don't need a $150 spend cap, spend as long as words are
-making money." A keyword that is converting profitably should be free to spend; it is already
-governed by Rule 1, which turns it off the moment it stops paying.
+**Ten keywords a day is the only gate.** William chose this on 2026-08-02, having been shown the
+alternative of also capping how many unproven keywords are in flight at once.
 
-Two throttles, both of which must pass:
+There is deliberately **no cap on total spend** — "I don't need a $150 spend cap, spend as long as
+words are making money." A keyword that is converting profitably is already governed by Rule 1,
+which turns it off the moment it stops paying, so capping its spend would only throttle the
+expansion we want.
 
-| Guard | Value | Status | What it caps |
-|---|---|---|---|
-| `REINTRO_PER_DAY` | 10 | **confirmed by William 2026-08-02** | new keywords switched on per day |
-| `REINTRO_MAX_IN_TRIAL` | not set | **AWAITING WILLIAM** | keywords simultaneously **unproven** (promoted, still under $4, no conversion yet) |
+There is also **no ceiling on concurrent unproven keywords**. Each promoted keyword leaves the
+unproven pool in one of two ways:
 
-The pool self-regulates, which is what makes this safe without a spend cap. A keyword leaves the
-trial pool in one of two ways:
+- **it converts** — now proven, it spends freely under Rule 1; or
+- **it hits $4 with no conversion** — Rule 1 kills it.
 
-- **it converts** — now proven, it leaves the pool and spends freely under Rule 1, and its slot
-  opens for the next candidate; or
-- **it hits $4 with no conversion** — Rule 1 kills it, and its slot opens too.
+Until keywords start resolving that way, the unproven population grows by up to 10 a day. So
+exposure ramps rather than sitting at a fixed instant-in-time ceiling. That is the accepted
+trade-off: the slow daily rollout is what stops 1,840 keywords failing at once, and the $4 kill
+bar is what stops any single one running away.
 
-So winners and losers both free capacity, and the only bounded quantity is money at risk on
-unproven keywords at any one instant, which is `REINTRO_MAX_IN_TRIAL x KILL_SPEND`. Once the cap is
-set, that product is the worst case and it is the number to sanity-check against the store's
-monthly contribution. **The cap is not set yet** — the code carries a provisional value marked as
-such, and reintroduction stays in preview until William picks it. Do not quote a worst-case dollar
-figure before then.
+`ReintroState.inTrial` and the cohort's month-to-date spend are both measured and printed in every
+run summary so the ramp stays visible. `maxInTrial` remains an optional argument if a ceiling is
+ever wanted, it is simply unset.
 
 Ordering: keywords with proven history (converted, ACOS under 50%) go first, best ACOS first, then
-never-spent keywords. The scarce resource is trial slots, so they go to the strongest evidence
-available.
+never-spent keywords, so the daily quota goes to the strongest evidence available.
 
 ### The history window is not "lifetime"
 

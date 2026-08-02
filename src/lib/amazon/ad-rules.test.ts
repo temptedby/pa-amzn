@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   shouldKill, nextBid, decide, acosOf, ACOS_PIVOT,
   isValidKeywordText, shortenToValidKeyword, KEYWORD_MAX_CHARS, KEYWORD_MAX_WORDS,
-  selectReintroductions, REINTRO_PER_DAY, REINTRO_MAX_IN_TRIAL, KILL_SPEND,
+  selectReintroductions, REINTRO_PER_DAY, KILL_SPEND,
   type ReintroCandidate, type ReintroState,
 } from "./ad-rules";
 
@@ -144,9 +144,16 @@ describe("selectReintroductions", () => {
     expect(plan.promote).toHaveLength(3);
   });
 
-  it("stops dead at the concurrent-in-trial cap", () => {
+  it("does NOT stop on how many are already in flight — 10/day is the only gate (William 2026-08-02)", () => {
     const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
-    const plan = selectReintroductions(cands, { ...fresh, inTrial: REINTRO_MAX_IN_TRIAL });
+    const plan = selectReintroductions(cands, { ...fresh, inTrial: 500 });
+    expect(plan.promote).toHaveLength(REINTRO_PER_DAY);
+    expect(plan.blockedBy).toEqual(["perDay"]);
+  });
+
+  it("still honours an explicit maxInTrial when one is passed (ceiling available, just not default)", () => {
+    const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
+    const plan = selectReintroductions(cands, { ...fresh, inTrial: 25 }, { maxInTrial: 25 });
     expect(plan.promote).toHaveLength(0);
     expect(plan.blockedBy).toContain("maxInTrial");
   });
@@ -194,26 +201,24 @@ describe("selectReintroductions", () => {
     expect(plan.promote[0].toBid).toBeLessThanOrEqual(2.50);
   });
 
-  it("worst-case open exposure stays bounded: in-trial cap x $4 kill bar", () => {
-    // Simulate 30 consecutive daily runs against 2,000 floored keywords and assert the
-    // in-trial population never exceeds the cap — William's "no 1000 keywords x $4" guard.
+  it("ramps at exactly 10/day and nothing else holds it back", () => {
+    // 30 consecutive daily runs against 2,000 floored keywords. With no in-trial ceiling the
+    // unproven population grows by the daily quota until keywords resolve themselves — that is
+    // William's chosen trade-off, asserted here so a future change to it is deliberate.
     const cands = Array.from({ length: 2000 }, (_, i) => cand({ keywordId: String(i).padStart(4, "0") }));
-    let trial = 0, promotedTotal = 0;
+    let trial = 0;
     for (let day = 0; day < 30; day++) {
       const plan = selectReintroductions(cands, { introducedToday: 0, inTrial: trial, cohortMonthSpend: 0 });
+      expect(plan.promote).toHaveLength(REINTRO_PER_DAY);
       trial += plan.promote.length;
-      promotedTotal += plan.promote.length;
-      expect(trial).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL);
     }
-    expect(promotedTotal).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL);
-    expect(trial * KILL_SPEND).toBeLessThanOrEqual(REINTRO_MAX_IN_TRIAL * KILL_SPEND); // <= $160 at risk
+    expect(trial).toBe(30 * REINTRO_PER_DAY);
+    expect(trial * KILL_SPEND).toBe(30 * REINTRO_PER_DAY * KILL_SPEND); // exposure grows, uncapped
   });
 
-  it("a converting keyword frees its trial slot, so winners make room for more", () => {
-    // 40 on trial -> blocked. Once 10 of them convert they leave the pool and the next run flows.
+  it("a converting keyword frees its slot when a ceiling IS configured", () => {
     const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
-    expect(selectReintroductions(cands, { ...fresh, inTrial: REINTRO_MAX_IN_TRIAL }).promote).toHaveLength(0);
-    const after = selectReintroductions(cands, { ...fresh, inTrial: REINTRO_MAX_IN_TRIAL - 10 });
-    expect(after.promote).toHaveLength(10);
+    expect(selectReintroductions(cands, { ...fresh, inTrial: 40 }, { maxInTrial: 40 }).promote).toHaveLength(0);
+    expect(selectReintroductions(cands, { ...fresh, inTrial: 30 }, { maxInTrial: 40 }).promote).toHaveLength(10);
   });
 });

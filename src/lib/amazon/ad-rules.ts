@@ -45,16 +45,15 @@ export const KEYWORD_MAX_WORDS = 10;
 // now proven, and spends without limit under the kill rule) or hits $4 without converting (it is
 // killed). Winners and losers both free their slot, so the only thing bounded is how much money
 // can be at risk on unproven keywords at any one instant:
-//   REINTRO_MAX_IN_TRIAL * KILL_SPEND  =  worst-case open, unproven exposure.
-// That is the answer to "I don't want 1000 keywords spending $4 and putting us deep into negative"
-// without also throttling the profitable spend we actually want.
+// William chose the daily rate as the ONLY gate (2026-08-02), having been shown the alternative:
+// no concurrent-in-trial cap. So the number of unproven keywords in flight grows by up to 10/day
+// until they start resolving themselves — each one either converts (proven, leaves the pool) or
+// hits the $4 kill bar (dead, leaves the pool). Exposure is therefore unbounded in the early
+// weeks rather than capped at an instant-in-time figure.
 //
-// REINTRO_PER_DAY = 10 is William's number (2026-08-02).
-// REINTRO_MAX_IN_TRIAL is NOT yet his — the value below is PROVISIONAL, chosen only so the code
-// compiles and previews. Reintroduction stays gated off until he sets it, and no worst-case dollar
-// figure should be quoted until then (CBC: confirm before claim).
+// The count is still measured and reported every run (ReintroState.inTrial) so the ramp is
+// visible, and `maxInTrial` remains an optional opts field if a ceiling is ever wanted.
 export const REINTRO_PER_DAY = 10;
-export const REINTRO_MAX_IN_TRIAL = 40;   // PROVISIONAL — awaiting William
 export const REINTRO_MAX_ACOS = 0.50;   // William: eligible if never spent, or spent at ACOS < 50%
 export const REINTRO_START_BID = 0.50;  // $0.10 wins nothing; July SP CPC was $0.59
 
@@ -177,6 +176,8 @@ export interface ReintroState {
 
 export interface ReintroOpts {
   perDay?: number;
+  /** Optional ceiling on concurrent UNPROVEN keywords. Unset by William's choice — 10/day is the
+   *  only gate. Left available so a ceiling can be reinstated without a code change. */
   maxInTrial?: number;
   maxAcos?: number;
   startBid?: number;
@@ -198,9 +199,8 @@ export interface ReintroPlan {
  * Eligibility (William 2026-08-02): the keyword never spent, OR it spent at ACOS < 50%.
  * Ordering: proven performers first (converted, lowest ACOS first), then never-spent ones, so the
  * limited number of trial slots goes to the strongest evidence available.
- * Throttles: per-day count and concurrent-UNPROVEN-in-trial count. There is no total spend cap —
- * a keyword that is making money spends freely. The batch stops at whichever throttle binds first
- * and says which one it was.
+ * Throttle: the per-day count, and by William's choice that is the only one. No total spend cap
+ * (a keyword making money spends freely) and no concurrent-in-trial ceiling unless opts sets one.
  */
 export function selectReintroductions(
   candidates: ReintroCandidate[],
@@ -208,7 +208,7 @@ export function selectReintroductions(
   opts: ReintroOpts = {},
 ): ReintroPlan {
   const perDay = opts.perDay ?? REINTRO_PER_DAY;
-  const maxInTrial = opts.maxInTrial ?? REINTRO_MAX_IN_TRIAL;
+  const maxInTrial = opts.maxInTrial ?? Infinity;   // no ceiling by default (William 2026-08-02)
   const maxAcos = opts.maxAcos ?? REINTRO_MAX_ACOS;
   const startBid = opts.startBid ?? REINTRO_START_BID;
   const floor = opts.floor ?? BID_FLOOR;
