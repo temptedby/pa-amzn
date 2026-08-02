@@ -1,7 +1,7 @@
 import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
-import { decide, type Perf } from "./ad-rules";
+import { decide, isValidKeywordText, shortenToValidKeyword, type Perf } from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
 // so every action is SAFE TO REPEAT:
@@ -22,10 +22,13 @@ const RPT_CT = "application/vnd.createasyncreportrequest.v3+json";
 // $1.42 - FBA $2.52 = $4.93 contribution; 4.93/9.49), so the 50% pivot keeps every kept keyword profitable.
 const FLOOR = 0.10, CAP = 2.50, MAX_STEP = 0.25; // ±25% per run
 const NEW_KW_BID = 0.50;
-// Harvest rule (ad-engine-harvest-rule.md, William 2026-06-26): a search term qualifies at
-// >= $4 spend AND ACOS <= 50% (== ROAS >= 2x == sales >= 2*cost), measured over the trailing window.
-export const HARVEST_MIN_SPEND = 4;          // $ spend bar before a term is worth harvesting
-export const HARVEST_MAX_ACOS = 0.50;        // <= break-even ACOS (~52% Single, validated); keeps margin
+// Harvest rule (.agent/ad-engine-rules-2026-08-02.md Rule 3, William 2026-08-02): a search term
+// qualifies as soon as it CONVERTS — no spend bar. It is added as PHRASE + EXACT into the ad group
+// it converted in, and then lives under the kill rule ($4 of rope, then off). Harvesting only after
+// $4 of spend added just 3 keywords in six weeks; converting terms are the whole point.
+// HARVEST_MIN_SPEND / HARVEST_MAX_ACOS remain the bar for monthly REACTIVATION of paused keywords.
+export const HARVEST_MIN_SPEND = 4;          // $ spend bar for reactivating a PAUSED keyword
+export const HARVEST_MAX_ACOS = 0.50;        // reactivation bar: proven ACOS <= 50% (ROAS >= 2x)
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 // Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable
 // any PAUSED keyword whose trailing 65 days still holds cost >= $4 AND ACOS <= 50% (ROAS >= 2x) -
@@ -110,7 +113,7 @@ export function harvestWindows(days: number, now: number): [string, string][] {
 // Each qualifying term is harvested as EXACT + PHRASE INTO THE AD GROUP IT CONVERTED IN, skipping any
 // (adGroup, matchType, text) already present. `existing` keys are `${adGroupId}|${matchType}|${lowerText}`.
 export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID): HarvestAdd[] {
-  const agg = new Map<string, { cid: string; agid: string; term: string; cost: number; sales: number }>();
+  const agg = new Map<string, { cid: string; agid: string; term: string; cost: number; sales: number; orders: number }>();
   for (const r of rows) {
     const term = (r.searchTerm || "").trim();
     const cid = r.campaignId != null ? String(r.campaignId) : "";
@@ -118,18 +121,22 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
     if (!term || !cid || !agid) continue;            // need the source ad group to harvest into
     if (/^b0[a-z0-9]{8}$/i.test(term)) continue;     // ASIN, not a customer search phrase
     const key = `${cid}|${agid}|${term.toLowerCase()}`;
-    const o = agg.get(key) ?? { cid, agid, term, cost: 0, sales: 0 };
-    o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0;
+    const o = agg.get(key) ?? { cid, agid, term, cost: 0, sales: 0, orders: 0 };
+    o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0; o.orders += r.purchases14d ?? 0;
     agg.set(key, o);
   }
   const adds: HarvestAdd[] = [];
   for (const o of agg.values()) {
-    if (o.cost < HARVEST_MIN_SPEND) continue;                          // >= $4 spend
-    if (!(o.sales > 0 && o.cost / o.sales <= HARVEST_MAX_ACOS)) continue; // ACOS <= 50% (ROAS >= 2x)
-    const t = o.term.toLowerCase();
+    if (!(o.orders > 0)) continue;                   // Rule 3: harvest on the FIRST conversion
+    // Amazon caps keyword text at 80 chars / 10 words and rejects anything longer, so shorten an
+    // over-long term to its longest valid leading root instead of retrying it forever (the live
+    // 2026-08-01 loop: a 98-char, 14-word term re-submitted every run). Skip only if no root fits.
+    const text = isValidKeywordText(o.term) ? o.term : shortenToValidKeyword(o.term);
+    if (!text) continue;
+    const t = text.toLowerCase();
     for (const mt of ["EXACT", "PHRASE"] as const) {
       if (existing.has(`${o.agid}|${mt}|${t}`)) continue;
-      adds.push({ campaignId: o.cid, adGroupId: o.agid, keywordText: o.term, matchType: mt, state: "ENABLED", bid });
+      adds.push({ campaignId: o.cid, adGroupId: o.agid, keywordText: text, matchType: mt, state: "ENABLED", bid });
     }
   }
   return adds;
@@ -204,13 +211,17 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   } catch (e) { out.errors.push("harvest: " + (e instanceof Error ? e.message : String(e))); }
 
   if (!dryRun) {
+    // Track whether Amazon ACCEPTED each batch. The log records outcomes, not intentions: before
+    // this, a rejected add was still written as "add", which is how a 98-char keyword appeared in
+    // ad_engine_log 8 times while never existing in the account (2026-08-01 loop).
+    const applied = { kill: killOps.length === 0, bid: bidOps.length === 0, add: addOps.length === 0 };
     try {
-      if (killOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: killOps }, KW_CT); if (!r.ok) out.errors.push(`kill: ${r.status}`); }
-      if (bidOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: bidOps }, KW_CT); if (!r.ok) out.errors.push(`bid: ${r.status}`); }
-      if (addOps.length) { const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT); if (!r.ok) out.errors.push(`add: ${r.status}`); }
+      if (killOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: killOps }, KW_CT); applied.kill = r.ok; if (!r.ok) out.errors.push(`kill: ${r.status}`); }
+      if (bidOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: bidOps }, KW_CT); applied.bid = r.ok; if (!r.ok) out.errors.push(`bid: ${r.status}`); }
+      if (addOps.length) { const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT); applied.add = r.ok; if (!r.ok) out.errors.push(`add: ${r.status}`); }
     } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
     // Persist every action to the decision log so the algorithm is auditable + trackable over time.
-    try { await persistLog(out); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
+    try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   out.ok = true; out.durationMs = Date.now() - start;
@@ -218,19 +229,29 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
 }
 
 // Decision log — one row per add/cut/re-bid, queryable history of what the engine did.
-async function persistLog(r: AdEngineResult): Promise<void> {
+// Two guarantees (rules doc Rules 3 + 5):
+//   1. `applied` records whether Amazon ACCEPTED the change. A rejected batch is logged with
+//      applied=0 rather than silently recorded as done.
+//   2. Every live run writes a `run` heartbeat row even when it took no action, so "did the $4
+//      cutoff actually run?" is answerable. Without it, a run that did nothing is indistinguishable
+//      from a cron that never fired — which is why 12:00 UTC has never appeared in the log.
+async function persistLog(r: AdEngineResult, applied: { kill: boolean; bid: boolean; add: boolean }): Promise<void> {
   await db().execute(`CREATE TABLE IF NOT EXISTS ad_engine_log (
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL, action TEXT NOT NULL,
     keyword TEXT, match_type TEXT, from_bid REAL, to_bid REAL, acos REAL, spend REAL)`);
+  // Additive migration; ignore "duplicate column name" on re-run.
+  await db().execute("ALTER TABLE ad_engine_log ADD COLUMN applied INTEGER DEFAULT 1").catch(() => {});
   const runAt = new Date().toISOString();
-  const rows: Array<[string, string | null, string | null, number | null, number | null, number | null, number | null]> = [
-    ...r.killed.map((k) => ["kill", k.text, null, null, null, null, k.spend] as [string, string, null, null, null, null, number]),
-    ...r.added.map((a) => ["add", a.text, a.matchType, null, null, null, null] as [string, string, string, null, null, null, null]),
-    ...r.bids.map((b) => ["rebid", b.text, null, b.from, b.to, b.acos, null] as [string, string, null, number, number, number, null]),
-  ];
-  for (const [action, kw, mt, fb, tb, acos, spend] of rows) {
-    await db().execute({ sql: "INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend) VALUES (?,?,?,?,?,?,?,?)", args: [runAt, action, kw, mt, fb, tb, acos, spend] });
-  }
+  const ins = async (action: string, kw: string | null, mt: string | null, fb: number | null, tb: number | null, acos: number | null, spend: number | null, ok: boolean) =>
+    db().execute({
+      sql: "INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend,applied) VALUES (?,?,?,?,?,?,?,?,?)",
+      args: [runAt, action, kw, mt, fb, tb, acos, spend, ok ? 1 : 0],
+    });
+  // Heartbeat first, so it lands even if a later insert fails.
+  await ins("run", null, null, null, null, null, null, r.errors.length === 0);
+  for (const k of r.killed) await ins("kill", k.text, null, null, null, null, k.spend, applied.kill);
+  for (const a of r.added) await ins("add", a.text, a.matchType, null, null, null, null, applied.add);
+  for (const b of r.bids) await ins("rebid", b.text, null, b.from, b.to, b.acos, null, applied.bid);
 }
 
 // Monthly reactivation job (ad-engine-harvest-rule.md step 4). Separate cadence from runAdEngine
