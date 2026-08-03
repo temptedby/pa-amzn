@@ -18,12 +18,31 @@ describe("formatAdsDigest", () => {
       .toBeLessThan(lines.findIndex((l) => l === "ACTIONS"));
   });
 
-  it("shouts when the cron did not run at all — the seven-week silent failure", () => {
-    expect(formatAdsDigest(stats({ runs24h: 0 }))).toContain("NO RUNS, cron may not be firing");
+  it("shouts when no heartbeat was logged — the seven-week silent failure", () => {
+    expect(formatAdsDigest(stats({ runs24h: 0 }))).toContain("no heartbeat in 24h");
   });
 
-  it("stays quiet about runs when the cron is healthy", () => {
-    expect(formatAdsDigest(stats({ runs24h: 4 }))).not.toContain("NO RUNS");
+  it("stays quiet about heartbeats when the cron is healthy", () => {
+    expect(formatAdsDigest(stats({ runs24h: 4 }))).not.toContain("no heartbeat");
+  });
+
+  it("does not imply acting runs are a subset of heartbeats — they are independent sources", () => {
+    // Live 2026-08-02 showed runs24h=0 alongside actingRuns=2, because pre-heartbeat code logged
+    // actions but no `run` row. "of those, acted: 2" under "runs: 0" read as a contradiction.
+    const t = formatAdsDigest(stats({ runs24h: 0, runsWithActions24h: 2 }));
+    expect(t).not.toContain("of those");
+    expect(t).toContain("heartbeats logged");
+    expect(t).toContain("runs that acted");
+  });
+
+  it("flags a gap longer than the 6-hourly cron interval", () => {
+    const t = formatAdsDigest(stats({ generatedAt: "2026-08-02T20:56:00Z", lastRunAt: "2026-08-02T06:03:00Z" }));
+    expect(t).toContain("has missed at least one slot");
+  });
+
+  it("does not flag a gap inside the normal interval", () => {
+    const t = formatAdsDigest(stats({ generatedAt: "2026-08-02T11:00:00Z", lastRunAt: "2026-08-02T06:03:00Z" }));
+    expect(t).not.toContain("missed at least one slot");
   });
 
   it("surfaces actions Amazon rejected, so a rejected batch cannot read as success", () => {
@@ -53,7 +72,7 @@ describe("formatAdsDigest", () => {
 
   it("handles a never-run engine without crashing", () => {
     const t = formatAdsDigest(stats({ runs24h: 0, lastRunAt: null, reports: [] }));
-    expect(t).toContain("last run         : never");
+    expect(t).toContain("last activity     : never");
     expect(t).toContain("no report jobs yet");
   });
 

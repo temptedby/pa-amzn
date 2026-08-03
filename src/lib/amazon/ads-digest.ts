@@ -34,9 +34,18 @@ export function formatAdsDigest(s: DigestStats): string {
 
   // Health first. A silent engine is the failure mode that cost seven weeks.
   L.push("ENGINE HEALTH");
-  L.push(`  runs in last 24h : ${s.runs24h}${s.runs24h === 0 ? "   <-- NO RUNS, cron may not be firing" : ""}`);
-  L.push(`  of those, acted  : ${s.runsWithActions24h}`);
-  L.push(`  last run         : ${s.lastRunAt ? s.lastRunAt.replace("T", " ").slice(0, 16) + " UTC" : "never"}`);
+  // runs24h counts `run` heartbeat rows; actingRuns24h counts distinct runs that logged an action.
+  // They are independent sources, not a subset, so never phrase the second as "of those". Before
+  // the heartbeat shipped (2026-08-02) no run wrote a `run` row, so a zero here can legitimately
+  // mean "older code" rather than "cron is dead" until a full cycle has passed.
+  L.push(`  heartbeats logged : ${s.runs24h}${s.runs24h === 0 ? "   <-- no heartbeat in 24h; cron may not be firing" : ""}`);
+  L.push(`  runs that acted   : ${s.runsWithActions24h}`);
+  L.push(`  last activity     : ${s.lastRunAt ? s.lastRunAt.replace("T", " ").slice(0, 16) + " UTC" : "never"}`);
+  if (s.lastRunAt) {
+    const hrs = (Date.parse(s.generatedAt) - Date.parse(s.lastRunAt)) / 3_600_000;
+    // The engine cron is every 6h, so anything past ~7h means a slot was missed.
+    if (hrs > 7) L.push(`  GAP: ${hrs.toFixed(1)}h since last activity — the 6-hourly cron has missed at least one slot`);
+  }
   if (s.rejected24h > 0) L.push(`  REJECTED BY AMAZON: ${s.rejected24h} action(s) in 24h — logged but not applied`);
   L.push("");
 
