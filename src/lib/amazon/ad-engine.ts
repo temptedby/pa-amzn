@@ -2,7 +2,8 @@ import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
-  decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions,
+  decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
+  ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
 } from "./ad-rules";
@@ -197,14 +198,35 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
 
   // (1) keyword performance -> kill + bid
   const kt = (await deferredRows(cfg, token, out.notes, "engine-mtd", "spTargeting", ["targeting"], SP_COLS, sd, ed)).rows;
+  // Freshly reintroduced keywords are shielded from the automatic bid CUT for the 14-day attribution
+  // window. Without this the engine reads "0 orders" on a word whose orders simply have not been
+  // attributed yet, cuts 10%, and repeats four times a day until the word is back at the floor —
+  // which is the documented history of `phone tethered` (0.49 -> 0.94 -> 0.35 in six days) and the
+  // reason 151 profitable words ended up switched off. The $4 kill is NOT suppressed.
+  const protectedIds = new Map<string, string>();
+  try {
+    const pr = await db().execute("SELECT keyword_id, promoted_at FROM ad_reintro_cohort");
+    for (const row of pr.rows) protectedIds.set(String(row.keyword_id), String(row.promoted_at));
+  } catch { /* no cohort table yet — nothing to protect */ }
+  const nowMs = Date.now();
+  let shielded = 0;
+
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
     const v = decide(k.bid || NEW_KW_BID, perf); // $4-MTD kill + ±10% bid at the 50% pivot (ad-rules.ts)
     if (v.action === "kill") { killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" }); out.killed.push({ text: k.keywordText, spend: +perf.spend.toFixed(2) }); }
-    else if (v.action === "bid") { const acos = perf.sales > 0 ? perf.spend / perf.sales : 0; bidOps.push({ keywordId: String(k.keywordId), bid: v.bid }); out.bids.push({ text: k.keywordText, from: k.bid, to: v.bid, acos: +(acos * 100).toFixed(0) / 100 }); }
+    else if (v.action === "bid") {
+      const promotedAt = protectedIds.get(String(k.keywordId));
+      const isCut = v.bid < (k.bid || NEW_KW_BID);
+      if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
+      const acos = perf.sales > 0 ? perf.spend / perf.sales : 0;
+      bidOps.push({ keywordId: String(k.keywordId), bid: v.bid });
+      out.bids.push({ text: k.keywordText, from: k.bid, to: v.bid, acos: +(acos * 100).toFixed(0) / 100 });
+    }
   }
+  if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
 
   // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
   // Wrapped so a harvest-report failure (timeout, 4xx) can never block the kill/bid apply above.
@@ -285,11 +307,47 @@ async function persistLog(r: AdEngineResult, applied: { kill: boolean; bid: bool
 export interface ReintroRunResult {
   ok: boolean; dryRun: boolean;
   promoted: ReintroPick[];
+  /** Bids stepped up $0.10 because the keyword went a whole day without spending. */
+  laddered: { keywordId: string; keywordText: string; from: number; to: number }[];
+  /** At the $0.85 ceiling and STILL not spending. Needs William, never auto-raised. */
+  escalated: { keywordId: string; keywordText: string; bid: number }[];
   eligible: number;
   blockedBy: string[];
   state: ReintroState;
   notes: string[];
   errors: string[]; durationMs: number; reason?: string;
+}
+
+// Lifetime evidence from our own database, backfilled from console exports (2019 onward) by
+// scripts/ingest-keyword-csv.mjs. Amazon's reporting API only retains 95 days, and the monthly
+// kill/bid rules are precisely what walked these words down to the floor, so the recent window
+// records our own mistake rather than the keyword's worth. Keyed like deadKey(): "text|MATCHTYPE".
+async function lifetimeRoasByKeyword(): Promise<Map<string, { roas: number; spend: number; sales: number; orders: number }>> {
+  const out = new Map<string, { roas: number; spend: number; sales: number; orders: number }>();
+  try {
+    const r = await db().execute(
+      `SELECT word, match_type, SUM(spend) AS spend, SUM(sales) AS sales, SUM(orders) AS orders
+         FROM kw_lifetime
+        WHERE COALESCE(ad_product,'SPONSORED_PRODUCTS') = 'SPONSORED_PRODUCTS'
+          AND COALESCE(marketplace,'US') = 'US'
+        GROUP BY word, match_type`);
+    for (const row of r.rows) {
+      const spend = Number(row.spend ?? 0), sales = Number(row.sales ?? 0), orders = Number(row.orders ?? 0);
+      if (spend <= 0) continue;
+      out.set(deadKey(String(row.word ?? ""), String(row.match_type ?? "")), { roas: sales / spend, spend, sales, orders });
+    }
+  } catch { /* table absent -> fall back to window-only evidence, never block the run */ }
+  return out;
+}
+
+// Words retired for good ($4 with no conversion, or 3 consecutive dead months). A 95-day window
+// makes a killed keyword look untested again by month four, so the tombstone is what stops us
+// paying to relearn the same lesson every quarter.
+async function deadKeySet(): Promise<Set<string>> {
+  try {
+    const r = await db().execute("SELECT dead_key FROM kw_tombstone");
+    return new Set(r.rows.map((x) => String(x.dead_key)));
+  } catch { return new Set(); }
 }
 
 async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
@@ -312,7 +370,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
   const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
   const start = Date.now();
   const out: ReintroRunResult = {
-    ok: false, dryRun, promoted: [], eligible: 0, blockedBy: [],
+    ok: false, dryRun, promoted: [], laddered: [], escalated: [], eligible: 0, blockedBy: [],
     state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, notes: [], errors: [], durationMs: 0,
   };
   const cfg = adsConfigFromEnv();
@@ -322,10 +380,14 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
   try {
     // (1) every ENABLED keyword sitting AT the floor
     const kws: Kw[] = [];
+    const byIdRe = new Map<string, Kw>();
     let next: string | undefined;
     do {
       const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, stateFilter: { include: ["ENABLED"] }, ...(next ? { nextToken: next } : {}) }, KW_CT);
-      (r.json?.keywords ?? []).forEach((k: Kw) => { if (k.state === "ENABLED" && (k.bid ?? 0) <= BID_FLOOR) kws.push(k); });
+      (r.json?.keywords ?? []).forEach((k: Kw) => {
+        byIdRe.set(String(k.keywordId), k);                    // every enabled keyword, for the ladder
+        if (k.state === "ENABLED" && (k.bid ?? 0) <= BID_FLOOR) kws.push(k);   // floored ones, for promotion
+      });
       next = r.json?.nextToken;
     } while (next);
 
@@ -375,19 +437,50 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
       cohortMonthSpend += m.cost;
       if (m.cost < KILL_SPEND && m.orders === 0) inTrial++;  // rope not yet used up
     }
-    out.state = { introducedToday: today, inTrial, cohortMonthSpend: +cohortMonthSpend.toFixed(2) };
+    // Today's cohort spend drives the circuit breaker. Amazon's account day resets at 07:00 UTC.
+    // Preferred source is kw_daily (our own history). If it has not been written for today yet, fall
+    // back to the month-to-date average, which is conservative on a ramping cohort because early
+    // days are cheaper than late ones.
+    const dayOfMonth = now.getUTCDate();
+    let cohortSpendToday = cohortMonthSpend / Math.max(1, dayOfMonth);
+    try {
+      const todayIso = new Date().toISOString().slice(0, 10);
+      // kw_daily is keyed by (word, match_type), not keywordId, so join through the cohort table.
+      const q = await db().execute({
+        sql: `SELECT COALESCE(SUM(d.spend),0) AS s
+                FROM kw_daily d
+                JOIN ad_reintro_cohort c
+                  ON lower(trim(c.keyword_text)) = lower(trim(d.word))
+                 AND upper(c.match_type)         = upper(d.match_type)
+               WHERE substr(d.day,1,10) = ?
+                 AND d.ad_product = 'SPONSORED_PRODUCTS'`,
+        args: [todayIso],
+      });
+      const s = Number(q.rows[0]?.s ?? 0);
+      if (s > 0) cohortSpendToday = s;
+    } catch { /* kw_daily may lack keyword_id or today's rows — the average stands in */ }
+    out.state = {
+      introducedToday: today, inTrial,
+      cohortMonthSpend: +cohortMonthSpend.toFixed(2),
+      cohortSpendToday: +cohortSpendToday.toFixed(2),
+    };
 
     // (5) decide
+    const [lifetime, deadKeys] = await Promise.all([lifetimeRoasByKeyword(), deadKeySet()]);
     const candidates: ReintroCandidate[] = kws
       .filter((k) => !cohort.has(String(k.keywordId)))       // never re-promote the same keyword
       .map((k) => {
         const h = hist.get(String(k.keywordId));
+        const lt = lifetime.get(deadKey(k.keywordText, k.matchType));
         return {
           keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
           bid: k.bid ?? 0, histSpend: h?.cost ?? 0, histSales: h?.sales ?? 0, histOrders: h?.orders ?? 0,
+          lifetimeRoas: lt?.roas ?? null, lifetimeSpend: lt?.spend ?? 0,
+          lifetimeSales: lt?.sales ?? 0, lifetimeOrders: lt?.orders ?? 0,
         };
       });
-    const plan = selectReintroductions(candidates, out.state);
+    out.notes.push(`lifetime evidence: ${lifetime.size} words, ${deadKeys.size} tombstoned`);
+    const plan = selectReintroductions(candidates, out.state, { deadKeys });
     out.promoted = plan.promote;
     out.eligible = plan.eligible;
     out.blockedBy = plan.blockedBy;
@@ -404,9 +497,65 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
             sql: "INSERT OR IGNORE INTO ad_reintro_cohort (keyword_id,keyword_text,match_type,promoted_at,from_bid,to_bid,reason) VALUES (?,?,?,?,?,?,?)",
             args: [p.keywordId, p.keywordText, p.matchType, at, p.fromBid, p.toBid, p.reason],
           });
+          // Seed the ladder at the entry bid. Day one of the climb starts now.
+          await db().execute({
+            sql: `INSERT INTO kw_bid_state (keyword_id, word, match_type, current_bid, last_bid_change_at, ladder_active)
+                  VALUES (?,?,?,?,?,1)
+                  ON CONFLICT(keyword_id) DO UPDATE SET current_bid=excluded.current_bid, last_bid_change_at=excluded.last_bid_change_at, ladder_active=1`,
+            args: [p.keywordId, p.keywordText.trim().toLowerCase(), p.matchType.toUpperCase(), p.toBid, at],
+          });
         }
       }
     }
+
+    // ---- Rule 5, the bid ladder (William 2026-08-05, wired 2026-08-06) --------------------
+    // Enter at $0.25. Each whole day a promoted keyword goes without spending a cent, add $0.10,
+    // up to $0.85. A keyword that HAS spent is left alone: it is producing data, so the ACOS rule
+    // owns it and the $4 kill bounds it. At $0.85 and still silent, ask William rather than guess.
+    try {
+      const st = await db().execute(
+        "SELECT keyword_id, word, match_type, current_bid, last_bid_change_at, escalated_at FROM kw_bid_state WHERE ladder_active = 1");
+      const ladderOps: { keywordId: string; bid: number }[] = [];
+      for (const row of st.rows) {
+        const id = String(row.keyword_id);
+        const k = byIdRe.get(id);
+        if (!k || k.state !== "ENABLED") continue;             // paused or gone: not our business
+        const changedAt = Date.parse(String(row.last_bid_change_at ?? "")) || 0;
+        const v = ladderVerdict({
+          bid: Number(row.current_bid ?? k.bid ?? 0),
+          spendSinceStep: mtd.get(id)?.cost ?? 0,               // any spend at all means hands off
+          daysSinceStep: changedAt ? Math.floor((Date.now() - changedAt) / 864e5) : 0,
+        });
+        if (v.action === "raise") {
+          ladderOps.push({ keywordId: id, bid: v.bid });
+          out.laddered.push({ keywordId: id, keywordText: k.keywordText, from: Number(row.current_bid ?? 0), to: v.bid });
+        } else if (v.action === "escalate" && !row.escalated_at) {
+          out.escalated.push({ keywordId: id, keywordText: k.keywordText, bid: v.bid });
+        }
+      }
+      if (!dryRun && ladderOps.length) {
+        const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: ladderOps }, KW_CT);
+        if (!r.ok) { out.errors.push(`ladder: ${r.status}`); out.laddered = []; }
+        else {
+          const at = new Date().toISOString();
+          for (const op of ladderOps) {
+            await db().execute({
+              sql: "UPDATE kw_bid_state SET current_bid = ?, last_bid_change_at = ? WHERE keyword_id = ?",
+              args: [op.bid, at, op.keywordId],
+            });
+          }
+        }
+      }
+      if (!dryRun && out.escalated.length) {
+        const at = new Date().toISOString();
+        for (const e of out.escalated) {
+          await db().execute({ sql: "UPDATE kw_bid_state SET escalated_at = ? WHERE keyword_id = ?", args: [at, e.keywordId] });
+        }
+      }
+      if (out.laddered.length) out.notes.push(`ladder: ${out.laddered.length} bids stepped up $${BID_LADDER_STEP.toFixed(2)}`);
+      if (out.escalated.length) out.notes.push(`ladder: ${out.escalated.length} at the $${BID_LADDER_MAX.toFixed(2)} ceiling and still not spending — needs William`);
+    } catch (e) { out.errors.push(`ladder: ${e instanceof Error ? e.message : String(e)}`); }
+
     out.ok = true;
   } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
   out.durationMs = Date.now() - start;
@@ -418,6 +567,8 @@ export function summarizeReintroduction(r: ReintroRunResult): string {
     `Reintroduction ${r.dryRun ? "(preview)" : "ran"} — ${r.promoted.length} promoted of ${r.eligible} eligible. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
     `Gate: ${r.state.introducedToday}/${REINTRO_PER_DAY} promoted today. Reported only: ${r.state.inTrial} unproven in flight (~$${(r.state.inTrial * KILL_SPEND).toFixed(2)} at risk), cohort spend MTD $${r.state.cohortMonthSpend}.`,
     r.blockedBy.length ? `Stopped by: ${r.blockedBy.join(", ")}.` : "",
+    r.laddered.length ? `Bid ladder: ${r.laddered.length} stepped up.\n` + r.laddered.map((l) => `  $${l.from.toFixed(2)} -> $${l.to.toFixed(2)}  ${l.keywordText}`).join("\n") : "",
+    r.escalated.length ? `NEEDS YOU: ${r.escalated.length} at the $0.85 ceiling and still not spending.\n` + r.escalated.map((e) => `  ${e.keywordText}`).join("\n") : "",
     "",
   ];
   r.promoted.forEach((p) => lines.push(`  ${p.reason.toUpperCase().padEnd(8)} $${p.fromBid} -> $${p.toBid}  [${p.matchType}] ${p.keywordText}`));

@@ -53,9 +53,17 @@ export const KEYWORD_MAX_WORDS = 10;
 //
 // The count is still measured and reported every run (ReintroState.inTrial) so the ramp is
 // visible, and `maxInTrial` remains an optional opts field if a ceiling is ever wanted.
-export const REINTRO_PER_DAY = 10;
+export const REINTRO_PER_DAY = 40;             // 4 runs x REINTRO_PER_RUN. Was 10/day; William 2026-08-06 moved to a 6-hourly launch.
 export const REINTRO_MAX_ACOS = 0.50;   // William: eligible if never spent, or spent at ACOS < 50%
 export const REINTRO_START_BID = 0.25;  // William 2026-08-05: enter LOW, climb only if it fails to spend
+export const REINTRO_LIFETIME_ROAS_MIN = 2.0;  // William 2026-08-05: "past 2x roas or more ... need to reset each month"
+export const REINTRO_LIFETIME_MIN_ORDERS = 2;  // one order is an anecdote, not a ROAS
+export const REINTRO_PER_RUN = 10;             // William 2026-08-06: launch every 6h, ~40/day, all 176 live in ~4.5 days
+export const REINTRO_COHORT_DAILY_CAP = 25;    // $/day across the reintroduced cohort. Amazon's budgets do not
+                                               // constrain this account (0.3% used), so the ceiling has to be ours.
+export const REINTRO_PROTECT_DAYS = 14;        // no automatic bid CUT inside the 14-day attribution window — the
+                                               // cut is what walked these words to the floor. The $4 kill still applies.
+
 
 // Bid ladder (William 2026-08-05, revised same day). A reintroduced keyword enters LOW and gains
 // $0.10 EVERY DAY it fails to spend, until it either spends or reaches the $0.85 ceiling.
@@ -172,6 +180,16 @@ export interface ReintroCandidate {
   histSpend: number;
   histSales: number;
   histOrders: number;
+  /** Lifetime ROAS from our own `kw_lifetime` table, spanning years rather than Amazon's 95-day
+   *  window. null when the word has no lifetime record. William 2026-08-06: promote best ROAS first. */
+  lifetimeRoas?: number | null;
+  /** Lifetime spend behind that ROAS, $. Used to break ties toward the better-evidenced word. */
+  lifetimeSpend?: number;
+  /** Lifetime sales, $. The ranking key among lifetime winners: they are all profitable by
+   *  definition, so prefer the one that has actually produced the most money. */
+  lifetimeSales?: number;
+  /** Lifetime orders. The evidence bar — a 79x ROAS built on one order and $0.25 of spend is noise. */
+  lifetimeOrders?: number;
 }
 
 /** Live throttle state, measured fresh each run — never trusted from a cache. */
@@ -182,10 +200,23 @@ export interface ReintroState {
   inTrial: number;
   /** Month-to-date spend by the whole reintroduced cohort, $. Reported for visibility; NOT a gate. */
   cohortMonthSpend: number;
+  /** Today's spend by the cohort, $. THIS is the gate — the circuit breaker reads it every run. */
+  cohortSpendToday?: number;
 }
 
 export interface ReintroOpts {
   perDay?: number;
+  /** Cap for a SINGLE run. With a 6-hourly cron this is what sets the real pace. */
+  perRun?: number;
+  /** Halt promotions once the cohort has spent this much today. */
+  cohortDailyCap?: number;
+  /** A word whose LIFETIME ROAS clears this comes back even if the recent window looks bad, because
+   *  the recent window is exactly what the monthly rules broke. William 2026-08-05: "if they
+   *  previously over lifetime were above a 2x roas ... these are the keywords that need to reset". */
+  lifetimeRoasMin?: number;
+  /** Minimum lifetime orders before a lifetime ROAS is treated as evidence at all. Without this the
+   *  ranking is led by words with one order on a quarter of a dollar. */
+  lifetimeMinOrders?: number;
   /** Permanently dead keywords (deadKey() values). Never reintroduced, whatever the report window says. */
   deadKeys?: Set<string>;
   /** Optional ceiling on concurrent UNPROVEN keywords. Unset by William's choice — 10/day is the
@@ -196,21 +227,24 @@ export interface ReintroOpts {
   floor?: number;
 }
 
-export interface ReintroPick { keywordId: string; keywordText: string; matchType: string; fromBid: number; toBid: number; reason: "proven" | "untested" }
+export interface ReintroPick { keywordId: string; keywordText: string; matchType: string; fromBid: number; toBid: number; reason: "lifetime" | "proven" | "untested" }
 
 export interface ReintroPlan {
   promote: ReintroPick[];
   /** Why the batch stopped, when it stopped early. */
-  blockedBy: ("perDay" | "maxInTrial")[];
+  blockedBy: ("perDay" | "perRun" | "maxInTrial" | "dailyCap")[];
   eligible: number;
 }
 
 /**
  * Pure selector for Rule 4. Picks which floored keywords to switch on THIS run.
  *
- * Eligibility (William 2026-08-02): the keyword never spent, OR it spent at ACOS < 50%.
- * Ordering: proven performers first (converted, lowest ACOS first), then never-spent ones, so the
- * limited number of trial slots goes to the strongest evidence available.
+ * Eligibility (William 2026-08-02): the keyword never spent, OR it spent at ACOS < 50%, OR its
+ * LIFETIME ROAS clears 2x (William 2026-08-05). The lifetime path matters because Amazon's window is
+ * only 95 days and the monthly kill/bid rules are what drove these words to the floor in the first
+ * place, so recent history is evidence of our own mistake rather than of the keyword.
+ * Ordering: lifetime winners first (best ROAS first), then window-proven (lowest ACOS first), then
+ * never-spent, so the limited number of trial slots goes to the strongest evidence available.
  * Throttle: the per-day count, and by William's choice that is the only one. No total spend cap
  * (a keyword making money spends freely) and no concurrent-in-trial ceiling unless opts sets one.
  */
@@ -224,54 +258,103 @@ export function selectReintroductions(
   const maxAcos = opts.maxAcos ?? REINTRO_MAX_ACOS;
   const startBid = opts.startBid ?? REINTRO_START_BID;
   const floor = opts.floor ?? BID_FLOOR;
+  const roasMin = opts.lifetimeRoasMin ?? REINTRO_LIFETIME_ROAS_MIN;
+  const minOrders = opts.lifetimeMinOrders ?? REINTRO_LIFETIME_MIN_ORDERS;
 
-  const blocked = new Set<"perDay" | "maxInTrial">();
+  const perRun = opts.perRun ?? REINTRO_PER_RUN;
+  const dailyCap = opts.cohortDailyCap ?? REINTRO_COHORT_DAILY_CAP;
+
+  const blocked = new Set<"perDay" | "perRun" | "maxInTrial" | "dailyCap">();
 
   // Hard stops that apply before we look at any candidate.
   if (state.inTrial >= maxInTrial) blocked.add("maxInTrial");
   if (state.introducedToday >= perDay) blocked.add("perDay");
+  // The circuit breaker. Amazon's daily budgets are not a control on this account — $745/day is
+  // authorised against ~$2.50/day of real spend — so the only ceiling is the one we enforce.
+  if ((state.cohortSpendToday ?? 0) >= dailyCap) blocked.add("dailyCap");
 
   const dead = opts.deadKeys ?? new Set<string>();
 
-  const eligible: (ReintroCandidate & { acos: number | null })[] = [];
+  const eligible: (ReintroCandidate & { acos: number | null; tier: 0 | 1 | 2 })[] = [];
   for (const c of candidates) {
     if (dead.has(deadKey(c.keywordText, c.matchType))) continue;  // tombstoned, never resurrect
     if (c.bid > floor) continue;                       // only rescue keywords stuck AT the floor
     const acos = c.histOrders > 0 && c.histSales > 0 ? c.histSpend / c.histSales : null;
-    if (c.histSpend > 0) {
-      // Spent before: it must have earned its way back.
+    const lroas = c.lifetimeRoas ?? null;
+    // Both bars must clear: profitable AND actually evidenced. A word at 79x on $0.25 and one order
+    // outranks a word at 24x on $9.81 and ten orders if you sort on the ratio alone, and the second
+    // one is the real asset.
+    const lifetimeProven = lroas !== null && lroas >= roasMin && (c.lifetimeOrders ?? 0) >= minOrders;
+    if (!lifetimeProven && c.histSpend > 0) {
+      // Spent inside the window with no lifetime record to vouch for it: it must have earned its
+      // way back on the window alone.
       if (acos === null || acos >= maxAcos) continue;
     }
-    eligible.push({ ...c, acos });
+    eligible.push({ ...c, acos, tier: lifetimeProven ? 0 : acos !== null ? 1 : 2 });
   }
 
-  // Proven first (lowest ACOS wins), then never-spent. Stable within group by keywordId so the
-  // same run order is reproducible.
+  // Tier 0: lifetime winners, best ROAS first — years of evidence beats a 95-day window, and the
+  // window is what the monthly rules corrupted. Tier 1: proven inside the window, lowest ACOS first.
+  // Tier 2: never spent. Stable within each group so the same run order is reproducible.
   eligible.sort((a, b) => {
-    const ap = a.acos !== null ? 0 : 1, bp = b.acos !== null ? 0 : 1;
-    if (ap !== bp) return ap - bp;
-    if (ap === 0) return (a.acos as number) - (b.acos as number);
+    if (a.tier !== b.tier) return a.tier - b.tier;
+    if (a.tier === 0) {
+      // Every tier-0 word is already profitable, so rank by the money it has produced, not by the
+      // ratio. Ratio decides eligibility; volume decides priority.
+      const sd = (b.lifetimeSales ?? 0) - (a.lifetimeSales ?? 0);
+      if (Math.abs(sd) > 1e-9) return sd;
+      const d = (b.lifetimeRoas as number) - (a.lifetimeRoas as number);
+      if (Math.abs(d) > 1e-9) return d;
+    }
+    if (a.tier === 1) return (a.acos as number) - (b.acos as number);
     return a.keywordId.localeCompare(b.keywordId);
   });
 
   const promote: ReintroPick[] = [];
+  // 25% of the account is duplicate records of the same text+match (2026-08-04). Promoting three
+  // copies of one word burns three of the ten daily slots and makes the copies bid against each
+  // other, so only one copy of a word travels per run.
+  const takenWords = new Set<string>();
   let today = state.introducedToday, trial = state.inTrial;
+  if (blocked.has("dailyCap")) return { promote, blockedBy: [...blocked], eligible: eligible.length };
   for (const c of eligible) {
+    if (promote.length >= perRun) { blocked.add("perRun"); break; }
     if (today >= perDay) { blocked.add("perDay"); break; }
     if (trial >= maxInTrial) { blocked.add("maxInTrial"); break; }
+    const wk = deadKey(c.keywordText, c.matchType);
+    if (takenWords.has(wk)) continue;
+    takenWords.add(wk);
     promote.push({
       keywordId: c.keywordId,
       keywordText: c.keywordText,
       matchType: c.matchType,
       fromBid: c.bid,
       toBid: round2(clamp(startBid, floor, BID_CAP)),
-      reason: c.acos !== null ? "proven" : "untested",
+      reason: c.tier === 0 ? "lifetime" : c.tier === 1 ? "proven" : "untested",
     });
     today++; trial++;
   }
   return { promote, blockedBy: [...blocked], eligible: eligible.length };
 }
 
+
+/**
+ * Is a reintroduced keyword still inside its protection window?
+ *
+ * Sales are attributed over 14 days, so a word promoted on Monday cannot be fairly judged until the
+ * Monday after next. The ±10% cut at the 52% pivot judges month-to-date, sees zero orders because
+ * the orders have not been attributed yet, and cuts. Repeat that four times a day and the word is
+ * back at the floor inside a week — which is exactly the history in ad_engine_log for
+ * `phone tethered`: 0.49 -> 0.94 -> 0.35 over six days.
+ *
+ * Protection suppresses the CUT only. The $4 kill still applies at full force, so a word that
+ * genuinely does not work still stops costing money.
+ */
+export function isProtected(promotedAt: string, now: number, days = REINTRO_PROTECT_DAYS): boolean {
+  const t = Date.parse(promotedAt);
+  if (!Number.isFinite(t)) return false;
+  return now - t < days * 864e5;
+}
 
 // ---------------------------------------------------------------------------
 // Bid ladder (Rule 5, William 2026-08-05)
