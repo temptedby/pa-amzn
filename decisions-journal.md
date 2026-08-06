@@ -663,3 +663,51 @@ To be precise about today's live ad changes (no overstating):
 - **Trade-offs accepted** — The compatibility table is published with `[__ oz]` placeholders rather than a guessed number, because guessing 170 g would have restricted BLACK to eight phone models and pushed customers toward PRO, of which we hold 545 against 1,500 BLACK. Getting that number wrong in the conservative direction is commercially worse than waiting a day. I also declined to bypass the chassis HTTP allowlist to reach fal.run, accepting that AI generation stays unavailable until William allowlists it, because routing around a safety control he installed is not mine to decide. And the testimonial storyboard deliberately leaves the strongest review in the dataset unscripted, because it names a child's medical condition and needs that customer's permission.
 
 - **Status / revisit** — The commercial frame has changed: the goal is now to sell through ~2,000 units and wind down, with a checkpoint at 1,000 remaining. Two payment blockers are open at once and outrank all creative work: a rejected tax interview signature and a failing bank deposit verification on the account ending 384. Four things block the creative: the weight rating, the cord material claim, a tether-tab decision, and the fact that **we own no photograph of the clip worn under clothing**, which is our single best differentiator and the one thing no competitor can copy. Correction carried into the repo: inventory is ~2,000 units per Megan, not the zeros the `inventory` table reports, and the defect rise is explained by heavier phones rather than a supplier change.
+
+## 2026-08-05 — judge keywords on lifetime, not on a month
+
+**Context.** Reported August ad spend as $5.99; William said it was over $50 and was right. The
+figure was Sponsored Products on one profile, with a silently failed Sponsored Display report and
+Sponsored Brands never queried. Chasing that error opened the real question: why has an account with
+444 individually profitable keywords never been profitable in aggregate? Lifetime is $100,053 spent
+against $171,744 in sales, 1.72x, where break-even is 1.92x.
+
+**Options considered.** (1) Raise the ACOS target so fewer keywords get cut — rejected, it loses
+money faster on a portfolio already below break-even. (2) Dedupe the account first — investigated
+and rejected as the primary cause; per-keyword-ID data showed single IDs spending $17 on their own,
+so duplicates compound the problem but did not create it. (3) Turn all 151 paused winners back on at
+once — rejected as unbounded exposure with confounded learning. (4) Lift bids on already-enabled
+winners first, then reactivate in waves — chosen. (5) Build Amazon Marketing Stream or pursue
+Marketing Cloud for longer history — rejected as months of work for a business being wound down.
+
+**Decision.** Build our own keyword history outside Amazon (`kw_daily`, `kw_lifetime`,
+`campaign_lifetime`, `ad_entity_lifetime`, `kw_state_snapshot`), gate every future bid and kill
+decision on lifetime evidence rather than a monthly window, and roll the fix out in three
+comparable waves of 26 keywords bid 10% below Amazon's suggested low.
+
+**Reasoning.** The kill rule pauses at $4 month-to-date when unprofitable and the bid rule cuts 10%
+whenever month-to-date ACOS is at or above the 52% pivot. A keyword converting once a quarter shows
+zero orders in most months, so it is cut repeatedly, compounds to the $0.10 floor, and is eventually
+paused — while its lifetime record is 2x to 4x. That is exactly what we found: 135 paused winners at
+2.34x, 16 archived at 3.95x (the best in the account), and 1,847 of 2,281 enabled keywords sitting
+at or below $0.11. The window, not the thresholds, is the defect.
+
+**Industry source.** Amazon's reporting API states its own retention boundary in the error body
+("data retention start date (2026-05-02)"), 95 days, and offers Marketing Stream as the push-based
+route for anything longer — confirming the reporting API is not intended to serve history. The
+standard response to a vendor window is extract-before-expiry: snapshot forward continuously, since
+expired data cannot be re-fetched. Reactivation practice is cohorts with a held-back control and a
+full attribution window before judging, which matters here because sales are 14-day attributed.
+
+**Trade-offs accepted.** Lifetime before 2026-05-02 exists only in console exports and must be
+pulled by hand; 65% of Sponsored Products is captured so far. Waves learn more slowly than a single
+switch-on, accepted to bound downside on an account below break-even. Sponsored Brands can be
+controlled but not measured until Amazon's report queue unsticks, so it gets a spend cap rather than
+the full rule. The $0.85 escalation path is coded but Telegram is unconfigured in production, so it
+would compute correctly and deliver nothing.
+
+**Status.** Rules written and tested (174 passing). Database built and backfilled; July validates to
+$82.09 against an independent pull. Rollback snapshot of all 3,458 keyword bids and states stored at
+`as_of='2026-08-05'`. Nothing applied to the account. Wave one is blocked on two fixes: assigning
+waves by word so duplicate copies move together, and protecting the cohort from the automated bid
+cut that would otherwise reverse the test within days.

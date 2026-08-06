@@ -55,7 +55,17 @@ export const KEYWORD_MAX_WORDS = 10;
 // visible, and `maxInTrial` remains an optional opts field if a ceiling is ever wanted.
 export const REINTRO_PER_DAY = 10;
 export const REINTRO_MAX_ACOS = 0.50;   // William: eligible if never spent, or spent at ACOS < 50%
-export const REINTRO_START_BID = 0.50;  // $0.10 wins nothing; July SP CPC was $0.59
+export const REINTRO_START_BID = 0.25;  // William 2026-08-05: enter LOW, climb only if it fails to spend
+
+// Bid ladder (William 2026-08-05, revised same day). A reintroduced keyword enters LOW and gains
+// $0.10 EVERY DAY it fails to spend, until it either spends or reaches the $0.85 ceiling.
+// William: "keep raising the spend $.10 a day until the keyword spends max of $.85".
+// Rationale: a keyword that is not spending is not risking anything, so raising it costs nothing
+// and is the only way to find the bid that actually wins an auction. This supersedes the earlier
+// 3-days-per-rung / $0.50-top version from the same conversation.
+export const BID_LADDER_STEP = 0.10;   // added per day of zero spend
+export const BID_LADDER_MAX = 0.85;    // ceiling; never climbs past this on non-spend alone
+export const LADDER_STEP_DAYS = 1;     // one day at a rung earns the next
 
 export interface Perf {
   spend: number;   // month-to-date cost, $
@@ -176,6 +186,8 @@ export interface ReintroState {
 
 export interface ReintroOpts {
   perDay?: number;
+  /** Permanently dead keywords (deadKey() values). Never reintroduced, whatever the report window says. */
+  deadKeys?: Set<string>;
   /** Optional ceiling on concurrent UNPROVEN keywords. Unset by William's choice — 10/day is the
    *  only gate. Left available so a ceiling can be reinstated without a code change. */
   maxInTrial?: number;
@@ -219,8 +231,11 @@ export function selectReintroductions(
   if (state.inTrial >= maxInTrial) blocked.add("maxInTrial");
   if (state.introducedToday >= perDay) blocked.add("perDay");
 
+  const dead = opts.deadKeys ?? new Set<string>();
+
   const eligible: (ReintroCandidate & { acos: number | null })[] = [];
   for (const c of candidates) {
+    if (dead.has(deadKey(c.keywordText, c.matchType))) continue;  // tombstoned, never resurrect
     if (c.bid > floor) continue;                       // only rescue keywords stuck AT the floor
     const acos = c.histOrders > 0 && c.histSales > 0 ? c.histSpend / c.histSales : null;
     if (c.histSpend > 0) {
@@ -255,4 +270,140 @@ export function selectReintroductions(
     today++; trial++;
   }
   return { promote, blockedBy: [...blocked], eligible: eligible.length };
+}
+
+
+// ---------------------------------------------------------------------------
+// Bid ladder (Rule 5, William 2026-08-05)
+// ---------------------------------------------------------------------------
+
+export interface LadderState {
+  /** Current bid, $. */
+  bid: number;
+  /** Spend accumulated since this keyword last had its bid changed, $. */
+  spendSinceStep: number;
+  /** Whole days since this keyword last had its bid changed. */
+  daysSinceStep: number;
+}
+
+/**
+ * Next bid for a reintroduced keyword that is failing to spend: current + $0.10 per day of zero
+ * spend, capped at $0.85. Returns null when no change is due, so callers skip the write entirely.
+ *
+ * A keyword that HAS spent is deliberately left alone: it is generating data now, so the normal
+ * ACOS rule in nextBid() owns it and the $4 kill rule bounds its downside. The ladder exists only
+ * to rescue keywords that are enabled but priced too low to win anything.
+ */
+export function nextLadderBid(
+  s: LadderState,
+  opts: { stepDays?: number; step?: number; max?: number } = {},
+): number | null {
+  const stepDays = opts.stepDays ?? LADDER_STEP_DAYS;
+  const step = opts.step ?? BID_LADDER_STEP;
+  const max = opts.max ?? BID_LADDER_MAX;
+  if (s.spendSinceStep > 0) return null;        // it spent, the bid is working, hands off
+  if (s.daysSinceStep < stepDays) return null;  // not waited long enough
+  if (s.bid >= max - 0.005) return null;        // already at the ceiling
+  return round2(Math.min(s.bid + step, max));
+}
+
+/**
+ * Ladder verdict including the approval gate at the ceiling (William 2026-08-05).
+ *
+ * A keyword that has climbed all the way to $0.85 and STILL will not spend is telling us something
+ * the rules cannot decide alone: the word may be worth more than our ceiling, or it may be dead.
+ * Rather than silently parking it forever, the engine asks. "escalate" means notify William via
+ * Telegram and wait for a human answer; it never raises the bid on its own.
+ */
+export type LadderVerdict =
+  | { action: "raise"; bid: number }
+  | { action: "escalate"; bid: number }   // at the ceiling, still not spending: ask William
+  | { action: "hold" };
+
+export function ladderVerdict(
+  s: LadderState,
+  opts: { stepDays?: number; step?: number; max?: number } = {},
+): LadderVerdict {
+  const stepDays = opts.stepDays ?? LADDER_STEP_DAYS;
+  const max = opts.max ?? BID_LADDER_MAX;
+  if (s.spendSinceStep > 0) return { action: "hold" };        // spending, the ACOS rule owns it
+  if (s.daysSinceStep < stepDays) return { action: "hold" };  // still waiting out the day
+  if (s.bid >= max - 0.005) return { action: "escalate", bid: s.bid };
+  const next = nextLadderBid(s, opts);
+  return next === null ? { action: "hold" } : { action: "raise", bid: next };
+}
+
+// ---------------------------------------------------------------------------
+// Permanent kill list (Rule 6, William 2026-08-05)
+// "if spent $4 and have no history we kill the word not to use anymore"
+// ---------------------------------------------------------------------------
+
+/**
+ * A keyword that burned the full $4 of rope and NEVER converted is dead for good, not just for the
+ * month. Recording that permanently is not optional bookkeeping: Amazon only serves ~65-95 days of
+ * report history, so a keyword killed in June reads as "never spent" by September, becomes eligible
+ * for reintroduction again, and burns another $4. The tombstone is what breaks that cycle.
+ *
+ * Note the asymmetry with shouldKill(): that pauses for the month at $4 when unprofitable, which
+ * includes keywords that DID convert but at a bad ACOS. Those can recover and come back on the 1st.
+ * This is narrower and harsher: $4 spent, zero orders, no evidence it can ever convert.
+ */
+export function isPermanentlyDead(p: Perf, killSpend = KILL_SPEND): boolean {
+  return p.spend >= killSpend && p.orders === 0;
+}
+
+/** Stable identity for the kill list. Text is lowercased/collapsed so casing cannot resurrect a word. */
+export function deadKey(keywordText: string, matchType: string): string {
+  return `${(keywordText || "").trim().toLowerCase().replace(/\s+/g, " ")}|${(matchType || "").toUpperCase()}`;
+}
+
+/** One calendar month of performance for a single keyword. `month` is "YYYY-MM". */
+export interface MonthPerf { month: string; spend: number; orders: number; sales: number }
+
+/** Months required in a row before a former winner is retired for good. */
+export const RETIRE_CONSECUTIVE_MONTHS = 3;
+
+/**
+ * Retire a keyword permanently after N consecutive months of burning the full $4 with no
+ * conversion, regardless of how well it once performed (William 2026-08-05:
+ * "if a word has 3 consecutive months of $4 spend no conversion even if in the past was good
+ * then cut the word").
+ *
+ * This is the counterpart to isPermanentlyDead(): that one retires a word that never proved
+ * itself, this one retires a word whose proof has gone stale. A past winner earns three months of
+ * patience, not indefinite patience.
+ *
+ * NOTE: Amazon serves only 95 days of report history (verified 2026-08-05 against the API's own
+ * "data retention start date" error), which is barely 3 months and shrinks below it the moment a
+ * 4th month exists. So this rule REQUIRES locally stored monthly history; it cannot be evaluated
+ * from the live API alone.
+ */
+export function shouldRetirePermanently(
+  history: MonthPerf[],
+  opts: { months?: number; killSpend?: number } = {},
+): boolean {
+  const need = opts.months ?? RETIRE_CONSECUTIVE_MONTHS;
+  const killSpend = opts.killSpend ?? KILL_SPEND;
+  if (need <= 0) return false;
+  // Chronological, so "consecutive" means consecutive in calendar order, not insertion order.
+  const sorted = [...history].sort((a, b) => a.month.localeCompare(b.month));
+  let run = 0;
+  let prev: string | null = null;
+  for (const m of sorted) {
+    const failed = m.spend >= killSpend && m.orders === 0;
+    // A gap in the calendar breaks the run: we cannot claim months we have no data for.
+    const adjacent = prev === null || isNextMonth(prev, m.month);
+    run = failed ? (adjacent ? run + 1 : 1) : 0;
+    if (run >= need) return true;
+    prev = m.month;
+  }
+  return false;
+}
+
+/** True when `b` is the calendar month immediately following `a`. Both "YYYY-MM". */
+export function isNextMonth(a: string, b: string): boolean {
+  const [ay, am] = a.split("-").map(Number);
+  const [by, bm] = b.split("-").map(Number);
+  if (!ay || !am || !by || !bm) return false;
+  return by * 12 + bm === ay * 12 + am + 1;
 }

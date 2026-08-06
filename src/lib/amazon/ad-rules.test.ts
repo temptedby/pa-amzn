@@ -3,6 +3,8 @@ import {
   shouldKill, nextBid, decide, acosOf, ACOS_PIVOT,
   isValidKeywordText, shortenToValidKeyword, KEYWORD_MAX_CHARS, KEYWORD_MAX_WORDS,
   selectReintroductions, REINTRO_PER_DAY, KILL_SPEND,
+  nextLadderBid, ladderVerdict, REINTRO_START_BID, BID_LADDER_MAX, BID_LADDER_STEP,
+  isPermanentlyDead, deadKey, shouldRetirePermanently, isNextMonth, type MonthPerf,
   type ReintroCandidate, type ReintroState,
 } from "./ad-rules";
 
@@ -220,5 +222,126 @@ describe("selectReintroductions", () => {
     const cands = Array.from({ length: 50 }, (_, i) => cand({ keywordId: String(i).padStart(3, "0") }));
     expect(selectReintroductions(cands, { ...fresh, inTrial: 40 }, { maxInTrial: 40 }).promote).toHaveLength(0);
     expect(selectReintroductions(cands, { ...fresh, inTrial: 30 }, { maxInTrial: 40 }).promote).toHaveLength(10);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bid ladder (William 2026-08-05): enter at $0.25, +$0.10 per day of ZERO spend, ceiling $0.85.
+// "keep raising the spend $.10 a day until the keyword spends max of $.85"
+// ---------------------------------------------------------------------------
+
+describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
+  it("enters at the low end, not $0.50", () => {
+    expect(REINTRO_START_BID).toBe(0.25);
+  });
+  it("steps $0.25 -> $0.35 after a full day of zero spend", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.35);
+  });
+  it("holds when the day is not yet complete", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 0 })).toBeNull();
+  });
+  it("holds the moment the keyword spends anything, however small", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0.01, daysSinceStep: 9 })).toBeNull();
+  });
+  it("stops at the $0.85 ceiling instead of overshooting", () => {
+    expect(nextLadderBid({ bid: 0.75, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.85);
+    expect(nextLadderBid({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 30 })).toBeNull();
+  });
+  it("climbs 0.25 to 0.85 in exactly six daily steps", () => {
+    const seen: number[] = [];
+    let bid = REINTRO_START_BID;
+    for (let d = 0; d < 20; d++) {
+      const next = nextLadderBid({ bid, spendSinceStep: 0, daysSinceStep: 1 });
+      if (next === null) break;
+      bid = next; seen.push(next);
+    }
+    expect(seen).toEqual([0.35, 0.45, 0.55, 0.65, 0.75, 0.85]);
+  });
+  it("never exceeds the ceiling even with an absurd wait", () => {
+    expect(nextLadderBid({ bid: 0.8, spendSinceStep: 0, daysSinceStep: 365 })).toBe(0.85);
+  });
+});
+
+describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
+  it("raises while below the ceiling", () => {
+    expect(ladderVerdict({ bid: 0.45, spendSinceStep: 0, daysSinceStep: 1 }))
+      .toEqual({ action: "raise", bid: 0.55 });
+  });
+  it("escalates at the ceiling when it still will not spend", () => {
+    expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 }))
+      .toEqual({ action: "escalate", bid: 0.85 });
+  });
+  it("NEVER raises past the ceiling on its own", () => {
+    const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 99 });
+    expect(v.action).toBe("escalate");
+    expect("bid" in v ? v.bid : 0).toBeLessThanOrEqual(BID_LADDER_MAX);
+  });
+  it("holds at the ceiling once it starts spending, no notification", () => {
+    expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0.4, daysSinceStep: 5 }))
+      .toEqual({ action: "hold" });
+  });
+  it("does not escalate before the waiting period elapses", () => {
+    expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 0 }))
+      .toEqual({ action: "hold" });
+  });
+});
+
+describe("permanent kill list — $4 spent with zero orders is dead for good", () => {
+  it("tombstones $4 spent with no orders", () => {
+    expect(isPermanentlyDead({ spend: 4, orders: 0, sales: 0 })).toBe(true);
+  });
+  it("does NOT tombstone a converter with a bad ACOS (it can recover on the 1st)", () => {
+    expect(isPermanentlyDead({ spend: 10, orders: 1, sales: 5 })).toBe(false);
+  });
+  it("does NOT tombstone below the $4 bar", () => {
+    expect(isPermanentlyDead({ spend: 3.99, orders: 0, sales: 0 })).toBe(false);
+  });
+  it("deadKey ignores casing and whitespace so a word cannot sneak back", () => {
+    expect(deadKey("  Phone   Tether ", "exact")).toBe(deadKey("phone tether", "EXACT"));
+  });
+  it("treats different match types as different words", () => {
+    expect(deadKey("phone tether", "EXACT")).not.toBe(deadKey("phone tether", "PHRASE"));
+  });
+  it("reintroduction skips a tombstoned keyword even when its history has aged out", () => {
+    const agedOut: ReintroCandidate = {
+      keywordId: "k1", keywordText: "Phone Tether", matchType: "EXACT",
+      bid: 0.10, histSpend: 0, histSales: 0, histOrders: 0,   // looks never-spent: window rolled off
+    };
+    const state: ReintroState = { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 };
+    expect(selectReintroductions([agedOut], state).promote).toHaveLength(1);
+    const dead = new Set([deadKey("phone tether", "EXACT")]);
+    expect(selectReintroductions([agedOut], state, { deadKeys: dead }).promote).toHaveLength(0);
+  });
+});
+
+describe("shouldRetirePermanently — 3 consecutive dead months cuts a former winner", () => {
+  const dead = (month: string): MonthPerf => ({ month, spend: 4.5, orders: 0, sales: 0 });
+  const won = (month: string): MonthPerf => ({ month, spend: 10, orders: 4, sales: 40 });
+
+  it("retires after 3 consecutive dead months", () => {
+    expect(shouldRetirePermanently([dead("2026-05"), dead("2026-06"), dead("2026-07")])).toBe(true);
+  });
+  it("retires a proven past winner once it goes 3 months dead", () => {
+    expect(shouldRetirePermanently([won("2026-04"), dead("2026-05"), dead("2026-06"), dead("2026-07")])).toBe(true);
+  });
+  it("does not retire on 2 dead months", () => {
+    expect(shouldRetirePermanently([dead("2026-06"), dead("2026-07")])).toBe(false);
+  });
+  it("a single conversion resets the run", () => {
+    expect(shouldRetirePermanently([dead("2026-04"), dead("2026-05"), won("2026-06"), dead("2026-07")])).toBe(false);
+  });
+  it("does not count months that spent less than $4 as dead", () => {
+    expect(shouldRetirePermanently([dead("2026-05"), { month: "2026-06", spend: 1, orders: 0, sales: 0 }, dead("2026-07")])).toBe(false);
+  });
+  it("a calendar gap breaks the run — we cannot claim months we have no data for", () => {
+    expect(shouldRetirePermanently([dead("2026-01"), dead("2026-02"), dead("2026-07")])).toBe(false);
+  });
+  it("handles out-of-order input by sorting chronologically", () => {
+    expect(shouldRetirePermanently([dead("2026-07"), dead("2026-05"), dead("2026-06")])).toBe(true);
+  });
+  it("spans a year boundary correctly", () => {
+    expect(shouldRetirePermanently([dead("2025-11"), dead("2025-12"), dead("2026-01")])).toBe(true);
+    expect(isNextMonth("2025-12", "2026-01")).toBe(true);
+    expect(isNextMonth("2025-12", "2026-02")).toBe(false);
   });
 });
