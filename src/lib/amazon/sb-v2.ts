@@ -176,3 +176,88 @@ export function daysBetween(from: string, to: string): string[] {
 
 /** Sponsored Brands report retention, measured from the API's own error body on 2026-08-06. */
 export const SB_RETENTION_START = "2026-06-07";
+
+// ---------------------------------------------------------------------------
+// Entity reads + writes (v3 shapes, but the campaigns are legacy so the ids are
+// the same oversized integers the v2 reports return).
+// ---------------------------------------------------------------------------
+
+const KW_READ_ACCEPT  = "application/vnd.sbkeyword.v3+json";
+const KW_WRITE_ACCEPT = "application/vnd.sbkeywordresponse.v3+json";
+const CAMPAIGN_CT     = "application/vnd.sbcampaignresource.v4+json";
+
+export interface SbKeyword {
+  keywordId: string; adGroupId: string; campaignId: string;
+  keywordText: string; matchType: string; state: string; bid: number | null;
+}
+export interface SbCampaign { campaignId: string; name: string; state: string }
+
+/** Ids here also exceed 2^53 (a bid of $1.12 read back under a keywordId ending 998143 came back as
+ *  ...998140 through JSON.parse), so every id is lifted out of the raw body as a string. */
+export async function fetchSbKeywords(cfg: AdsConfig, token: string): Promise<SbKeyword[]> {
+  const res = await fetch(`${A}/sb/keywords`, {
+    headers: { ...headers(cfg, token), Accept: KW_READ_ACCEPT },
+  });
+  const text = await res.text();
+  if (!res.ok) throw new Error(`GET /sb/keywords ${res.status}: ${text.slice(0, 200)}`);
+  const rows = parsePreservingIds(text, ["keywordId", "adGroupId", "campaignId"]);
+  return rows.map((r) => ({
+    keywordId: String(r.keywordId ?? ""),
+    adGroupId: String(r.adGroupId ?? ""),
+    campaignId: String(r.campaignId ?? ""),
+    keywordText: String(r.keywordText ?? ""),
+    matchType: String(r.matchType ?? "").toUpperCase(),
+    state: String(r.state ?? "").toUpperCase(),
+    bid: r.bid == null ? null : Number(r.bid),
+  }));
+}
+
+/** A keyword inside a non-ENABLED campaign cannot be written at all: the PUT returns 207
+ *  KEYWORD_COULD_NOT_CREATE_KEYWORD and silently changes nothing (proved live 2026-08-06). */
+export async function fetchSbCampaigns(cfg: AdsConfig, token: string): Promise<Map<string, SbCampaign>> {
+  const res = await fetch(`${A}/sb/v4/campaigns/list`, {
+    method: "POST",
+    headers: { ...headers(cfg, token), "Content-Type": CAMPAIGN_CT, Accept: CAMPAIGN_CT },
+    body: JSON.stringify({ maxResults: 100 }),
+  });
+  const text = await res.text();
+  const out = new Map<string, SbCampaign>();
+  if (!res.ok) return out;
+  const list = (JSON.parse(text) as { campaigns?: Record<string, unknown>[] }).campaigns ?? [];
+  const ids = [...text.matchAll(/"campaignId"\s*:\s*"?(\d+)"?/g)].map((m) => m[1]);
+  list.forEach((c, i) => {
+    const id = ids[i] ?? String(c.campaignId);
+    out.set(id, { campaignId: id, name: String(c.name ?? ""), state: String(c.state ?? "").toUpperCase() });
+  });
+  return out;
+}
+
+export interface SbWriteResult { ok: boolean; status: number; succeeded: string[]; failed: { keywordId: string; code: string }[] }
+
+/** Write recipe, all four parts load-bearing (2026-08-06):
+ *    PUT /sb/keywords | Content-Type application/json | Accept ...sbkeywordresponse.v3+json
+ *    | BARE ARRAY body | adGroupId REQUIRED on every item.
+ *  Returns per-item outcomes: a 207 where every item failed is NOT a success, which is the bug that
+ *  let the same impossible Sponsored Products keyword be logged as applied 40 times. */
+export async function writeSbKeywords(
+  cfg: AdsConfig, token: string,
+  ops: { keywordId: string; adGroupId: string; state?: string; bid?: number }[],
+): Promise<SbWriteResult> {
+  if (!ops.length) return { ok: true, status: 200, succeeded: [], failed: [] };
+  const res = await fetch(`${A}/sb/keywords`, {
+    method: "PUT",
+    headers: { ...headers(cfg, token), Accept: KW_WRITE_ACCEPT },
+    body: JSON.stringify(ops),
+  });
+  const text = await res.text();
+  const succeeded: string[] = [], failed: { keywordId: string; code: string }[] = [];
+  try {
+    const rows = parsePreservingIds(text, ["keywordId"]) as { code?: string; keywordId?: string }[];
+    for (const r of rows) {
+      const code = String(r.code ?? "");
+      if (code === "SUCCESS") succeeded.push(String(r.keywordId));
+      else failed.push({ keywordId: String(r.keywordId ?? "?"), code: code || "UNKNOWN" });
+    }
+  } catch { /* unparseable body: fall through to the status-only verdict below */ }
+  return { ok: succeeded.length > 0 && failed.length === 0, status: res.status, succeeded, failed };
+}
