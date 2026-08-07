@@ -518,3 +518,140 @@ export function isNextMonth(a: string, b: string): boolean {
   if (!ay || !am || !by || !bm) return false;
   return by * 12 + bm === ay * 12 + am + 1;
 }
+
+// ---------------------------------------------------------------------------
+// Bid memory: cooldown + rollback (William 2026-08-07)
+//
+// "adjusting the bid strategy on keywords that are doing well ... and lowering the bid strategy for
+//  keywords that are not, but that are doing worse than they were doing before when we increased
+//  the bids."
+//
+// Until now the engine had NO memory. It read current ACOS, moved 10%, and forgot. Running every 6
+// hours that is four compounding moves a day with nothing ever checking whether a move worked:
+// `retractable phone holder belt clip` climbed $0.82 -> $1.45 in four days, and `phone tethered`
+// went 0.49 -> 0.94 -> 0.35 in six. Neither climb was ever evaluated.
+//
+// Two rules fix it, and the first matters more than the second:
+//
+//   COOLDOWN — a bid may not change again until its last change has had time to produce evidence.
+//   Without this, cause can never be attributed to effect, because the bid moved four more times
+//   while the first move was still being measured.
+//
+//   ROLLBACK — when a RAISE has had its evaluation window and the keyword got WORSE, put the bid
+//   back where it was. Not lower: back. The old bid is the only level with evidence behind it.
+//
+// Sales lag up to 14 days, so the evaluation window is deliberately long. A shorter one reads a
+// keyword whose orders simply have not been credited yet as a failure, which is the exact mistake
+// that walked these words to the floor.
+// ---------------------------------------------------------------------------
+
+/** Days a bid must hold before it may move again, and before a raise can be judged. */
+export const BID_COOLDOWN_DAYS = 7;
+/** How much worse ACOS must get before a raise is reversed. 1.25 = 25% worse, not noise. */
+export const ROLLBACK_WORSE_BY = 1.25;
+/** A verdict needs real traffic behind it; 2 clicks is not evidence either way. */
+export const ROLLBACK_MIN_CLICKS = 5;
+
+export interface BidChange {
+  /** When the change was applied. */
+  changedAt: string;
+  fromBid: number;
+  toBid: number;
+  /** ACOS over the window BEFORE the change; null when it had no sales then. */
+  acosBefore: number | null;
+}
+
+/** Performance accumulated SINCE a bid change — the evidence that change produced. */
+export interface SinceChange {
+  spend: number;
+  sales: number;
+  orders: number;
+  clicks: number;
+}
+
+/** Whole days between an ISO timestamp and now. */
+export function daysSince(iso: string, nowMs = Date.now()): number {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return Infinity;
+  return (nowMs - t) / 864e5;
+}
+
+/** True while a keyword's last bid change is still too fresh to judge or to overwrite. */
+export function inCooldown(last: BidChange | null | undefined, nowMs = Date.now(), days = BID_COOLDOWN_DAYS): boolean {
+  if (!last) return false;
+  return daysSince(last.changedAt, nowMs) < days;
+}
+
+export type RollbackVerdict =
+  | { action: "rollback"; bid: number; reason: string }
+  | { action: "keep"; reason: string };
+
+/**
+ * Judge a RAISE once its evaluation window has passed.
+ *
+ * Deliberately conservative: it only ever reverses a raise, never a cut, and it returns the exact
+ * previous bid rather than cutting further. Anything ambiguous keeps the current bid, because the
+ * cost of a wrong rollback is unlearning something that was working.
+ */
+export function judgeRaise(
+  last: BidChange,
+  since: SinceChange,
+  nowMs = Date.now(),
+  opts: { days?: number; worseBy?: number; minClicks?: number } = {},
+): RollbackVerdict {
+  const days = opts.days ?? BID_COOLDOWN_DAYS;
+  const worseBy = opts.worseBy ?? ROLLBACK_WORSE_BY;
+  const minClicks = opts.minClicks ?? ROLLBACK_MIN_CLICKS;
+
+  if (last.toBid <= last.fromBid) return { action: "keep", reason: "not a raise" };
+  if (daysSince(last.changedAt, nowMs) < days) return { action: "keep", reason: "still inside the evaluation window" };
+  if (since.clicks < minClicks) return { action: "keep", reason: `only ${since.clicks} clicks since the raise — not evidence` };
+
+  // Spent real money and bought nothing: the clearest failure there is.
+  if (since.spend >= KILL_SPEND && since.orders === 0) {
+    return { action: "rollback", bid: last.fromBid, reason: `$${since.spend.toFixed(2)} and no orders since the raise` };
+  }
+  if (since.sales <= 0) return { action: "keep", reason: "no sales yet, and under the $4 bar — leave it alone" };
+
+  const acosAfter = since.spend / since.sales;
+  if (last.acosBefore === null) {
+    // Nothing to compare against, so judge against break-even instead of against itself.
+    return acosAfter >= ACOS_PIVOT
+      ? { action: "rollback", bid: last.fromBid, reason: `${Math.round(acosAfter * 100)}% ACOS since the raise, past the ${Math.round(ACOS_PIVOT * 100)}% break-even` }
+      : { action: "keep", reason: `${Math.round(acosAfter * 100)}% ACOS since the raise — the raise is working` };
+  }
+  if (acosAfter >= last.acosBefore * worseBy) {
+    return {
+      action: "rollback", bid: last.fromBid,
+      reason: `ACOS went ${Math.round(last.acosBefore * 100)}% -> ${Math.round(acosAfter * 100)}% after raising $${last.fromBid} -> $${last.toBid}`,
+    };
+  }
+  return { action: "keep", reason: `ACOS ${Math.round(last.acosBefore * 100)}% -> ${Math.round(acosAfter * 100)}% — not worse` };
+}
+
+/**
+ * The whole bid decision for one keyword, memory included. Order matters:
+ *   1. inside cooldown            -> hold, so the last change can be measured
+ *   2. a matured raise that hurt  -> roll back to the bid that had evidence
+ *   3. otherwise                  -> the ordinary ±10% step at the ACOS pivot
+ */
+export function bidWithMemory(
+  currentBid: number,
+  p: Perf,
+  last: BidChange | null | undefined,
+  since: SinceChange | null | undefined,
+  nowMs = Date.now(),
+  opts: { step?: number; pivot?: number; floor?: number; cap?: number; days?: number } = {},
+): { bid: number | null; reason: string } {
+  if (last && since) {
+    const v = judgeRaise(last, since, nowMs, { days: opts.days });
+    if (v.action === "rollback") return { bid: round2(clamp(v.bid, opts.floor ?? BID_FLOOR, opts.cap ?? BID_CAP)), reason: v.reason };
+  }
+  if (inCooldown(last, nowMs, opts.days ?? BID_COOLDOWN_DAYS)) {
+    return { bid: null, reason: `held: last change was ${daysSince(last!.changedAt, nowMs).toFixed(1)}d ago, needs ${opts.days ?? BID_COOLDOWN_DAYS}d` };
+  }
+  const next = nextBid(currentBid, p, opts);
+  if (Math.abs(next - (currentBid || 0)) < 0.01) return { bid: null, reason: "no change due" };
+  const acos = acosOf(p);
+  return { bid: next, reason: acos === null ? "no ACOS signal" : `${Math.round(acos * 100)}% ACOS` };
+}

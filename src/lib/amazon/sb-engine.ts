@@ -9,10 +9,9 @@
 //
 // Three deliberate design choices:
 //
-//  1. IT KILLS THE WORD, NOT THE COPY. Sponsored Products holds up to 18 copies of one word, each
-//     under $4 while the word is far past it, which is exactly why the $4 rule never fired on
-//     `phone tether` ($5.55 logged as killed on 2026-08-07 while five copies stayed ENABLED).
-//     Spend is aggregated by (text, match type) and every ENABLED copy is paused together.
+//  1. EACH KEYWORD STANDS ON ITS OWN (William 2026-08-07). Spend is grouped by (text, match type)
+//     because that is the unit the v2 report reports on and the unit a bid belongs to; copies of
+//     the same text under a DIFFERENT match type are judged separately, never merged.
 //
 //  2. IT CACHES DAYS. v2 reports take one day per request and about a minute each, so a
 //     month-to-date pull is N minutes and will not fit in a cron. Each run ingests only today and

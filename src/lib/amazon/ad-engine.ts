@@ -3,6 +3,7 @@ import { db } from "@/lib/db/client";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
+  bidWithMemory, BID_COOLDOWN_DAYS, type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
@@ -68,8 +69,8 @@ export interface ReactivationResult {
 }
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
-  killed: { text: string; spend: number; matchType: string; copies: number; paused?: number }[];
-  bids: { text: string; from: number; to: number; acos: number }[];
+  killed: { text: string; spend: number; matchType: string; keywordId: string; applied?: boolean }[];
+  bids: { text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string }[];
   added: { text: string; matchType: string }[];
   /** Report-readiness lines. A pass with data still queued is normal, so it is a note, not an error. */
   notes: string[];
@@ -250,6 +251,80 @@ export function reactivationCandidates(
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Bid memory storage (William 2026-08-07).
+//
+// `kw_bid_history` is what the engine did. `kw_perf_snapshot` is what the account looked like when
+// it did it. Together they answer the only question that matters about a bid change: did it work?
+//
+// The snapshot stores MONTH-TO-DATE totals because that is what the report returns. Performance
+// SINCE a change is therefore (MTD now - MTD at the change), which is exact inside a month. A
+// change made in an earlier month has already had its month reset, so everything on the clock now
+// is "since" by definition.
+// ---------------------------------------------------------------------------
+async function ensureBidMemory(): Promise<void> {
+  await db().execute(`CREATE TABLE IF NOT EXISTS kw_bid_history (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, keyword_id TEXT NOT NULL, changed_at TEXT NOT NULL,
+    from_bid REAL NOT NULL, to_bid REAL NOT NULL, acos_before REAL, reason TEXT, ad_product TEXT)`);
+  await db().execute(`CREATE INDEX IF NOT EXISTS kw_bid_history_kw ON kw_bid_history (keyword_id, changed_at DESC)`);
+  await db().execute(`CREATE TABLE IF NOT EXISTS kw_perf_snapshot (
+    taken_at TEXT NOT NULL, keyword_id TEXT NOT NULL, month TEXT NOT NULL,
+    mtd_spend REAL DEFAULT 0, mtd_sales REAL DEFAULT 0, mtd_orders INTEGER DEFAULT 0, mtd_clicks INTEGER DEFAULT 0,
+    PRIMARY KEY (taken_at, keyword_id))`);
+  await db().execute(`CREATE INDEX IF NOT EXISTS kw_perf_snapshot_kw ON kw_perf_snapshot (keyword_id, taken_at DESC)`);
+}
+
+/** The most recent bid change per keyword. */
+async function lastBidChanges(): Promise<Map<string, BidChange>> {
+  const out = new Map<string, BidChange>();
+  try {
+    const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, acos_before FROM kw_bid_history
+      WHERE id IN (SELECT MAX(id) FROM kw_bid_history GROUP BY keyword_id)`);
+    for (const row of r.rows) {
+      out.set(String(row.keyword_id), {
+        changedAt: String(row.changed_at), fromBid: Number(row.from_bid), toBid: Number(row.to_bid),
+        acosBefore: row.acos_before == null ? null : Number(row.acos_before),
+      });
+    }
+  } catch { /* first run — no history yet */ }
+  return out;
+}
+
+/**
+ * Performance accumulated since each keyword's last bid change.
+ *
+ * `nowMtd` is this run's month-to-date per keyword. For a change made THIS month we subtract the
+ * snapshot taken closest to the change; for one made in an earlier month the month has already
+ * reset, so the whole current figure counts. Differences are floored at zero — a restated report
+ * (Amazon revises attribution for 14 days) must never produce negative spend.
+ */
+async function perfSinceChange(
+  changes: Map<string, BidChange>,
+  nowMtd: Map<string, SinceChange>,
+  month: string,
+): Promise<Map<string, SinceChange>> {
+  const out = new Map<string, SinceChange>();
+  for (const [kwId, ch] of changes) {
+    const now = nowMtd.get(kwId);
+    if (!now) continue;
+    if (ch.changedAt.slice(0, 7) !== month.slice(0, 7)) { out.set(kwId, now); continue; }
+    try {
+      const r = await db().execute({
+        sql: `SELECT mtd_spend s, mtd_sales sa, mtd_orders o, mtd_clicks c FROM kw_perf_snapshot
+               WHERE keyword_id = ? AND month = ? AND taken_at <= ? ORDER BY taken_at DESC LIMIT 1`,
+        args: [kwId, month, ch.changedAt],
+      });
+      const b = r.rows[0];
+      const base = b ? { spend: Number(b.s ?? 0), sales: Number(b.sa ?? 0), orders: Number(b.o ?? 0), clicks: Number(b.c ?? 0) } : { spend: 0, sales: 0, orders: 0, clicks: 0 };
+      out.set(kwId, {
+        spend: Math.max(0, now.spend - base.spend), sales: Math.max(0, now.sales - base.sales),
+        orders: Math.max(0, now.orders - base.orders), clicks: Math.max(0, now.clicks - base.clicks),
+      });
+    } catch { out.set(kwId, now); }
+  }
+  return out;
+}
+
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
@@ -288,63 +363,52 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   const nowMs = Date.now();
   let shielded = 0;
 
-  // THE $4 RULE IS EVALUATED PER WORD, NOT PER KEYWORD ID.
-  //
-  // This account holds up to 18 copies of the same word — `phone tether` exists 18 times, 5 of them
-  // ENABLED at $0.10 / $0.20 / $0.33 / $0.50 / $1.04. Judged per id, every copy sits under $4 while
-  // the word is far past it, so the rule never fires; and on the one occasion it did fire
-  // (2026-08-07, `phone tether` at $5.55) it paused a single copy and the word kept spending.
-  // Spend is therefore summed across every copy of (text, matchType), and when the word fails the
-  // rule EVERY enabled copy is paused together — including copies with no rows in this report,
-  // which are exactly the ones that would otherwise inherit the traffic.
-  const wordPerf = new Map<string, Perf & { text: string; match: string }>();
+  // Bid memory: what we last did to each keyword, and what happened since.
+  await ensureBidMemory();
+  const month = sd.slice(0, 7);
+  const nowMtd = new Map<string, SinceChange>();
   for (const r of kt) {
-    const k = byId.get(String(r.keywordId)); if (!k) continue;
-    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
-    const w = wordPerf.get(key) ?? { text: k.keywordText, match: k.matchType, spend: 0, orders: 0, sales: 0 };
-    w.spend += r.cost ?? 0; w.orders += r.purchases14d ?? 0; w.sales += r.sales14d ?? 0;
-    wordPerf.set(key, w);
+    if (r.keywordId == null) continue;
+    nowMtd.set(String(r.keywordId), {
+      spend: r.cost ?? 0, sales: r.sales14d ?? 0, orders: r.purchases14d ?? 0, clicks: r.clicks ?? 0,
+    });
   }
-  const enabledByWord = new Map<string, Kw[]>();
-  for (const k of kws) {
-    if (k.state !== "ENABLED") continue;
-    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
-    const arr = enabledByWord.get(key) ?? []; arr.push(k); enabledByWord.set(key, arr);
-  }
-  const doomed = new Set<string>();
-  for (const [key, w] of wordPerf) {
-    if (!shouldKill(w)) continue;
-    doomed.add(key);
-    const copies = enabledByWord.get(key) ?? [];
-    out.killed.push({ text: w.text, spend: +w.spend.toFixed(2), matchType: w.match, copies: copies.length });
-  }
+  const lastChange = await lastBidChanges();
+  const since = await perfSinceChange(lastChange, nowMtd, sd);
+  let heldByCooldown = 0, rolledBack = 0;
 
+  // THE $4 RULE IS EVALUATED PER KEYWORD, ON ITS OWN (William 2026-08-07).
+  //
+  // Each keyword id is judged against its own month-to-date spend and pauses on its own. Copies of
+  // the same text are separate keywords with separate bids, so they are separate decisions.
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
-  const killIdx = new Map<number, string>();   // op index -> word key, so outcomes map back to words
-  for (const key of doomed) {
-    for (const c of enabledByWord.get(key) ?? []) {
-      killIdx.set(killOps.length, key);
-      killOps.push({ keywordId: String(c.keywordId), state: "PAUSED" });
-    }
-  }
-  if (doomed.size) out.notes.push(`$4 rule: ${doomed.size} word(s) failed, ${killOps.length} enabled copies to pause`);
-
+  const killedAt = new Map<number, number>();   // kill-op index -> index into out.killed
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
-    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
-    if (doomed.has(key)) continue;              // being paused; do not also re-bid it
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
-    const v = decide(k.bid || NEW_KW_BID, perf); // ±10% bid at the 52% pivot (ad-rules.ts)
-    if (v.action === "bid") {
-      const promotedAt = protectedIds.get(String(k.keywordId));
-      const isCut = v.bid < (k.bid || NEW_KW_BID);
+    const v = decide(k.bid || NEW_KW_BID, perf); // $4-MTD kill + ±10% bid at the 52% pivot (ad-rules.ts)
+    if (v.action === "kill") {
+      killedAt.set(killOps.length, out.killed.length);
+      killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" });
+      out.killed.push({ text: k.keywordText, matchType: k.matchType, spend: +perf.spend.toFixed(2), keywordId: String(k.keywordId) });
+    } else {
+      // Bid decisions go through memory: cooldown first, then roll back a raise that hurt, then
+      // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
+      const id = String(k.keywordId);
+      const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs);
+      if (m.bid === null) { if (m.reason.startsWith("held:")) heldByCooldown++; continue; }
+      const promotedAt = protectedIds.get(id);
+      const isCut = m.bid < (k.bid || NEW_KW_BID);
       if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
+      if (m.reason.includes("ACOS went") || m.reason.includes("no orders since the raise") || m.reason.includes("past the")) rolledBack++;
       const acos = perf.sales > 0 ? perf.spend / perf.sales : 0;
-      bidOps.push({ keywordId: String(k.keywordId), bid: v.bid });
-      out.bids.push({ text: k.keywordText, from: k.bid, to: v.bid, acos: +(acos * 100).toFixed(0) / 100 });
+      bidOps.push({ keywordId: id, bid: m.bid });
+      out.bids.push({ text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100, reason: m.reason, keywordId: id });
     }
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
+  if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_DAYS}d, still being measured`);
+  if (rolledBack) out.notes.push(`${rolledBack} raise(s) reversed: the keyword got worse after the bid went up`);
 
   // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
   // Wrapped so a harvest-report failure (timeout, 4xx) can never block the kill/bid apply above.
@@ -381,14 +445,11 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         const o = parseBulkOutcome(r.json, killOps.length);
         applied.kill = o.succeededIdx.size === killOps.length;
         note("kill", o, killOps.length);
-        // Attribute each paused copy back to its word, so `killed` reports what really went off.
-        const pausedByWord = new Map<string, number>();
+        // Amazon's verdict, per keyword. An op it did not acknowledge is not reported as paused.
+        out.killed.forEach((k) => { k.applied = false; });
         for (const i of o.succeededIdx) {
-          const key = killIdx.get(i); if (!key) continue;
-          pausedByWord.set(key, (pausedByWord.get(key) ?? 0) + 1);
-        }
-        for (const k of out.killed) {
-          k.paused = pausedByWord.get(`${k.text.toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`) ?? 0;
+          const at = killedAt.get(i);
+          if (at !== undefined) out.killed[at].applied = true;
         }
       }
       if (bidOps.length) {
@@ -396,6 +457,19 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         const o = parseBulkOutcome(r.json, bidOps.length);
         applied.bid = o.succeededIdx.size === bidOps.length;
         note("bid", o, bidOps.length);
+        // Record ONLY the changes Amazon accepted. A refused write that entered the history would
+        // start a cooldown on a bid that never moved, and would later be judged as if it had.
+        const at = new Date().toISOString();
+        for (const i of o.succeededIdx) {
+          const b = out.bids[i]; if (!b || !b.keywordId) continue;
+          try {
+            await db().execute({
+              sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,acos_before,reason,ad_product)
+                    VALUES (?,?,?,?,?,?,?)`,
+              args: [b.keywordId, at, b.from ?? 0, b.to, b.acos > 0 ? b.acos : null, b.reason ?? null, "SPONSORED_PRODUCTS"],
+            });
+          } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
+        }
       }
       if (addOps.length) {
         const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT);
@@ -407,6 +481,22 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         out.added = out.added.filter((_, i) => o.succeededIdx.has(i));
       }
     } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+    // Snapshot month-to-date performance for EVERY keyword, whether or not it changed. This is the
+    // baseline a future rollback differences against; without it "what happened since the raise?"
+    // has no answer. Written after the applies so a failed write cannot lose the snapshot.
+    try {
+      const at = new Date().toISOString();
+      for (const [kwId, p] of nowMtd) {
+        await db().execute({
+          sql: `INSERT OR REPLACE INTO kw_perf_snapshot (taken_at,keyword_id,month,mtd_spend,mtd_sales,mtd_orders,mtd_clicks)
+                VALUES (?,?,?,?,?,?,?)`,
+          args: [at, kwId, sd, p.spend, p.sales, p.orders, p.clicks],
+        });
+      }
+      // 90 days of snapshots is far more than the 7-day evaluation window needs.
+      await db().execute({ sql: "DELETE FROM kw_perf_snapshot WHERE taken_at < ?", args: [new Date(Date.now() - 90 * 864e5).toISOString()] });
+    } catch (e) { out.errors.push("snapshot: " + (e instanceof Error ? e.message : String(e))); }
+
     // Persist every action to the decision log so the algorithm is auditable + trackable over time.
     try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
   }
@@ -837,13 +927,17 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     "",
   ];
   if (r.killed.length) {
-    lines.push("PAUSED (>=$4 MTD spend across ALL copies, no sale or ACOS>=52%):");
+    lines.push("PAUSED (>=$4 MTD spend on that keyword, no sale or ACOS>=52%):");
     r.killed.forEach((k) => lines.push(
-      `  $${k.spend} wasted  ${k.matchType} "${k.text}"  — ${k.paused ?? 0}/${k.copies} enabled copies paused`));
+      `  $${k.spend} wasted  ${k.matchType} "${k.text}"${k.applied === false ? "   [AMAZON REFUSED]" : ""}`));
     lines.push("");
   }
   if (r.added.length) { lines.push("HARVESTED keywords (converted at >=2x ROAS, into the source ad group, accepted by Amazon):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
-  if (r.bids.length) { lines.push("BID changes (±10% at the 50% ACOS pivot):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
+  if (r.bids.length) {
+    lines.push(`BID changes (one per keyword per ${BID_COOLDOWN_DAYS} days, and a raise that hurt is reversed):`);
+    r.bids.slice(0, 30).forEach((b) => lines.push(`  $${b.from}->$${b.to}  ${b.text}${b.reason ? `   [${b.reason}]` : ""}`));
+    lines.push("");
+  }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");
 }

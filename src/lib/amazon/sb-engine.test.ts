@@ -25,30 +25,21 @@ describe("Sponsored Brands, August 2026 actuals", () => {
   });
 });
 
-describe("aggregating by word, not by copy", () => {
-  // The whole reason the $4 rule never fired: `phone tether` exists 18 times in Sponsored Products,
-  // five of them ENABLED. Each copy stayed under $4 while the word was past it.
-  it("treats every copy of a word as one bucket", () => {
-    const copies = [
-      { text: "phone tether", match: "EXACT", spend: 1.20 },
-      { text: "Phone Tether", match: "exact", spend: 1.55 },   // Amazon's casing varies per report
-      { text: " phone tether ", match: "EXACT", spend: 2.80 }, // and so does the whitespace
-    ];
-    const buckets = new Map<string, number>();
-    for (const c of copies) {
-      const k = wordKey(c.text, c.match);
-      buckets.set(k, (buckets.get(k) ?? 0) + c.spend);
-    }
-    expect(buckets.size).toBe(1);
-    const total = buckets.get("phone tether|EXACT")!;
-    expect(total).toBeCloseTo(5.55, 2);
-    // Individually every copy survives. Together the word dies. That is the fix.
-    expect(copies.every((c) => !shouldKill({ spend: c.spend, sales: 0, orders: 0 }))).toBe(true);
-    expect(shouldKill({ spend: total, sales: 0, orders: 0 })).toBe(true);
-  });
-
+describe("each keyword stands on its own", () => {
+  // William 2026-08-07: "should not kill copy everything is on its own". A keyword is (text, match
+  // type). Copies under a different match type are separate decisions with separate bids.
   it("keeps match types apart — PHRASE and EXACT are separately biddable", () => {
     expect(wordKey("phone security", "PHRASE")).not.toBe(wordKey("phone security", "EXACT"));
+  });
+
+  it("normalises casing and whitespace, which Amazon's reports vary between runs", () => {
+    expect(wordKey(" Phone Tether ", "exact")).toBe(wordKey("phone tether", "EXACT"));
+  });
+
+  it("judges a keyword on its own spend, so a copy under $4 is not killed by a sibling", () => {
+    expect(shouldKill({ spend: 1.20, sales: 0, orders: 0 })).toBe(false);
+    expect(shouldKill({ spend: 2.80, sales: 0, orders: 0 })).toBe(false);
+    expect(shouldKill({ spend: 5.55, sales: 0, orders: 0 })).toBe(true);
   });
 });
 
