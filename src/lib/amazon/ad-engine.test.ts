@@ -271,3 +271,51 @@ describe("parseBulkOutcome", () => {
     expect(o.succeededIdx.has(4)).toBe(false);   // submitted, unacknowledged, therefore not applied
   });
 });
+
+// ---------------------------------------------------------------------------
+// Monthly reset on LIFETIME evidence (William 2026-08-07: "if the words
+// converted in past we refresh at the start of the new month").
+//
+// Route A on its own is a catch-22: a PAUSED keyword does not spend, so it can
+// never build trailing-window evidence, so it can never prove it recovered.
+// Measured against the live account the same day: 106 Sponsored Products words
+// clear 1.92x lifetime on 2+ orders holding $27,764 of lifetime sales, and the
+// window route finds essentially none of them.
+// ---------------------------------------------------------------------------
+describe("reactivationCandidates — lifetime route", () => {
+  const paused = (id = "K1", text = "phone tether", match = "EXACT") =>
+    [{ keywordId: id, keywordText: text, matchType: match, state: "PAUSED" }];
+  const lt = (roas: number, orders: number, spend = 100) =>
+    new Map([["phone tether|EXACT", { roas, spend, sales: spend * roas, orders }]]);
+
+  it("brings back a word with NO recent spend at all, on its lifetime record alone", () => {
+    const out = reactivationCandidates(paused(), new Map(), lt(3.1, 40));
+    expect(out).toHaveLength(1);
+    expect(out[0].via).toBe("lifetime");
+  });
+
+  it("leaves it off when lifetime is below break-even", () => {
+    expect(reactivationCandidates(paused(), new Map(), lt(1.5, 40))).toHaveLength(0);
+  });
+
+  it("leaves it off on a single order, however flattering the ratio", () => {
+    // 79x on one order and $0.25 of spend is noise, and led a real preview astray on 2026-08-06.
+    expect(reactivationCandidates(paused(), new Map(), lt(79.8, 1, 0.25))).toHaveLength(0);
+  });
+
+  it("prefers the recent-recovery route and never double-counts a keyword", () => {
+    const out = reactivationCandidates(paused(), perf([["K1", 6, 20]]), lt(3.1, 40));
+    expect(out).toHaveLength(1);
+    expect(out[0].via).toBe("window");
+  });
+
+  it("still never touches a keyword that is already ENABLED", () => {
+    const on = [{ keywordId: "K1", keywordText: "phone tether", matchType: "EXACT", state: "ENABLED" }];
+    expect(reactivationCandidates(on, new Map(), lt(3.1, 40))).toHaveLength(0);
+  });
+
+  it("works with no lifetime table at all — the window route is unaffected", () => {
+    expect(reactivationCandidates(paused(), perf([["K1", 6, 20]]))).toHaveLength(1);
+    expect(reactivationCandidates(paused(), new Map())).toHaveLength(0);
+  });
+});

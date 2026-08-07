@@ -38,6 +38,10 @@ export const HARVEST_MAX_ACOS = 0.50;        // reactivation bar: proven ACOS <=
 // 1.92x from real fees ($9.49 price, $0.62 COGS, $1.42 referral, $2.52 FBA), so 2x is the first
 // rung that actually makes money rather than merely converting.
 export const HARVEST_MIN_ROAS = 2;
+// Monthly reset bars for bringing a PAUSED keyword back on LIFETIME evidence. Break-even is 1.92x;
+// the 2-order floor exists because a 79x return built on one order and $0.25 of spend is noise.
+export const REACTIVATE_MIN_ROAS = 1.92;
+export const REACTIVATE_MIN_ORDERS = 2;
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 // Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable
 // any PAUSED keyword whose trailing 65 days still holds cost >= $4 AND ACOS <= 50% (ROAS >= 2x) -
@@ -54,10 +58,11 @@ interface Kw { keywordId: string; keywordText: string; matchType: string; state:
 interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
 export interface SearchTermRow { searchTerm?: string; campaignId?: string | number; adGroupId?: string | number; cost?: number; sales14d?: number; purchases14d?: number }
 export interface HarvestAdd { campaignId: string; adGroupId: string; keywordText: string; matchType: "EXACT" | "PHRASE"; state: "ENABLED"; bid: number }
-export interface ReactivationCandidate { keywordId: string; keywordText: string; matchType: string; cost: number; acos: number }
+/** `via` records WHICH route brought a keyword back: recent recovery, or its lifetime record. */
+export interface ReactivationCandidate { keywordId: string; keywordText: string; matchType: string; cost: number; acos: number; via: "window" | "lifetime" }
 export interface ReactivationResult {
   ok: boolean; dryRun: boolean;
-  reactivated: { text: string; matchType: string; cost: number; acos: number }[];
+  reactivated: { text: string; matchType: string; cost: number; acos: number; via: "window" | "lifetime" }[];
   notes: string[];
   errors: string[]; durationMs: number; reason?: string;
 }
@@ -211,15 +216,36 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
 export function reactivationCandidates(
   paused: { keywordId: string; keywordText: string; matchType: string; state: string }[],
   perfById: Map<string, { cost: number; sales: number }>,
+  lifetimeByWord?: Map<string, { roas: number; spend: number; sales: number; orders: number }>,
+  opts: { minRoas?: number; minOrders?: number } = {},
 ): ReactivationCandidate[] {
+  const minRoas = opts.minRoas ?? REACTIVATE_MIN_ROAS;
+  const minOrders = opts.minOrders ?? REACTIVATE_MIN_ORDERS;
   const out: ReactivationCandidate[] = [];
   for (const k of paused) {
     if (k.state !== "PAUSED") continue;                         // never touch an already-ENABLED keyword
+
+    // ROUTE A — recent recovery. Trailing window shows >= $4 spend at ACOS <= 50%.
     const p = perfById.get(String(k.keywordId));
-    if (!p) continue;                                            // no recent spend -> nothing to prove it recovered
-    if (p.cost < HARVEST_MIN_SPEND) continue;                   // >= $4 spend
-    if (!(p.sales > 0 && p.cost / p.sales <= HARVEST_MAX_ACOS)) continue; // ACOS <= 50% (ROAS >= 2x)
-    out.push({ keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType, cost: +p.cost.toFixed(2), acos: +(p.cost / p.sales).toFixed(4) });
+    if (p && p.cost >= HARVEST_MIN_SPEND && p.sales > 0 && p.cost / p.sales <= HARVEST_MAX_ACOS) {
+      out.push({ keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
+                 cost: +p.cost.toFixed(2), acos: +(p.cost / p.sales).toFixed(4), via: "window" });
+      continue;
+    }
+
+    // ROUTE B — LIFETIME record (William 2026-08-07: "if the words converted in past we refresh at
+    // the start of the new month").
+    //
+    // Route A alone is a catch-22 and always was: a PAUSED keyword does not spend, so it cannot
+    // accumulate trailing-window evidence, so it can never prove it recovered. Anything paused for
+    // longer than the window is stranded for good. Measured 2026-08-07: 106 Sponsored Products
+    // words clear 1.92x lifetime on 2+ orders, holding $27,764 of lifetime sales, and route A finds
+    // essentially none of them. That is the same mechanism that left 151 winners switched off.
+    const lt = lifetimeByWord?.get(deadKey(k.keywordText, k.matchType));
+    if (lt && lt.orders >= minOrders && lt.roas >= minRoas) {
+      out.push({ keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
+                 cost: +lt.spend.toFixed(2), acos: +(1 / lt.roas).toFixed(4), via: "lifetime" });
+    }
   }
   return out;
 }
@@ -747,15 +773,20 @@ export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): P
     }
   } catch (e) { out.errors.push("reactivation report: " + (e instanceof Error ? e.message : String(e))); out.durationMs = Date.now() - start; return out; }
 
+  // Lifetime evidence comes from our own database, not Amazon's queue, so it is always available.
+  const lifetime = await lifetimeRoasByKeyword();
+  out.notes.push(`${lifetime.size} words of Sponsored Products lifetime history`);
+
+  // A stalled report queue must no longer strand the monthly reset. Route A (recent recovery) needs
+  // the window and is skipped when it is not ready; route B (lifetime record) does not need it at
+  // all, and route B is the one that reaches words paused longer than the window.
   if (!reactivateReady) {
-    out.reason = "reports not collected yet — re-enabling nothing this run";
-    out.notes.push(out.reason);
-    out.ok = true; out.durationMs = Date.now() - start;
-    return out;
+    out.notes.push("trailing-window reports not collected — lifetime evidence only this run");
+    perfById.clear();
   }
 
-  const cands = reactivationCandidates(paused, perfById);
-  for (const c of cands) out.reactivated.push({ text: c.keywordText, matchType: c.matchType, cost: c.cost, acos: c.acos });
+  const cands = reactivationCandidates(paused, perfById, lifetime);
+  for (const c of cands) out.reactivated.push({ text: c.keywordText, matchType: c.matchType, cost: c.cost, acos: c.acos, via: c.via });
 
   if (!dryRun && cands.length) {
     try {
@@ -783,7 +814,19 @@ async function persistReactivation(r: ReactivationResult): Promise<void> {
 
 export function summarizeReactivation(r: ReactivationResult): string {
   const lines = [`Monthly reactivation ${r.dryRun ? "(preview)" : "ran"} — ${r.reactivated.length} keywords re-enabled. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`, ""];
-  if (r.reactivated.length) { lines.push("RE-ENABLED (paused but trailing 65d holds >=$4 spend, ACOS<=50%):"); r.reactivated.forEach((a) => lines.push(`  ${a.matchType}  ACOS ${(a.acos * 100).toFixed(0)}%  $${a.cost} spend  ${a.text}`)); lines.push(""); }
+  if (r.reactivated.length) {
+    const w = r.reactivated.filter((a) => a.via === "window"), lt = r.reactivated.filter((a) => a.via === "lifetime");
+    if (w.length) {
+      lines.push("RE-ENABLED — recent recovery (trailing 65d: >=$4 spend at ACOS<=50%):");
+      w.forEach((a) => lines.push(`  ${a.matchType}  ACOS ${(a.acos * 100).toFixed(0)}%  $${a.cost} spend  ${a.text}`));
+      lines.push("");
+    }
+    if (lt.length) {
+      lines.push("RE-ENABLED — proven in the past (lifetime >=1.92x on 2+ orders):");
+      lt.forEach((a) => lines.push(`  ${a.matchType}  ${(1 / a.acos).toFixed(2)}x lifetime  $${a.cost} lifetime spend  ${a.text}`));
+      lines.push("");
+    }
+  }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");
 }
