@@ -29,14 +29,16 @@ function parseIds(text,fields){
   return rows;
 }
 
+// A keyword inside a non-ENABLED campaign cannot be written at all: the PUT returns 207 and
+// silently changes nothing. So campaign state is read first and non-writable copies are reported.
 const cres=await fetch(`${A}/sb/v4/campaigns/list`,{method:'POST',headers:{...H,'Content-Type':'application/vnd.sbcampaignresource.v4+json',Accept:'application/vnd.sbcampaignresource.v4+json'},body:JSON.stringify({maxResults:100})});
 const ctext=await cres.text();
 const camps=new Map();
-if(cres.ok){for(const c of parseIds(JSON.parse(ctext).campaigns?ctext.slice(ctext.indexOf('['),ctext.lastIndexOf(']')+1):ctext,['campaignId'])||[]){}}
-// simpler + safe: campaign ids fit as strings via a direct regex scan over the raw payload
-{ const cj=JSON.parse(ctext); const list=cj.campaigns||[];
-  const ids=[...ctext.matchAll(/"campaignId"\s*:\s*"?(\d+)"?/g)].map(m=>m[1]);
-  list.forEach((c,i)=>camps.set(ids[i]??String(c.campaignId),{name:c.name,state:String(c.state||'').toUpperCase()})); }
+if(cres.ok){
+  const list=(JSON.parse(ctext).campaigns)||[];
+  const ids=[...ctext.matchAll(/"campaignId"\s*:\s*"?(\d+)"?/g)].map(m=>m[1]);   // ids exceed 2^53
+  list.forEach((c,i)=>camps.set(ids[i]??String(c.campaignId),{name:c.name,state:String(c.state||'').toUpperCase()}));
+} else console.error('campaigns',cres.status,ctext.slice(0,200));
 
 const kres=await fetch(`${A}/sb/keywords`,{headers:{...H,'Content-Type':'application/json',Accept:'application/vnd.sbkeyword.v3+json'}});
 const ktext=await kres.text();
