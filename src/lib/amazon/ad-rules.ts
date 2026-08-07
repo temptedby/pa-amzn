@@ -137,10 +137,36 @@ export function decide(
 
 const words = (t: string) => t.trim().split(/\s+/).filter(Boolean);
 
-/** True when Amazon will accept this keyword text: non-empty, <= 80 chars, <= 10 words. */
+/**
+ * A dash used as a SEPARATOR is rejected by Amazon; a hyphen inside a word is not.
+ *
+ * Established by live experiment 2026-08-07 on the term the harvest had been resubmitting since
+ * Aug 1, logged applied=1 forty times while never existing in the account:
+ *
+ *   "phone assured retractable phone tether – durable clip-on leash for"  -> PATTERN_NOT_MATCHED
+ *   "phone assured retractable phone tether - durable clip-on leash for"  -> PATTERN_NOT_MATCHED
+ *   "phone assured retractable phone tether durable clip-on leash for"    -> SUCCESS
+ *
+ * So it is not the en dash, not the length (66 chars) and not the word count (10, at the cap). It
+ * is the free-standing dash token. `clip-on` survives untouched in the accepted form.
+ */
+const SEPARATOR_DASH = /(^|\s)[-–—]+(\s|$)/g;
+
+/** Amazon's own message is just "Keyword is invalid", so this encodes what it actually rejects. */
+export function stripSeparatorDashes(text: string): string {
+  let t = (text || "");
+  let prev: string;
+  do { prev = t; t = t.replace(SEPARATOR_DASH, " "); } while (t !== prev);   // " - - " needs 2 passes
+  return t.replace(/\s+/g, " ").trim();
+}
+
+/** True when Amazon will accept this keyword text: non-empty, <= 80 chars, <= 10 words, and no
+ *  free-standing dash. The dash clause is not cosmetic — it is a hard PATTERN_NOT_MATCHED reject. */
 export function isValidKeywordText(text: string, maxChars = KEYWORD_MAX_CHARS, maxWords = KEYWORD_MAX_WORDS): boolean {
   const t = (text || "").trim();
   if (!t) return false;
+  if (SEPARATOR_DASH.test(t)) { SEPARATOR_DASH.lastIndex = 0; return false; }
+  SEPARATOR_DASH.lastIndex = 0;
   return t.length <= maxChars && words(t).length <= maxWords;
 }
 
@@ -154,7 +180,9 @@ export function shortenToValidKeyword(
   maxChars = KEYWORD_MAX_CHARS,
   maxWords = KEYWORD_MAX_WORDS,
 ): string | null {
-  const t = (text || "").trim().replace(/\s+/g, " ");
+  // Separator dashes are removed BEFORE the length/word check, because dropping them can bring an
+  // otherwise-fine term back inside the limits rather than truncating meaning off the end.
+  const t = stripSeparatorDashes(text || "");
   if (!t) return null;
   if (isValidKeywordText(t, maxChars, maxWords)) return t;
   const w = words(t);

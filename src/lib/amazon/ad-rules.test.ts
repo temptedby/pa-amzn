@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   shouldKill, nextBid, decide, acosOf, ACOS_PIVOT,
-  isValidKeywordText, shortenToValidKeyword, KEYWORD_MAX_CHARS, KEYWORD_MAX_WORDS,
+  isValidKeywordText, shortenToValidKeyword, stripSeparatorDashes, KEYWORD_MAX_CHARS, KEYWORD_MAX_WORDS,
   selectReintroductions, REINTRO_PER_DAY, REINTRO_PER_RUN, REINTRO_COHORT_DAILY_CAP,
   isProtected, KILL_SPEND,
   nextLadderBid, ladderVerdict, REINTRO_START_BID, BID_LADDER_MAX, BID_LADDER_STEP,
@@ -99,11 +99,34 @@ describe("shortenToValidKeyword", () => {
   });
   it("shortens the live-bug term to a usable root on a word boundary", () => {
     const t = "phone assured retractable phone tether – durable clip-on leash for anti-drop & anti-theft security";
-    const s = shortenToValidKeyword(t);
+    const s = shortenToValidKeyword(t) as string;
     expect(s).not.toBeNull();
-    expect(isValidKeywordText(s as string)).toBe(true);
-    expect(t.startsWith(s as string)).toBe(true);          // it is a leading root, not a reshuffle
-    expect((s as string).endsWith(" ")).toBe(false);        // clean word boundary
+    expect(isValidKeywordText(s)).toBe(true);
+    // A leading root, not a reshuffle — but the separator dash is dropped first, so compare against
+    // the normalised term rather than the raw one. Word ORDER is what must be preserved.
+    expect(stripSeparatorDashes(t).startsWith(s)).toBe(true);
+    expect(s.endsWith(" ")).toBe(false);                    // clean word boundary
+    expect(s).not.toMatch(/(^|\s)[-–—]+(\s|$)/);            // and carries no free-standing dash
+  });
+
+  // Live experiment 2026-08-07: the SAME term is refused with a dash and accepted without one, so
+  // the dash is the whole reason the harvest resubmitted it 40 times. These pin that down.
+  it("treats a free-standing dash as invalid, whatever kind of dash it is", () => {
+    for (const d of ["-", "–", "—"]) {
+      expect(isValidKeywordText(`phone tether ${d} durable leash`)).toBe(false);
+    }
+  });
+  it("leaves a hyphen INSIDE a word alone — `clip-on` is accepted by Amazon", () => {
+    expect(isValidKeywordText("durable clip-on leash")).toBe(true);
+    expect(stripSeparatorDashes("durable clip-on leash")).toBe("durable clip-on leash");
+  });
+  it("removes the separator and closes the gap", () => {
+    expect(stripSeparatorDashes("phone assured retractable phone tether – durable clip-on leash for"))
+      .toBe("phone assured retractable phone tether durable clip-on leash for");
+  });
+  it("handles a run of separators without leaving one behind", () => {
+    expect(stripSeparatorDashes("a - - b")).toBe("a b");
+    expect(stripSeparatorDashes("- lead and trail -")).toBe("lead and trail");
   });
   it("obeys the 10-word cap even when the text is short", () => {
     const t = Array(14).fill("ab").join(" ");               // 41 chars, 14 words

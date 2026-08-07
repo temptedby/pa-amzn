@@ -58,7 +58,7 @@ describe("clampBidStep — C1 cap-rounding fix", () => {
   });
 });
 
-import { harvestCandidates, harvestWindows, HARVEST_MIN_SPEND, HARVEST_MAX_ACOS, type SearchTermRow } from "./ad-engine";
+import { harvestCandidates, harvestWindows, parseBulkOutcome, HARVEST_MIN_SPEND, HARVEST_MAX_ACOS, type SearchTermRow } from "./ad-engine";
 
 // H1 fix (confabulator/ad-engine-audit-2026-06-25.md) + Rule 3 of
 // .agent/ad-engine-rules-2026-08-02.md: harvest a search term INTO THE AD GROUP IT CONVERTED IN
@@ -115,7 +115,9 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
     for (const a of adds) {
       expect(a.keywordText.length).toBeLessThanOrEqual(80);
       expect(a.keywordText.split(/\s+/).length).toBeLessThanOrEqual(10);
-      expect(long.startsWith(a.keywordText)).toBe(true);
+      // Word order preserved; the separator dash is stripped, so compare against the normalised form.
+      expect(long.replace(/(^|\s)[-–—]+(\s|$)/g, " ").replace(/\s+/g, " ").trim().startsWith(a.keywordText)).toBe(true);
+      expect(a.keywordText).not.toMatch(/(^|\s)[-–—]+(\s|$)/);
     }
   });
 
@@ -209,5 +211,53 @@ describe("reactivationCandidates — monthly re-enable of recovered paused keywo
   it("uses a 65-day trailing window split into <=31d report chunks", () => {
     expect(REACT_WINDOW_DAYS).toBe(65);
     expect(harvestWindows(REACT_WINDOW_DAYS, Date.parse("2026-06-26T00:00:00Z")).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-item write outcomes. Probed live 2026-08-07 against /sp/keywords with one
+// valid id and one invalid one: Amazon answered HTTP 207 carrying BOTH a success
+// and an error. 207 is inside the 2xx range, so `res.ok` was true — which is
+// exactly how a keyword Amazon refused 40 times was logged applied=1 every time.
+// ---------------------------------------------------------------------------
+describe("parseBulkOutcome", () => {
+  const real207 = {
+    keywords: {
+      success: [{ index: 0, keywordId: "52522040859374" }],
+      error: [{
+        index: 1,
+        errors: [{
+          errorType: "entityNotFoundError",
+          errorValue: { entityNotFoundError: { entityId: "1", entityType: "KEYWORD", message: "Could not find keyword with id: 1", reason: "ENTITY_NOT_FOUND" } },
+        }],
+      }],
+    },
+  };
+
+  it("splits a real 207 into the item that landed and the item that did not", () => {
+    const o = parseBulkOutcome(real207, 2);
+    expect([...o.succeededIdx]).toEqual([0]);
+    expect(o.failed).toHaveLength(1);
+    expect(o.failed[0]).toMatchObject({ index: 1, reason: "ENTITY_NOT_FOUND" });
+  });
+
+  it("a batch where EVERY item failed is not a success", () => {
+    const allFailed = { keywords: { success: [], error: [{ index: 0, errors: [{ errorType: "x", errorValue: { x: { reason: "DUPLICATE_VALUE", message: "m" } } }] }] } };
+    const o = parseBulkOutcome(allFailed, 1);
+    expect(o.succeededIdx.size).toBe(0);
+    expect(o.failed[0].reason).toBe("DUPLICATE_VALUE");
+  });
+
+  it("claims nothing from a body it does not recognise — silence is failure, never success", () => {
+    for (const body of [null, {}, { something: "else" }, "not json at all"]) {
+      expect(parseBulkOutcome(body, 3).succeededIdx.size).toBe(0);
+    }
+  });
+
+  it("does not credit an index Amazon never mentioned", () => {
+    const partial = { keywords: { success: [{ index: 0, keywordId: "1" }] } };
+    const o = parseBulkOutcome(partial, 5);
+    expect(o.succeededIdx.has(0)).toBe(true);
+    expect(o.succeededIdx.has(4)).toBe(false);   // submitted, unacknowledged, therefore not applied
   });
 });

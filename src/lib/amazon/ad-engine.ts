@@ -2,7 +2,7 @@ import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
-  decide, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
+  decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
@@ -59,7 +59,7 @@ export interface ReactivationResult {
 }
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
-  killed: { text: string; spend: number }[];
+  killed: { text: string; spend: number; matchType: string; copies: number; paused?: number }[];
   bids: { text: string; from: number; to: number; acos: number }[];
   added: { text: string; matchType: string }[];
   /** Report-readiness lines. A pass with data still queued is normal, so it is a note, not an error. */
@@ -97,6 +97,44 @@ async function deferredRows(
   if (r.state === "failed") { notes.push(`${purpose}: FAILED — ${r.reason}`); return { rows: [], ready: false }; }
   notes.push(`${purpose}: ${r.state}, collect on a later run`);
   return { rows: [], ready: false };
+}
+
+// Per-item outcome of a Sponsored Products bulk write.
+//
+// Amazon answers /sp/keywords with HTTP 207 and a body that splits the batch:
+//   { keywords: { success: [{index, keywordId}], error: [{index, errors:[{errorType, errorValue}]}] } }
+// 207 is inside the 2xx range, so `res.ok` is TRUE even when EVERY item failed. That is the bug
+// behind `applied=1` on a keyword Amazon refused 40 times in a row: the log recorded that we asked,
+// not that it happened. Proved live 2026-08-07 by submitting one valid id and one invalid one — the
+// response carried both a success and an error under a single ok status.
+export interface BulkOutcome {
+  succeededIdx: Set<number>;
+  failed: { index: number; reason: string; message: string }[];
+}
+export function parseBulkOutcome(json: unknown, opCount: number): BulkOutcome {
+  const out: BulkOutcome = { succeededIdx: new Set(), failed: [] };
+  const node = (json as { keywords?: { success?: unknown[]; error?: unknown[] } } | null)?.keywords;
+  if (!node || (!node.success && !node.error)) {
+    // Unrecognised body: claim nothing. Silence must read as failure, never as success.
+    return out;
+  }
+  for (const s of node.success ?? []) {
+    const i = (s as { index?: number }).index;
+    if (typeof i === "number") out.succeededIdx.add(i);
+  }
+  for (const e of node.error ?? []) {
+    const row = e as { index?: number; errors?: { errorType?: string; errorValue?: Record<string, { reason?: string; message?: string }> }[] };
+    const first = row.errors?.[0];
+    const detail = first?.errorValue ? Object.values(first.errorValue)[0] : undefined;
+    out.failed.push({
+      index: typeof row.index === "number" ? row.index : -1,
+      reason: detail?.reason ?? first?.errorType ?? "UNKNOWN",
+      message: detail?.message ?? "",
+    });
+  }
+  // An item Amazon mentioned in neither list did not succeed, so it is never counted as applied.
+  void opCount;
+  return out;
 }
 
 // Clamp a raw target bid to the ±MAX_STEP/run band and global [FLOOR, CAP], rounded to whole cents.
@@ -142,8 +180,10 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
     // Amazon caps keyword text at 80 chars / 10 words and rejects anything longer, so shorten an
     // over-long term to its longest valid leading root instead of retrying it forever (the live
     // 2026-08-01 loop: a 98-char, 14-word term re-submitted every run). Skip only if no root fits.
+    // Normalise first, then validate. A term Amazon will not take must never be submitted twice:
+    // "…tether – durable clip-on leash for" was resubmitted 40 times, logged applied=1 every run.
     const text = isValidKeywordText(o.term) ? o.term : shortenToValidKeyword(o.term);
-    if (!text) continue;
+    if (!text || !isValidKeywordText(text)) continue;   // belt and braces: never emit an invalid op
     const t = text.toLowerCase();
     for (const mt of ["EXACT", "PHRASE"] as const) {
       if (existing.has(`${o.agid}|${mt}|${t}`)) continue;
@@ -211,13 +251,54 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   const nowMs = Date.now();
   let shielded = 0;
 
+  // THE $4 RULE IS EVALUATED PER WORD, NOT PER KEYWORD ID.
+  //
+  // This account holds up to 18 copies of the same word — `phone tether` exists 18 times, 5 of them
+  // ENABLED at $0.10 / $0.20 / $0.33 / $0.50 / $1.04. Judged per id, every copy sits under $4 while
+  // the word is far past it, so the rule never fires; and on the one occasion it did fire
+  // (2026-08-07, `phone tether` at $5.55) it paused a single copy and the word kept spending.
+  // Spend is therefore summed across every copy of (text, matchType), and when the word fails the
+  // rule EVERY enabled copy is paused together — including copies with no rows in this report,
+  // which are exactly the ones that would otherwise inherit the traffic.
+  const wordPerf = new Map<string, Perf & { text: string; match: string }>();
+  for (const r of kt) {
+    const k = byId.get(String(r.keywordId)); if (!k) continue;
+    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
+    const w = wordPerf.get(key) ?? { text: k.keywordText, match: k.matchType, spend: 0, orders: 0, sales: 0 };
+    w.spend += r.cost ?? 0; w.orders += r.purchases14d ?? 0; w.sales += r.sales14d ?? 0;
+    wordPerf.set(key, w);
+  }
+  const enabledByWord = new Map<string, Kw[]>();
+  for (const k of kws) {
+    if (k.state !== "ENABLED") continue;
+    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
+    const arr = enabledByWord.get(key) ?? []; arr.push(k); enabledByWord.set(key, arr);
+  }
+  const doomed = new Set<string>();
+  for (const [key, w] of wordPerf) {
+    if (!shouldKill(w)) continue;
+    doomed.add(key);
+    const copies = enabledByWord.get(key) ?? [];
+    out.killed.push({ text: w.text, spend: +w.spend.toFixed(2), matchType: w.match, copies: copies.length });
+  }
+
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
+  const killIdx = new Map<number, string>();   // op index -> word key, so outcomes map back to words
+  for (const key of doomed) {
+    for (const c of enabledByWord.get(key) ?? []) {
+      killIdx.set(killOps.length, key);
+      killOps.push({ keywordId: String(c.keywordId), state: "PAUSED" });
+    }
+  }
+  if (doomed.size) out.notes.push(`$4 rule: ${doomed.size} word(s) failed, ${killOps.length} enabled copies to pause`);
+
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
+    const key = `${(k.keywordText || "").toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`;
+    if (doomed.has(key)) continue;              // being paused; do not also re-bid it
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
-    const v = decide(k.bid || NEW_KW_BID, perf); // $4-MTD kill + ±10% bid at the 50% pivot (ad-rules.ts)
-    if (v.action === "kill") { killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" }); out.killed.push({ text: k.keywordText, spend: +perf.spend.toFixed(2) }); }
-    else if (v.action === "bid") {
+    const v = decide(k.bid || NEW_KW_BID, perf); // ±10% bid at the 52% pivot (ad-rules.ts)
+    if (v.action === "bid") {
       const promotedAt = protectedIds.get(String(k.keywordId));
       const isCut = v.bid < (k.bid || NEW_KW_BID);
       if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
@@ -247,11 +328,47 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     // Track whether Amazon ACCEPTED each batch. The log records outcomes, not intentions: before
     // this, a rejected add was still written as "add", which is how a 98-char keyword appeared in
     // ad_engine_log 8 times while never existing in the account (2026-08-01 loop).
+    // r.ok is NOT the answer. Amazon returns 207 — inside the 2xx range, so ok is true — with a body
+    // that splits the batch into success[] and error[]. Each op's fate is read out of that body.
     const applied = { kill: killOps.length === 0, bid: bidOps.length === 0, add: addOps.length === 0 };
+    const note = (label: string, o: BulkOutcome, n: number) => {
+      if (o.failed.length) {
+        const f = o.failed[0];
+        out.errors.push(`${label}: ${o.failed.length}/${n} refused — ${f.reason}${f.message ? ` (${f.message.slice(0, 120)})` : ""}`);
+      }
+      out.notes.push(`${label}: ${o.succeededIdx.size}/${n} accepted by Amazon`);
+    };
     try {
-      if (killOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: killOps }, KW_CT); applied.kill = r.ok; if (!r.ok) out.errors.push(`kill: ${r.status}`); }
-      if (bidOps.length) { const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: bidOps }, KW_CT); applied.bid = r.ok; if (!r.ok) out.errors.push(`bid: ${r.status}`); }
-      if (addOps.length) { const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT); applied.add = r.ok; if (!r.ok) out.errors.push(`add: ${r.status}`); }
+      if (killOps.length) {
+        const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: killOps }, KW_CT);
+        const o = parseBulkOutcome(r.json, killOps.length);
+        applied.kill = o.succeededIdx.size === killOps.length;
+        note("kill", o, killOps.length);
+        // Attribute each paused copy back to its word, so `killed` reports what really went off.
+        const pausedByWord = new Map<string, number>();
+        for (const i of o.succeededIdx) {
+          const key = killIdx.get(i); if (!key) continue;
+          pausedByWord.set(key, (pausedByWord.get(key) ?? 0) + 1);
+        }
+        for (const k of out.killed) {
+          k.paused = pausedByWord.get(`${k.text.toLowerCase().trim()}|${(k.matchType || "").toUpperCase()}`) ?? 0;
+        }
+      }
+      if (bidOps.length) {
+        const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: bidOps }, KW_CT);
+        const o = parseBulkOutcome(r.json, bidOps.length);
+        applied.bid = o.succeededIdx.size === bidOps.length;
+        note("bid", o, bidOps.length);
+      }
+      if (addOps.length) {
+        const r = await ads(cfg, token, "/sp/keywords", "POST", { keywords: addOps }, KW_CT);
+        const o = parseBulkOutcome(r.json, addOps.length);
+        applied.add = o.succeededIdx.size === addOps.length;
+        note("add", o, addOps.length);
+        // Only keywords Amazon actually created are reported as added. Without this, a term it
+        // refuses is re-harvested and re-logged every run forever — 40 times and counting for one.
+        out.added = out.added.filter((_, i) => o.succeededIdx.has(i));
+      }
     } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
     // Persist every action to the decision log so the algorithm is auditable + trackable over time.
     try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
@@ -665,7 +782,12 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     `Ad engine ${r.dryRun ? "(preview)" : "ran"} — ${r.killed.length} paused, ${r.bids.length} bid changes, ${r.added.length} keywords added. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
     "",
   ];
-  if (r.killed.length) { lines.push("PAUSED (>=$4 MTD spend, no sale or ACOS>=50%):"); r.killed.forEach((k) => lines.push(`  $${k.spend} wasted  ${k.text}`)); lines.push(""); }
+  if (r.killed.length) {
+    lines.push("PAUSED (>=$4 MTD spend across ALL copies, no sale or ACOS>=52%):");
+    r.killed.forEach((k) => lines.push(
+      `  $${k.spend} wasted  ${k.matchType} "${k.text}"  — ${k.paused ?? 0}/${k.copies} enabled copies paused`));
+    lines.push("");
+  }
   if (r.added.length) { lines.push("HARVESTED keywords (>=$4 spend, ACOS<=50%, into source ad group):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
   if (r.bids.length) { lines.push("BID changes (±10% at the 50% ACOS pivot):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
