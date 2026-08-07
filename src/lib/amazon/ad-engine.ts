@@ -34,6 +34,10 @@ const NEW_KW_BID = 0.50;
 // HARVEST_MIN_SPEND / HARVEST_MAX_ACOS remain the bar for monthly REACTIVATION of paused keywords.
 export const HARVEST_MIN_SPEND = 4;          // $ spend bar for reactivating a PAUSED keyword
 export const HARVEST_MAX_ACOS = 0.50;        // reactivation bar: proven ACOS <= 50% (ROAS >= 2x)
+// Return bar for HARVESTING a new keyword out of a search term (William 2026-08-07). Break-even is
+// 1.92x from real fees ($9.49 price, $0.62 COGS, $1.42 referral, $2.52 FBA), so 2x is the first
+// rung that actually makes money rather than merely converting.
+export const HARVEST_MIN_ROAS = 2;
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 // Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable
 // any PAUSED keyword whose trailing 65 days still holds cost >= $4 AND ACOS <= 50% (ROAS >= 2x) -
@@ -158,7 +162,9 @@ export function harvestWindows(days: number, now: number): [string, string][] {
 }
 
 // Pure harvest selector (H1 fix). Aggregates spSearchTerm rows by (campaign|adGroup|term), then
-// applies William's rule (ad-engine-harvest-rule.md): cost >= HARVEST_MIN_SPEND AND ACOS <= HARVEST_MAX_ACOS.
+// applies William's rule: the term must have CONVERTED and must return at least HARVEST_MIN_ROAS.
+// There is deliberately no minimum spend — a term that converted on 42 cents is the cheapest
+// evidence in the account — but there IS a return bar, which is what was missing until 2026-08-07.
 // Each qualifying term is harvested as EXACT + PHRASE INTO THE AD GROUP IT CONVERTED IN, skipping any
 // (adGroup, matchType, text) already present. `existing` keys are `${adGroupId}|${matchType}|${lowerText}`.
 export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID): HarvestAdd[] {
@@ -176,7 +182,12 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
   }
   const adds: HarvestAdd[] = [];
   for (const o of agg.values()) {
-    if (!(o.orders > 0)) continue;                   // Rule 3: harvest on the FIRST conversion
+    if (!(o.orders > 0)) continue;                   // must have converted at all
+    // William 2026-08-07: "need to be adding search terms or words that have better than a 2 roas".
+    // Until now the gate was the FIRST conversion alone, with no return bar at all, so a term that
+    // converted once at 500% ACOS earned two keywords and then $4 of rope before the kill rule could
+    // reach it. Break-even on this product is 1.92x, so a 2x bar is the first rung that makes money.
+    if (!(o.sales >= HARVEST_MIN_ROAS * o.cost)) continue;
     // Amazon caps keyword text at 80 chars / 10 words and rejects anything longer, so shorten an
     // over-long term to its longest valid leading root instead of retrying it forever (the live
     // 2026-08-01 loop: a 98-char, 14-word term re-submitted every run). Skip only if no root fits.
@@ -788,7 +799,7 @@ export function summarizeAdEngine(r: AdEngineResult): string {
       `  $${k.spend} wasted  ${k.matchType} "${k.text}"  — ${k.paused ?? 0}/${k.copies} enabled copies paused`));
     lines.push("");
   }
-  if (r.added.length) { lines.push("HARVESTED keywords (>=$4 spend, ACOS<=50%, into source ad group):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
+  if (r.added.length) { lines.push("HARVESTED keywords (converted at >=2x ROAS, into the source ad group, accepted by Amazon):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
   if (r.bids.length) { lines.push("BID changes (±10% at the 50% ACOS pivot):"); r.bids.slice(0, 30).forEach((b) => lines.push(`  ACOS ${(b.acos * 100).toFixed(0)}%  $${b.from}->$${b.to}  ${b.text}`)); lines.push(""); }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
   return lines.join("\n");

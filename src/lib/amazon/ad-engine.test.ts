@@ -86,14 +86,23 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
     expect(adds.filter((a) => a.adGroupId === "A2")).toHaveLength(2);
   });
 
-  it("RULE 3: harvests a cheap term the moment it converts, with no spend bar", () => {
-    // Under the old >=$4 rule this term was invisible. It converted, so it is harvested.
+  it("harvests a cheap term the moment it converts WELL, with no spend bar", () => {
+    // 42 cents -> $9.49 is 22.6x. No minimum spend: cheap evidence is still evidence.
     expect(harvestCandidates([row({ searchTerm: "cheap", cost: 0.42, sales14d: 9.49, purchases14d: 1 })], new Set())).toHaveLength(2);
   });
 
-  it("harvests a converter even when its ACOS is poor (the kill rule handles it later)", () => {
-    // cost 10, sales 19 -> ACOS 52.6%. It converted, so it earns a keyword and $4 of rope.
-    expect(harvestCandidates([row({ searchTerm: "pricey", cost: 10, sales14d: 19, purchases14d: 2 })], new Set())).toHaveLength(2);
+  // William 2026-08-07: converting is not enough, it has to RETURN. Break-even is 1.92x.
+  it("REFUSES a converter that does not clear 2x — converting at a loss is still a loss", () => {
+    // cost 10, sales 19 -> 1.9x, under break-even. Previously this earned two keywords and $4 of rope.
+    expect(harvestCandidates([row({ searchTerm: "pricey", cost: 10, sales14d: 19, purchases14d: 2 })], new Set())).toHaveLength(0);
+  });
+
+  it("harvests exactly at the 2x line", () => {
+    expect(harvestCandidates([row({ searchTerm: "breakeven", cost: 5, sales14d: 10, purchases14d: 1 })], new Set())).toHaveLength(2);
+  });
+
+  it("refuses a hair under the 2x line", () => {
+    expect(harvestCandidates([row({ searchTerm: "just under", cost: 5, sales14d: 9.99, purchases14d: 1 })], new Set())).toHaveLength(0);
   });
 
   it("excludes a term with spend but ZERO conversions", () => {
@@ -105,6 +114,7 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
       row({ searchTerm: "phone leash", cost: 2.5, sales14d: 0, purchases14d: 0 }),
       row({ searchTerm: "phone leash", cost: 2.0, sales14d: 9.49, purchases14d: 1 }),
     ];
+    // $4.50 total against $9.49 -> 2.1x, so it clears the bar on the COMBINED windows, not on one.
     expect(harvestCandidates(rows, new Set())).toHaveLength(2);
   });
 
