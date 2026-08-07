@@ -171,3 +171,107 @@ CREATE TABLE IF NOT EXISTS shipments (
 );
 CREATE INDEX IF NOT EXISTS idx_shipments_status ON shipments(status, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_amazon_id ON shipments(amazon_shipment_id) WHERE amazon_shipment_id IS NOT NULL;
+-- Local keyword history (William 2026-08-05: "we need to keep our own database then outside of
+-- amazon ... with text of words spent"). Amazon serves only 95 days (verified against the API's own
+-- data-retention error on 2026-08-05), which cannot support the 3-consecutive-month retirement rule
+-- and can never show lifetime spend. This is our own record, accumulated forward, never truncated.
+--
+-- Grain is (keyword text, match type), NOT Amazon's keywordId, deliberately: ~25% of the account is
+-- duplicate keywords, so per-ID totals understate what a WORD actually costs.
+
+CREATE TABLE IF NOT EXISTS kw_daily (
+  word          TEXT NOT NULL,           -- lowercased, whitespace-collapsed keyword text
+  match_type    TEXT NOT NULL,           -- EXACT / PHRASE / BROAD
+  day           TEXT NOT NULL,           -- YYYY-MM-DD, Amazon account day (resets 07:00Z)
+  spend         REAL NOT NULL DEFAULT 0,
+  clicks        INTEGER NOT NULL DEFAULT 0,
+  impressions   INTEGER NOT NULL DEFAULT 0,
+  orders        INTEGER NOT NULL DEFAULT 0,
+  sales         REAL NOT NULL DEFAULT 0,
+  ad_product    TEXT NOT NULL DEFAULT 'SPONSORED_PRODUCTS',
+  first_seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at    TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (word, match_type, day, ad_product)
+);
+CREATE INDEX IF NOT EXISTS idx_kw_daily_word  ON kw_daily (word, match_type);
+CREATE INDEX IF NOT EXISTS idx_kw_daily_day   ON kw_daily (day);
+
+-- Permanent tombstones. A word here is NEVER reintroduced, harvested or reactivated, whatever the
+-- rolling report window says. Without this, a word killed in June reads as "never spent" by
+-- September and burns another $4.
+CREATE TABLE IF NOT EXISTS kw_tombstone (
+  dead_key      TEXT PRIMARY KEY,        -- "word|MATCHTYPE", from deadKey()
+  word          TEXT NOT NULL,
+  match_type    TEXT NOT NULL,
+  reason        TEXT NOT NULL,           -- 'never_converted' | 'three_dead_months'
+  evidence      TEXT,                    -- JSON: the spend/orders that justified it
+  killed_at     TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Bid ladder state. spend_since_step is DERIVED from kw_daily since last_bid_change_at rather than
+-- stored, so it can never drift out of sync with the spend record.
+CREATE TABLE IF NOT EXISTS kw_bid_state (
+  keyword_id        TEXT PRIMARY KEY,
+  word              TEXT NOT NULL,
+  match_type        TEXT NOT NULL,
+  current_bid       REAL NOT NULL,
+  last_bid_change_at TEXT NOT NULL DEFAULT (datetime('now')),
+  ladder_active     INTEGER NOT NULL DEFAULT 1,   -- 0 once it spends and the ACOS rule takes over
+  escalated_at      TEXT                          -- set when $0.85 hit and William was notified
+);
+CREATE INDEX IF NOT EXISTS idx_kw_bid_state_word ON kw_bid_state (word, match_type);
+CREATE TABLE IF NOT EXISTS kw_lifetime (
+  word         TEXT NOT NULL,
+  match_type   TEXT NOT NULL,
+  period_start TEXT NOT NULL,
+  period_end   TEXT NOT NULL,
+  spend        REAL NOT NULL DEFAULT 0,
+  clicks       INTEGER NOT NULL DEFAULT 0,
+  impressions  INTEGER NOT NULL DEFAULT 0,
+  orders       INTEGER NOT NULL DEFAULT 0,
+  sales        REAL NOT NULL DEFAULT 0,
+  source       TEXT NOT NULL,
+  imported_at  TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (word, match_type, period_start, period_end, source)
+);
+CREATE INDEX IF NOT EXISTS idx_kw_lifetime_word ON kw_lifetime (word, match_type);
+CREATE TABLE IF NOT EXISTS campaign_lifetime (
+  campaign_name TEXT NOT NULL,
+  country       TEXT NOT NULL,
+  ad_type       TEXT,
+  targeting     TEXT,
+  state         TEXT,
+  status        TEXT,
+  status_code   TEXT,
+  start_date    TEXT,
+  budget        REAL,
+  clicks        INTEGER,
+  spend_usd     REAL,
+  sales_usd     REAL,
+  purchases     INTEGER,
+  roas          REAL,
+  as_of         TEXT NOT NULL,
+  source        TEXT NOT NULL,
+  PRIMARY KEY (campaign_name, country, as_of)
+);
+CREATE TABLE IF NOT EXISTS ad_entity_lifetime (
+  entity_type TEXT NOT NULL,
+  entity_id   TEXT NOT NULL,
+  entity_name TEXT,
+  asin        TEXT,
+  ad_product  TEXT NOT NULL,
+  status      TEXT,
+  bid         REAL,
+  sug_bid     REAL,
+  impressions INTEGER,
+  clicks      INTEGER,
+  dpv         INTEGER,
+  spend       REAL,
+  orders      INTEGER,
+  sales       REAL,
+  currency    TEXT NOT NULL DEFAULT 'USD',
+  marketplace TEXT NOT NULL DEFAULT 'US',
+  source      TEXT NOT NULL,
+  as_of       TEXT NOT NULL,
+  PRIMARY KEY (entity_type, entity_id, as_of, source)
+);

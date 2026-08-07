@@ -645,3 +645,69 @@ To be precise about today's live ad changes (no overstating):
 - **Trade-offs accepted** — Proceeding on Wi-Fi rather than waiting for an Ethernet cable: measured -68 dBm, 43 Mbps and 5-459 ms jitter on DFS channel 120. Acceptable because Bear's workload is API calls and Telegram messages, which are low bandwidth and retry-tolerant; the cost is sluggish interactive SSH and a residual risk that radar detection forces the router off channel 120. Homebrew installed into `~/homebrew` instead of `/opt/homebrew` to avoid needing an admin password, at the cost of compiling from source. Nothing is deleted from the MacBook until the mini runs green.
 
 - **Status / revisit** — Five of my own claims were corrected this session, four of them by William. Comparing a full month of July to two days of August; attributing unmanaged Google Ads spend to PA when it is entirely Social Scene; reading inventory from a table that mixes live and dead SKUs; stating the branded head keyword needed adding when it already exists seven times; and proposing search-term-level killing that was not needed. The engine's first unattended round trip did work: 00:00 requested, 06:00 collected and acted. Open: Claude CLI and headless OAuth on the mini, LaunchDaemon porting, Tailscale (needs William's account), and the PA production deploy that binds `AD_REINTRO_ENABLED=1`.
+
+---
+
+### 2026-08-04 (part B) — The call reframed the business, the competitors explained the decline, and I shipped creative that earned a 0 out of 10
+
+- **Context** — Second half of 2026-08-04. William uploaded the Read.ai transcript and recording of his 69-minute call with Megan, plus her audit document, and asked for a united path. He then asked me to build graphics and video testimonials from our positive reviews. I built the wrong thing, he rejected it outright, and the recovery became the most useful work of the day.
+
+- **Options considered** — On the creative build: (1) render type-only cards because the source photography lives in Drive and pulling it is expensive; (2) solve the asset problem first, then build with the real product; (3) generate imagery with fal. I chose (1) and it was wrong. (3) turned out to be blocked by the chassis HTTP allowlist, which I did not route around. On the rules: I could have written a loose style guide, but William asked specifically for "a set of rules like BRC for DES", so I read the actual BRC and Social Scene HARD-POSTING-RULES first and modelled the structure, including its single most important property.
+
+- **Decision** — Wrote `PACR-phone-assured-creative-rules.md`, 42 numbered append-only rules that function as a **pre-build gate** rather than a post-build check. Wrote `UNITED-PATH-2026-08-04.md` merging the call, the audit, the search data, the returns and the reviews. Delivered five documents to Megan in Drive. Corrected two repo facts the call disproved.
+
+- **Reasoning** — The 0/10 was deserved and the cause is worth recording: I designed around a constraint instead of removing it. The assets were in Drive, pulling them looked expensive, so I built something that needed no assets. That is the same failure shape as BRC 93 in DES, building before looking at what already exists. The fix is structural, not motivational, which is why the rules are a gate that runs before rendering rather than a checklist afterwards. Separately, extracting frames from the 238MB recording with ffmpeg turned out to be the highest-value research of the day: seven competitor main images side by side showed that **every one of them is a split frame, hardware plus a person wearing it, and ours is hardware alone.** That single observation explains "we look like a badge holder" better than any amount of copy analysis.
+
+- **Industry source / best practice** — Amazon 2026 image spec: main image pure white RGB 255,255,255, product filling 85%+ of frame, no text or logos, 2000-3000px on the long side, and the finding that most conversion lift comes from FILLING all 7-9 slots rather than from premium photography ([Seller Labs](https://www.sellerlabs.com/blog/amazon-product-image-requirements-2026/), [BeBold Digital](https://www.bebolddigital.com/blog/amazon-image-requirements)). Amazon's prohibition on review content and star ratings inside listing images and Sponsored Brands creative. Phone weights from Apple, Samsung and Google published specs. The DES/Social Scene BRC and `HARD-POSTING-RULES.md` as the structural model, in particular "BRC IS A PRE-BUILD GATE, never build then check".
+
+- **Trade-offs accepted** — The compatibility table is published with `[__ oz]` placeholders rather than a guessed number, because guessing 170 g would have restricted BLACK to eight phone models and pushed customers toward PRO, of which we hold 545 against 1,500 BLACK. Getting that number wrong in the conservative direction is commercially worse than waiting a day. I also declined to bypass the chassis HTTP allowlist to reach fal.run, accepting that AI generation stays unavailable until William allowlists it, because routing around a safety control he installed is not mine to decide. And the testimonial storyboard deliberately leaves the strongest review in the dataset unscripted, because it names a child's medical condition and needs that customer's permission.
+
+- **Status / revisit** — The commercial frame has changed: the goal is now to sell through ~2,000 units and wind down, with a checkpoint at 1,000 remaining. Two payment blockers are open at once and outrank all creative work: a rejected tax interview signature and a failing bank deposit verification on the account ending 384. Four things block the creative: the weight rating, the cord material claim, a tether-tab decision, and the fact that **we own no photograph of the clip worn under clothing**, which is our single best differentiator and the one thing no competitor can copy. Correction carried into the repo: inventory is ~2,000 units per Megan, not the zeros the `inventory` table reports, and the defect rise is explained by heavier phones rather than a supplier change.
+
+## 2026-08-05 — judge keywords on lifetime, not on a month
+
+**Context.** Reported August ad spend as $5.99; William said it was over $50 and was right. The
+figure was Sponsored Products on one profile, with a silently failed Sponsored Display report and
+Sponsored Brands never queried. Chasing that error opened the real question: why has an account with
+444 individually profitable keywords never been profitable in aggregate? Lifetime is $100,053 spent
+against $171,744 in sales, 1.72x, where break-even is 1.92x.
+
+**Options considered.** (1) Raise the ACOS target so fewer keywords get cut — rejected, it loses
+money faster on a portfolio already below break-even. (2) Dedupe the account first — investigated
+and rejected as the primary cause; per-keyword-ID data showed single IDs spending $17 on their own,
+so duplicates compound the problem but did not create it. (3) Turn all 151 paused winners back on at
+once — rejected as unbounded exposure with confounded learning. (4) Lift bids on already-enabled
+winners first, then reactivate in waves — chosen. (5) Build Amazon Marketing Stream or pursue
+Marketing Cloud for longer history — rejected as months of work for a business being wound down.
+
+**Decision.** Build our own keyword history outside Amazon (`kw_daily`, `kw_lifetime`,
+`campaign_lifetime`, `ad_entity_lifetime`, `kw_state_snapshot`), gate every future bid and kill
+decision on lifetime evidence rather than a monthly window, and roll the fix out in three
+comparable waves of 26 keywords bid 10% below Amazon's suggested low.
+
+**Reasoning.** The kill rule pauses at $4 month-to-date when unprofitable and the bid rule cuts 10%
+whenever month-to-date ACOS is at or above the 52% pivot. A keyword converting once a quarter shows
+zero orders in most months, so it is cut repeatedly, compounds to the $0.10 floor, and is eventually
+paused — while its lifetime record is 2x to 4x. That is exactly what we found: 135 paused winners at
+2.34x, 16 archived at 3.95x (the best in the account), and 1,847 of 2,281 enabled keywords sitting
+at or below $0.11. The window, not the thresholds, is the defect.
+
+**Industry source.** Amazon's reporting API states its own retention boundary in the error body
+("data retention start date (2026-05-02)"), 95 days, and offers Marketing Stream as the push-based
+route for anything longer — confirming the reporting API is not intended to serve history. The
+standard response to a vendor window is extract-before-expiry: snapshot forward continuously, since
+expired data cannot be re-fetched. Reactivation practice is cohorts with a held-back control and a
+full attribution window before judging, which matters here because sales are 14-day attributed.
+
+**Trade-offs accepted.** Lifetime before 2026-05-02 exists only in console exports and must be
+pulled by hand; 65% of Sponsored Products is captured so far. Waves learn more slowly than a single
+switch-on, accepted to bound downside on an account below break-even. Sponsored Brands can be
+controlled but not measured until Amazon's report queue unsticks, so it gets a spend cap rather than
+the full rule. The $0.85 escalation path is coded but Telegram is unconfigured in production, so it
+would compute correctly and deliver nothing.
+
+**Status.** Rules written and tested (174 passing). Database built and backfilled; July validates to
+$82.09 against an independent pull. Rollback snapshot of all 3,458 keyword bids and states stored at
+`as_of='2026-08-05'`. Nothing applied to the account. Wave one is blocked on two fixes: assigning
+waves by word so duplicate copies move together, and protecting the cohort from the automated bid
+cut that would otherwise reverse the test within days.
