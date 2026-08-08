@@ -65,8 +65,10 @@ import { harvestCandidates, harvestWindows, parseBulkOutcome, HARVEST_MIN_SPEND,
 // (not one global anchor), as soon as it CONVERTS — no spend bar. Amazon's 80-char/10-word keyword
 // limit is enforced by shortening an over-long term to its longest valid root.
 const NEW_KW_BID = 0.5;
+// matchType defaults to BROAD because since 2026-08-08 only broad discoveries are harvested;
+// the tests below are about the OTHER conditions, so they all start from an eligible match type.
 const row = (o: Partial<SearchTermRow>): SearchTermRow =>
-  ({ campaignId: "C1", adGroupId: "A1", cost: 0, sales14d: 0, purchases14d: 0, ...o });
+  ({ campaignId: "C1", adGroupId: "A1", cost: 0, sales14d: 0, purchases14d: 0, matchType: "BROAD", ...o });
 
 describe("harvestCandidates — harvest on first conversion, into the source ad group", () => {
   it("harvests a qualifying term as EXACT + PHRASE into its OWN ad group", () => {
@@ -317,5 +319,59 @@ describe("reactivationCandidates — lifetime route", () => {
   it("works with no lifetime table at all — the window route is unaffected", () => {
     expect(reactivationCandidates(paused(), perf([["K1", 6, 20]]))).toHaveLength(1);
     expect(reactivationCandidates(paused(), new Map())).toHaveLength(0);
+  });
+});
+
+describe("only BROAD discoveries are harvested (William 2026-08-08)", () => {
+  // "only way to add new phrase and exact is if they perform as search terms for broad keywords"
+  const win = { searchTerm: "anti theft phone strap", cost: 2.24, sales14d: 16.49, purchases14d: 1 };
+
+  it("harvests a converting BROAD search term as EXACT + PHRASE", () => {
+    // The real row from the live account, 2026-08-08: 7.4x, found by the broad keyword
+    // "hand strap universal phone lanyard clip to belt" — the very keyword the $4 rule killed
+    // that morning at 83% ACOS. The keyword loses money; this term inside it returns 7.4x.
+    const adds = harvestCandidates([row({ ...win, keyword: "hand strap universal phone lanyard clip to belt" })], new Set());
+    expect(adds.map((a) => a.matchType).sort()).toEqual(["EXACT", "PHRASE"]);
+    expect(adds.every((a) => a.keywordText === "anti theft phone strap")).toBe(true);
+  });
+
+  it("does NOT harvest the same term when a PHRASE keyword found it", () => {
+    expect(harvestCandidates([row({ ...win, matchType: "PHRASE" })], new Set())).toHaveLength(0);
+  });
+
+  it("does NOT harvest when an EXACT keyword found it", () => {
+    expect(harvestCandidates([row({ ...win, matchType: "EXACT" })], new Set())).toHaveLength(0);
+  });
+
+  it("does NOT harvest auto-campaign discoveries by default", () => {
+    // Auto reports as TARGETING_EXPRESSION_PREDEFINED with keyword text "loose-match", never BROAD.
+    // Excluding it is the literal reading of William's rule and remains an open question.
+    expect(harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED", keyword: "loose-match" })], new Set())).toHaveLength(0);
+  });
+
+  it("CAN include auto when asked, without a code change", () => {
+    const adds = harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED" })], new Set(),
+      NEW_KW_BID, { discoveryMatchTypes: ["BROAD", "TARGETING_EXPRESSION", "TARGETING_EXPRESSION_PREDEFINED"] });
+    expect(adds).toHaveLength(2);
+  });
+
+  it("treats a row with NO match type as ineligible rather than assuming broad", () => {
+    // Rows predating the column cannot be shown to be discoveries. Silence is not eligibility.
+    expect(harvestCandidates([{ ...row(win), matchType: undefined }], new Set())).toHaveLength(0);
+  });
+
+  it("still applies the 2.0x bar to broad discoveries", () => {
+    // 1.5x: converted, but below the bar William set and below the 1.92x break-even.
+    expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 15, purchases14d: 1 })], new Set())).toHaveLength(0);
+    expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 20, purchases14d: 1 })], new Set())).toHaveLength(2);
+  });
+
+  it("does not let a PHRASE row's spend drag a BROAD winner below the bar", () => {
+    // Same term, two match types. Only the broad row counts toward the decision.
+    const adds = harvestCandidates([
+      row({ searchTerm: "shared term", cost: 1, sales14d: 10, purchases14d: 1, matchType: "BROAD" }),
+      row({ searchTerm: "shared term", cost: 90, sales14d: 0, purchases14d: 0, matchType: "PHRASE" }),
+    ], new Set());
+    expect(adds).toHaveLength(2);
   });
 });

@@ -58,7 +58,14 @@ const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 interface Kw { keywordId: string; keywordText: string; matchType: string; state: string; bid: number; campaignId: string; adGroupId: string }
 interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
-export interface SearchTermRow { searchTerm?: string; campaignId?: string | number; adGroupId?: string | number; cost?: number; sales14d?: number; purchases14d?: number }
+export interface SearchTermRow {
+  searchTerm?: string; campaignId?: string | number; adGroupId?: string | number;
+  cost?: number; sales14d?: number; purchases14d?: number;
+  /** The keyword that matched this search term. */
+  keyword?: string;
+  /** BROAD | PHRASE | EXACT, or TARGETING_EXPRESSION* for auto campaigns. */
+  matchType?: string;
+}
 export interface HarvestAdd { campaignId: string; adGroupId: string; keywordText: string; matchType: "EXACT" | "PHRASE"; state: "ENABLED"; bid: number }
 /** `via` records WHICH route brought a keyword back: recent recovery, or its lifetime record. */
 export interface ReactivationCandidate { keywordId: string; keywordText: string; matchType: string; cost: number; acos: number; via: "window" | "lifetime" }
@@ -98,7 +105,10 @@ async function ads(cfg: AdsConfig, token: string, path: string, method: string, 
 // queue (measured ~9 min on this account against the old 140s inline budget). Returns [] plus a
 // human-readable note when the data is not ready yet — that is a normal outcome, not an error.
 const SP_COLS = ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"];
-const ST_COLS = ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"];
+// `keyword` and `matchType` added 2026-08-08: without them a search term cannot be attributed to
+// the keyword that caught it, so "terms that hit on broad match" was not expressible. Probed live
+// first — Amazon accepts both on spSearchTerm and returns them populated on every row.
+const ST_COLS = ["searchTerm", "keyword", "matchType", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"];
 
 /** The ONE place a Sponsored Products report spec is built. Everything that needs a spec goes
  *  through here, so the warm-up job and the engine cannot drift into different cache keys — a
@@ -207,7 +217,22 @@ export function harvestWindows(days: number, now: number): [string, string][] {
 // evidence in the account — but there IS a return bar, which is what was missing until 2026-08-07.
 // Each qualifying term is harvested as EXACT + PHRASE INTO THE AD GROUP IT CONVERTED IN, skipping any
 // (adGroup, matchType, text) already present. `existing` keys are `${adGroupId}|${matchType}|${lowerText}`.
-export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID): HarvestAdd[] {
+export function harvestCandidates(
+  rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID,
+  opts: { discoveryMatchTypes?: string[] } = {},
+): HarvestAdd[] {
+  // ONLY BROAD DISCOVERIES ARE HARVESTED (William 2026-08-08): "only way to add new phrase and
+  // exact is if they perform as search terms for broad keywords".
+  //
+  // Broad is the only match type that surfaces phrasings nobody put in a keyword list, so it is the
+  // only one where promoting a term to EXACT + PHRASE creates something that did not exist. A term
+  // found by a PHRASE keyword promoted to PHRASE is just a copy of itself.
+  //
+  // Auto campaigns report as TARGETING_EXPRESSION / TARGETING_EXPRESSION_PREDEFINED with the keyword
+  // text "loose-match", NOT as BROAD, so they are excluded by this list as written. That is the
+  // literal reading of William's rule and it is left as a parameter rather than hard-coded, because
+  // auto is the other half of the industry's discovery tier and is a live open question.
+  const discovery = new Set((opts.discoveryMatchTypes ?? ["BROAD"]).map((m) => m.toUpperCase()));
   const agg = new Map<string, { cid: string; agid: string; term: string; cost: number; sales: number; orders: number }>();
   for (const r of rows) {
     const term = (r.searchTerm || "").trim();
@@ -215,6 +240,9 @@ export function harvestCandidates(rows: SearchTermRow[], existing: Set<string>, 
     const agid = r.adGroupId != null ? String(r.adGroupId) : "";
     if (!term || !cid || !agid) continue;            // need the source ad group to harvest into
     if (/^b0[a-z0-9]{8}$/i.test(term)) continue;     // ASIN, not a customer search phrase
+    // A row with no match type predates the column and cannot be shown to be a broad discovery, so
+    // it is skipped. Silence must not read as eligibility.
+    if (!discovery.has(String(r.matchType || "").toUpperCase())) continue;
     const key = `${cid}|${agid}|${term.toLowerCase()}`;
     const o = agg.get(key) ?? { cid, agid, term, cost: 0, sales: 0, orders: 0 };
     o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0; o.orders += r.purchases14d ?? 0;

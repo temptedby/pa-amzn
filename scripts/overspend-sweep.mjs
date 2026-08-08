@@ -76,9 +76,15 @@ let offenders=0;
       FROM sb_daily WHERE day >= ? AND day <= ? GROUP BY keyword_id`,args:[START,END]});
   const rows=q.rows.map(x=>({id:String(x.keyword_id),t:x.t,m:x.m,c:Number(x.c||0),s:Number(x.s||0),o:Number(x.o||0)}));
   console.log(`  ${rows.length} keyword ids in sb_daily, $${rows.reduce((a,b)=>a+b.c,0).toFixed(2)} MTD`);
-  const kw=await fetch(`${A}/sb/keywords?count=1000`,{headers:H('application/json')}).then(r=>r.json()).catch(()=>[]);
-  const en=new Set((Array.isArray(kw)?kw:[]).filter(k=>String(k.state).toUpperCase()==='ENABLED').map(k=>String(k.keywordId)));
-  console.log(`  ${en.size} enabled SB keywords readable`);
+  // SB READ NEEDS ITS OWN ACCEPT HEADER. application/json returns nothing usable, and an empty read
+  // then looks identical to a clean account — this produced a FALSE "clean" on 2026-08-08.
+  // The verified value is application/vnd.sbkeyword.v3+json (sb-v2.ts KW_READ_ACCEPT), and note the
+  // write path uses a DIFFERENT one again.
+  const kw=await fetch(`${A}/sb/keywords`,{headers:{...H('application/json'),Accept:'application/vnd.sbkeyword.v3+json'}}).then(r=>r.json()).catch(()=>[]);
+  const list=Array.isArray(kw)?kw:[];
+  const en=new Set(list.filter(k=>String(k.state).toUpperCase()==='ENABLED').map(k=>String(k.keywordId)));
+  console.log(`  ${list.length} SB keywords readable, ${en.size} enabled`);
+  if(!list.length){console.log('  !! READ FAILED — treat the result below as UNKNOWN, not clean');}
   const hits=rows.filter(x=>bad(x.c,x.o,x.s)&&en.has(x.id));
   if(!hits.length) console.log('  CLEAN: nothing past the bar is still enabled');
   hits.sort((a,b)=>b.c-a.c).forEach(x=>{offenders++;console.log(`  STILL ON  $${x.c.toFixed(2)}  ${x.o} ord  [${x.m}] ${x.t}  id=${x.id}`);});
