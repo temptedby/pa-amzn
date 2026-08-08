@@ -545,29 +545,44 @@ export function isNextMonth(a: string, b: string): boolean {
 // that walked these words to the floor.
 // ---------------------------------------------------------------------------
 
-/** Days a bid must hold before it may move again, and before a raise can be judged. */
-export const BID_COOLDOWN_DAYS = 7;
-/** How much worse ACOS must get before a raise is reversed. 1.25 = 25% worse, not noise. */
-export const ROLLBACK_WORSE_BY = 1.25;
-/** A verdict needs real traffic behind it; 2 clicks is not evidence either way. */
-export const ROLLBACK_MIN_CLICKS = 5;
+// ---------------------------------------------------------------------------
+// Bid search: hunt the most profitable bid for every word, continuously.
+//
+// William 2026-08-07: "we raise or lower bids based on performance just like closing out words to
+// find the max roas for each word constantly."
+//
+// Every run, each keyword moves a flat $0.10 toward the bid that keeps it BOTH spending AND above 2x.
+// Over a few runs each word settles at the highest bid it can carry while still returning 2x.
+//
+// ONE CORRECTION, and it is the whole reason this account is where it is:
+// maximising ROAS on its own drives every bid to the floor. A $0.10 bid wins only the cheapest
+// clicks, so it posts a superb ratio and almost no volume. 1,830 of 2,282 enabled keywords sit at
+// exactly $0.10 with the best ratios in the account and no sales. So the target is not the highest
+// ratio, it is the HIGHEST BID THAT STILL CLEARS BREAK-EVEN — the most profit, which sits just
+// before ROAS starts to fall. Climb while profitable, retreat when not.
+// ---------------------------------------------------------------------------
+
+/** Minimum gap between moves on one keyword. Every engine run may act (William: "every 6 hours"). */
+export const BID_COOLDOWN_HOURS = 6;
+/** How much a bid moves per step: a flat ten cents (William: "i asked raising by .10 not 10%"). */
+export const BID_SEARCH_STEP = 0.10;
+/** Clicks needed before a direction is trusted. Below this the reading is noise, so the bid holds. */
+export const SEARCH_MIN_CLICKS = 3;
+// The line the whole search steers by (William 2026-08-07: "roas above 2x that's the goal").
+// Break-even is 1.92x on real fees ($9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA), so 2x is
+// break-even plus a thin margin — deliberately not a target that only a floored bid could hit.
+export const TARGET_ROAS = 2.0;
 
 export interface BidChange {
-  /** When the change was applied. */
   changedAt: string;
   fromBid: number;
   toBid: number;
-  /** ACOS over the window BEFORE the change; null when it had no sales then. */
-  acosBefore: number | null;
+  /** ROAS over the window BEFORE the change; null when it had no sales then. */
+  roasBefore: number | null;
 }
 
 /** Performance accumulated SINCE a bid change — the evidence that change produced. */
-export interface SinceChange {
-  spend: number;
-  sales: number;
-  orders: number;
-  clicks: number;
-}
+export interface SinceChange { spend: number; sales: number; orders: number; clicks: number }
 
 /** Whole days between an ISO timestamp and now. */
 export function daysSince(iso: string, nowMs = Date.now()): number {
@@ -576,82 +591,88 @@ export function daysSince(iso: string, nowMs = Date.now()): number {
   return (nowMs - t) / 864e5;
 }
 
-/** True while a keyword's last bid change is still too fresh to judge or to overwrite. */
-export function inCooldown(last: BidChange | null | undefined, nowMs = Date.now(), days = BID_COOLDOWN_DAYS): boolean {
+/** True while a keyword's last bid change is too fresh to act on again. */
+export function inCooldown(last: BidChange | null | undefined, nowMs = Date.now(), hours = BID_COOLDOWN_HOURS): boolean {
   if (!last) return false;
-  return daysSince(last.changedAt, nowMs) < days;
+  return daysSince(last.changedAt, nowMs) * 24 < hours;
 }
 
-export type RollbackVerdict =
-  | { action: "rollback"; bid: number; reason: string }
-  | { action: "keep"; reason: string };
+export type SearchStep =
+  | { bid: number; direction: "up" | "down"; reason: string }
+  | { bid: null; reason: string };
 
 /**
- * Judge a RAISE once its evaluation window has passed.
+ * One bid step for one keyword.
  *
- * Deliberately conservative: it only ever reverses a raise, never a cut, and it returns the exact
- * previous bid rather than cutting further. Anything ambiguous keeps the current bid, because the
- * cost of a wrong rollback is unlearning something that was working.
+ * William 2026-08-07, the goal in his words: "just have to try to keep ads spending and roas above
+ * 2x that's the goal."
+ *
+ * Two conditions, both required, and the rule falls straight out of them:
+ *
+ *    not spending          -> UP.   A keyword winning nothing is not in the auction. Waiting for
+ *                                   evidence it can never produce is how 1,830 words parked at
+ *                                   $0.10 forever. "so .10 is not ok".
+ *    spending, >= 2x       -> UP.   Profitable, so buy more of it.
+ *    spending, under 2x    -> DOWN. Paying too much per sale; bid less for the same clicks.
+ *
+ * That converges on its own. The bid climbs until ROAS falls through 2x, drops back, and then
+ * oscillates around the highest bid that still returns 2x — which is the most volume this word can
+ * carry while still paying for itself. No direction memory needed: the 2x line does the steering.
+ *
+ * Only the $4 kill switches a keyword off. This never returns "stop".
  */
-export function judgeRaise(
-  last: BidChange,
-  since: SinceChange,
-  nowMs = Date.now(),
-  opts: { days?: number; worseBy?: number; minClicks?: number } = {},
-): RollbackVerdict {
-  const days = opts.days ?? BID_COOLDOWN_DAYS;
-  const worseBy = opts.worseBy ?? ROLLBACK_WORSE_BY;
-  const minClicks = opts.minClicks ?? ROLLBACK_MIN_CLICKS;
+export function searchStep(
+  currentBid: number,
+  since: SinceChange | null | undefined,
+  _last?: BidChange | null,
+  opts: { step?: number; floor?: number; cap?: number; minClicks?: number; target?: number } = {},
+): SearchStep {
+  const step = opts.step ?? BID_SEARCH_STEP;
+  const floor = opts.floor ?? BID_FLOOR;
+  const cap = opts.cap ?? BID_CAP;
+  const minClicks = opts.minClicks ?? SEARCH_MIN_CLICKS;
+  const target = opts.target ?? TARGET_ROAS;
+  const base = currentBid > 0 ? currentBid : floor;
 
-  if (last.toBid <= last.fromBid) return { action: "keep", reason: "not a raise" };
-  if (daysSince(last.changedAt, nowMs) < days) return { action: "keep", reason: "still inside the evaluation window" };
-  if (since.clicks < minClicks) return { action: "keep", reason: `only ${since.clicks} clicks since the raise — not evidence` };
+  // A FLAT TEN CENTS, not ten percent (William 2026-08-07: "i asked raising by .10 not 10%").
+  // The same step the reintroduction ladder uses. A percentage step is worst exactly where it is
+  // needed most: 10% of a $0.10 bid is one cent, so a floored keyword would need 19 runs to reach
+  // the $0.59 market CPC. A flat dime gets there in five. Arithmetic is in whole cents throughout,
+  // because comparing dollars as floats made $0.10 -> $0.11 read as "no change" and pinned every
+  // floored keyword at exactly the floor this rule exists to escape.
+  const move = (dir: "up" | "down", reason: string): SearchStep => {
+    const stepC = Math.round(step * 100), baseC = Math.round(base * 100);
+    const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);
+    const target = dir === "up" ? baseC + stepC : baseC - stepC;
+    const bidC = Math.max(floorC, Math.min(capC, target));
+    if (bidC === baseC) return { bid: null, reason: `${reason} (already at the ${dir === "up" ? "cap" : "floor"})` };
+    return { bid: bidC / 100, direction: dir, reason };
+  };
 
-  // Spent real money and bought nothing: the clearest failure there is.
-  if (since.spend >= KILL_SPEND && since.orders === 0) {
-    return { action: "rollback", bid: last.fromBid, reason: `$${since.spend.toFixed(2)} and no orders since the raise` };
-  }
-  if (since.sales <= 0) return { action: "keep", reason: "no sales yet, and under the $4 bar — leave it alone" };
+  if (!since || since.spend <= 0) return move("up", "not spending — raising until it enters the auction");
+  if (since.clicks < minClicks) return { bid: null, reason: `only ${since.clicks} clicks since the last move — not enough to judge` };
 
-  const acosAfter = since.spend / since.sales;
-  if (last.acosBefore === null) {
-    // Nothing to compare against, so judge against break-even instead of against itself.
-    return acosAfter >= ACOS_PIVOT
-      ? { action: "rollback", bid: last.fromBid, reason: `${Math.round(acosAfter * 100)}% ACOS since the raise, past the ${Math.round(ACOS_PIVOT * 100)}% break-even` }
-      : { action: "keep", reason: `${Math.round(acosAfter * 100)}% ACOS since the raise — the raise is working` };
-  }
-  if (acosAfter >= last.acosBefore * worseBy) {
-    return {
-      action: "rollback", bid: last.fromBid,
-      reason: `ACOS went ${Math.round(last.acosBefore * 100)}% -> ${Math.round(acosAfter * 100)}% after raising $${last.fromBid} -> $${last.toBid}`,
-    };
-  }
-  return { action: "keep", reason: `ACOS ${Math.round(last.acosBefore * 100)}% -> ${Math.round(acosAfter * 100)}% — not worse` };
+  const roas = since.sales / since.spend;
+  return roas >= target
+    ? move("up",   `${roas.toFixed(2)}x, at or above ${target}x — buying more`)
+    : move("down", `${roas.toFixed(2)}x, below ${target}x — paying too much per sale`);
 }
 
 /**
- * The whole bid decision for one keyword, memory included. Order matters:
- *   1. inside cooldown            -> hold, so the last change can be measured
- *   2. a matured raise that hurt  -> roll back to the bid that had evidence
- *   3. otherwise                  -> the ordinary ±10% step at the ACOS pivot
+ * The whole bid decision for one keyword: cooldown, then a search step.
+ * Returns bid null when nothing should change this run.
  */
 export function bidWithMemory(
   currentBid: number,
-  p: Perf,
+  _p: Perf,
   last: BidChange | null | undefined,
   since: SinceChange | null | undefined,
   nowMs = Date.now(),
-  opts: { step?: number; pivot?: number; floor?: number; cap?: number; days?: number } = {},
+  opts: { step?: number; floor?: number; cap?: number; hours?: number; minClicks?: number; target?: number } = {},
 ): { bid: number | null; reason: string } {
-  if (last && since) {
-    const v = judgeRaise(last, since, nowMs, { days: opts.days });
-    if (v.action === "rollback") return { bid: round2(clamp(v.bid, opts.floor ?? BID_FLOOR, opts.cap ?? BID_CAP)), reason: v.reason };
+  if (inCooldown(last, nowMs, opts.hours ?? BID_COOLDOWN_HOURS)) {
+    return { bid: null, reason: `held: last change was ${(daysSince(last!.changedAt, nowMs) * 24).toFixed(1)}h ago` };
   }
-  if (inCooldown(last, nowMs, opts.days ?? BID_COOLDOWN_DAYS)) {
-    return { bid: null, reason: `held: last change was ${daysSince(last!.changedAt, nowMs).toFixed(1)}d ago, needs ${opts.days ?? BID_COOLDOWN_DAYS}d` };
-  }
-  const next = nextBid(currentBid, p, opts);
-  if (Math.abs(next - (currentBid || 0)) < 0.01) return { bid: null, reason: "no change due" };
-  const acos = acosOf(p);
-  return { bid: next, reason: acos === null ? "no ACOS signal" : `${Math.round(acos * 100)}% ACOS` };
+  const v = searchStep(currentBid, since, last, opts);
+  return { bid: v.bid, reason: v.reason };
 }

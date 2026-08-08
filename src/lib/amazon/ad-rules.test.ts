@@ -6,7 +6,8 @@ import {
   isProtected, KILL_SPEND,
   nextLadderBid, ladderVerdict, REINTRO_START_BID, BID_LADDER_MAX, BID_LADDER_STEP,
   isPermanentlyDead, deadKey, shouldRetirePermanently, isNextMonth, type MonthPerf,
-  inCooldown, judgeRaise, bidWithMemory, daysSince, BID_COOLDOWN_DAYS, BID_FLOOR, type BidChange,
+  inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, TARGET_ROAS,
+  type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
 } from "./ad-rules";
 
@@ -498,110 +499,96 @@ describe("shouldRetirePermanently — 3 consecutive dead months cuts a former wi
 //   retractable phone holder belt clip   $0.82 -> $1.45 in 4 days
 //   phone tethered                       0.49 -> 0.94 -> 0.35 in 6 days
 // ---------------------------------------------------------------------------
-describe("bid cooldown", () => {
-  const at = (daysAgo: number) => new Date(Date.now() - daysAgo * 864e5).toISOString();
-  const raise = (daysAgo: number): BidChange => ({ changedAt: at(daysAgo), fromBid: 0.5, toBid: 0.55, acosBefore: 0.3 });
+describe("searchStep — keep it spending, and above 2x", () => {
+  // William 2026-08-07: "just have to try to keep ads spending and roas above 2x that's the goal."
+  const ev = (spend: number, sales: number, clicks = 10, orders = 1): SinceChange => ({ spend, sales, clicks, orders });
 
-  it("holds a bid that moved an hour ago, so the move can be measured", () => {
-    expect(inCooldown(raise(1 / 24))).toBe(true);
+  it("raises a profitable word by a flat ten cents — 3x means buy more of it", () => {
+    const v = searchStep(0.50, ev(10, 30));
+    expect(v.bid).toBe(0.60);
+    if (v.bid !== null) expect(v.direction).toBe("up");
   });
-  it("releases it once the window has passed", () => {
-    expect(inCooldown(raise(BID_COOLDOWN_DAYS + 0.1))).toBe(false);
+
+  it("lowers a word under 2x — it is paying too much per sale", () => {
+    const v = searchStep(0.50, ev(10, 15));                    // 1.5x
+    expect(v.bid).toBe(0.40);
+    if (v.bid !== null) expect(v.direction).toBe("down");
   });
-  it("never blocks a keyword that has no history", () => {
-    expect(inCooldown(null)).toBe(false);
+
+  it("treats exactly 2x as good enough to keep buying", () => {
+    const v = searchStep(0.50, ev(10, 20));
+    if (v.bid !== null) expect(v.direction).toBe("up");
   });
-  it("stops the 4-moves-a-day compounding outright", () => {
-    // The real sequence: 9% ACOS, so every run wants to raise. Only the first is allowed.
-    let bid = 0.82, moves = 0;
-    let last: BidChange | null = null;
-    for (let run = 0; run < 16; run++) {                     // 16 runs = 4 days at 6-hourly
-      const nowMs = Date.now() + run * 6 * 3600 * 1000;
-      const v = bidWithMemory(bid, { spend: 0.82, sales: 9.49, orders: 1 }, last, null, nowMs);
-      if (v.bid !== null) {
-        last = { changedAt: new Date(nowMs).toISOString(), fromBid: bid, toBid: v.bid, acosBefore: 0.09 };
-        bid = v.bid; moves++;
-      }
+
+  it("lowers a hair under 2x", () => {
+    const v = searchStep(0.50, ev(10, 19.9));
+    if (v.bid !== null) expect(v.direction).toBe("down");
+  });
+
+  // "you have to spend to max roas ... so .10 is not ok"
+  it("RAISES a keyword that is not spending, instead of waiting for evidence it cannot produce", () => {
+    const v = searchStep(0.10, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+    expect(v.bid).toBe(0.20);
+    if (v.bid !== null) expect(v.direction).toBe("up");
+  });
+
+  it("clears the $0.59 market CPC in five runs, not nineteen", () => {
+    // A percentage step is worst where it matters most: 10% of $0.10 is one cent.
+    let bid = 0.10, runs = 0;
+    for (; runs < 25; runs++) {
+      const v = searchStep(bid, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+      if (v.bid === null) break;
+      bid = v.bid;
+      if (bid > 0.59) break;
     }
-    expect(moves).toBe(1);                                    // was 16
-    expect(bid).toBeLessThan(1.0);                            // was $1.45
+    expect(bid).toBeGreaterThan(0.59);
+    expect(runs).toBeLessThanOrEqual(5);
+  });
+
+  it("does NOT park at the floor just because a tiny bid shows a beautiful ratio", () => {
+    const v = searchStep(0.10, ev(1, 50));                      // 50x at $0.10
+    if (v.bid !== null) expect(v.direction).toBe("up");
+  });
+
+  it("will not judge on 2 clicks that did spend", () => {
+    expect(searchStep(0.50, ev(3, 0, 2)).bid).toBeNull();
+  });
+
+  it("respects the floor and the cap", () => {
+    expect(searchStep(BID_FLOOR, ev(10, 5)).bid).toBeNull();
+    expect(searchStep(BID_CAP, ev(10, 50)).bid).toBeNull();
+  });
+
+  it("settles at the highest bid that still returns 2x, and stays there", () => {
+    // Realistic shape: a higher bid buys pricier clicks, so ROAS falls as the bid rises.
+    // 4.0x at $0.00 down through 2.0x at $1.00. The search should find and hold that edge.
+    const trueRoas = (bid: number) => Math.max(0, 4.0 - 2 * bid);
+    let bid = 0.30;
+    const visited: number[] = [];
+    for (let run = 0; run < 80; run++) {
+      const v = searchStep(bid, ev(10, 10 * trueRoas(bid)));
+      if (v.bid === null) break;
+      bid = v.bid;
+      if (run > 60) visited.push(bid);                          // where it ends up living
+    }
+    expect(bid).toBeGreaterThan(0.85);                          // did not stay at $0.30
+    expect(bid).toBeLessThan(1.25);                             // did not run to the $2.50 cap
+    // A flat dime means it straddles the 2x line one dime either side, and stays there.
+    for (const b of visited) expect(b).toBeGreaterThan(0.85);
+    for (const b of visited) expect(b).toBeLessThan(1.25);
   });
 });
 
-describe("judgeRaise — reverse a raise that made things worse", () => {
-  const old = (daysAgo = BID_COOLDOWN_DAYS + 1) => new Date(Date.now() - daysAgo * 864e5).toISOString();
-  const raised = (acosBefore: number | null = 0.30): BidChange => ({ changedAt: old(), fromBid: 0.50, toBid: 0.75, acosBefore });
-
-  it("rolls back to the OLD bid, not lower — that is the level with evidence behind it", () => {
-    const v = judgeRaise(raised(0.30), { spend: 10, sales: 20, orders: 2, clicks: 20 });  // 50% vs 30%
-    expect(v.action).toBe("rollback");
-    if (v.action === "rollback") expect(v.bid).toBe(0.50);
+describe("bidWithMemory — cooldown then search", () => {
+  it("holds a bid that moved an hour ago", () => {
+    const justMoved: BidChange = { changedAt: new Date(Date.now() - 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
+    expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, justMoved, { spend: 10, sales: 40, orders: 2, clicks: 20 }).bid).toBeNull();
   });
-
-  it("keeps a raise that is working", () => {
-    expect(judgeRaise(raised(0.40), { spend: 10, sales: 40, orders: 4, clicks: 20 }).action).toBe("keep");  // 25% vs 40%
+  it("acts once the 6-hour window has passed, so every engine run may move a bid", () => {
+    const older: BidChange = { changedAt: new Date(Date.now() - 7 * 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
+    expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, older, { spend: 10, sales: 40, orders: 2, clicks: 20 }).bid).not.toBeNull();
   });
-
-  it("ignores noise — 30% worse rolls back, 10% worse does not", () => {
-    expect(judgeRaise(raised(0.40), { spend: 10, sales: 19, orders: 2, clicks: 20 }).action).toBe("rollback"); // 53%
-    expect(judgeRaise(raised(0.40), { spend: 10, sales: 23, orders: 2, clicks: 20 }).action).toBe("keep");     // 43%
-  });
-
-  it("never touches a CUT — this rule only ever reverses raises", () => {
-    const cut: BidChange = { changedAt: old(), fromBid: 0.75, toBid: 0.50, acosBefore: 0.30 };
-    expect(judgeRaise(cut, { spend: 99, sales: 1, orders: 1, clicks: 99 }).action).toBe("keep");
-  });
-
-  it("waits out the evaluation window — sales lag up to 14 days", () => {
-    const fresh: BidChange = { changedAt: new Date(Date.now() - 864e5).toISOString(), fromBid: 0.5, toBid: 0.75, acosBefore: 0.3 };
-    const v = judgeRaise(fresh, { spend: 10, sales: 0, orders: 0, clicks: 40 });
-    expect(v.action).toBe("keep");
-    expect(v.reason).toMatch(/evaluation window/);
-  });
-
-  it("will not judge on 2 clicks", () => {
-    expect(judgeRaise(raised(), { spend: 8, sales: 0, orders: 0, clicks: 2 }).action).toBe("keep");
-  });
-
-  it("rolls back a raise that spent past $4 and bought nothing", () => {
-    const v = judgeRaise(raised(), { spend: 6, sales: 0, orders: 0, clicks: 12 });
-    expect(v.action).toBe("rollback");
-    if (v.action === "rollback") expect(v.bid).toBe(0.50);
-  });
-
-  it("with no ACOS before, judges against break-even instead of against itself", () => {
-    expect(judgeRaise(raised(null), { spend: 10, sales: 15, orders: 2, clicks: 20 }).action).toBe("rollback"); // 67%
-    expect(judgeRaise(raised(null), { spend: 10, sales: 40, orders: 4, clicks: 20 }).action).toBe("keep");     // 25%
-  });
-
-  it("leaves an under-$4 raise with no sales alone rather than guessing", () => {
-    // Attribution may simply not have landed. Under the $4 bar there is nothing to act on.
-    expect(judgeRaise(raised(), { spend: 2.5, sales: 0, orders: 0, clicks: 8 }).action).toBe("keep");
-  });
-});
-
-describe("bidWithMemory — the three rules in priority order", () => {
-  const old = new Date(Date.now() - (BID_COOLDOWN_DAYS + 1) * 864e5).toISOString();
-
-  it("a matured bad raise is rolled back even though ACOS would say raise again", () => {
-    const last: BidChange = { changedAt: old, fromBid: 0.50, toBid: 0.75, acosBefore: 0.20 };
-    const v = bidWithMemory(0.75, { spend: 10, sales: 25, orders: 2 }, last, { spend: 10, sales: 25, orders: 2, clicks: 20 });
-    expect(v.bid).toBe(0.50);                                 // 40% vs 20% before -> rolled back
-  });
-
-  it("falls through to the ordinary ±10% step when there is no history", () => {
-    const v = bidWithMemory(1.00, { spend: 1, sales: 20, orders: 2 }, null, null);
-    expect(v.bid).toBe(1.10);                                 // 5% ACOS -> raise
-  });
-
-  it("returns null rather than a bid when nothing should change", () => {
-    const last: BidChange = { changedAt: new Date().toISOString(), fromBid: 0.5, toBid: 0.55, acosBefore: 0.3 };
-    expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, last, null).bid).toBeNull();
-  });
-
-  it("respects the floor and cap when rolling back", () => {
-    const last: BidChange = { changedAt: old, fromBid: 0.02, toBid: 0.40, acosBefore: 0.10 };
-    const v = bidWithMemory(0.40, { spend: 9, sales: 10, orders: 1 }, last, { spend: 9, sales: 10, orders: 1, clicks: 20 });
-    expect(v.bid).toBe(BID_FLOOR);                            // 0.02 is below the floor
+  it("never blocks a keyword with no history", () => {
+    expect(inCooldown(null)).toBe(false);
   });
 });

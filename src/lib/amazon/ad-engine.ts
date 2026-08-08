@@ -3,7 +3,7 @@ import { db } from "@/lib/db/client";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
-  bidWithMemory, BID_COOLDOWN_DAYS, type BidChange, type SinceChange,
+  bidWithMemory, BID_COOLDOWN_HOURS, type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
@@ -70,7 +70,7 @@ export interface ReactivationResult {
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
   killed: { text: string; spend: number; matchType: string; keywordId: string; applied?: boolean }[];
-  bids: { text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string }[];
+  bids: { text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string; roasBefore?: number | null }[];
   added: { text: string; matchType: string }[];
   /** Report-readiness lines. A pass with data still queued is normal, so it is a note, not an error. */
   notes: string[];
@@ -265,7 +265,7 @@ export function reactivationCandidates(
 async function ensureBidMemory(): Promise<void> {
   await db().execute(`CREATE TABLE IF NOT EXISTS kw_bid_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, keyword_id TEXT NOT NULL, changed_at TEXT NOT NULL,
-    from_bid REAL NOT NULL, to_bid REAL NOT NULL, acos_before REAL, reason TEXT, ad_product TEXT)`);
+    from_bid REAL NOT NULL, to_bid REAL NOT NULL, roas_before REAL, reason TEXT, ad_product TEXT)`);
   await db().execute(`CREATE INDEX IF NOT EXISTS kw_bid_history_kw ON kw_bid_history (keyword_id, changed_at DESC)`);
   await db().execute(`CREATE TABLE IF NOT EXISTS kw_perf_snapshot (
     taken_at TEXT NOT NULL, keyword_id TEXT NOT NULL, month TEXT NOT NULL,
@@ -278,12 +278,12 @@ async function ensureBidMemory(): Promise<void> {
 async function lastBidChanges(): Promise<Map<string, BidChange>> {
   const out = new Map<string, BidChange>();
   try {
-    const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, acos_before FROM kw_bid_history
+    const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, roas_before FROM kw_bid_history
       WHERE id IN (SELECT MAX(id) FROM kw_bid_history GROUP BY keyword_id)`);
     for (const row of r.rows) {
       out.set(String(row.keyword_id), {
         changedAt: String(row.changed_at), fromBid: Number(row.from_bid), toBid: Number(row.to_bid),
-        acosBefore: row.acos_before == null ? null : Number(row.acos_before),
+        roasBefore: row.roas_before == null ? null : Number(row.roas_before),
       });
     }
   } catch { /* first run — no history yet */ }
@@ -400,15 +400,19 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       const promotedAt = protectedIds.get(id);
       const isCut = m.bid < (k.bid || NEW_KW_BID);
       if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
-      if (m.reason.includes("ACOS went") || m.reason.includes("no orders since the raise") || m.reason.includes("past the")) rolledBack++;
+      if (m.reason.includes("turning around")) rolledBack++;
       const acos = perf.sales > 0 ? perf.spend / perf.sales : 0;
+      // roasBefore is measured on the window SINCE the last move, which is what the next run will
+      // compare against. Using month-to-date here would blur the very signal the climb depends on.
+      const ev = since.get(id);
+      const roasBefore = ev && ev.spend > 0 ? ev.sales / ev.spend : null;
       bidOps.push({ keywordId: id, bid: m.bid });
-      out.bids.push({ text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100, reason: m.reason, keywordId: id });
+      out.bids.push({ text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100, reason: m.reason, keywordId: id, roasBefore });
     }
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
-  if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_DAYS}d, still being measured`);
-  if (rolledBack) out.notes.push(`${rolledBack} raise(s) reversed: the keyword got worse after the bid went up`);
+  if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_HOURS}h`);
+  if (rolledBack) out.notes.push(`${rolledBack} keyword(s) turned around: the last bid move made them worse`);
 
   // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
   // Wrapped so a harvest-report failure (timeout, 4xx) can never block the kill/bid apply above.
@@ -464,9 +468,9 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
           const b = out.bids[i]; if (!b || !b.keywordId) continue;
           try {
             await db().execute({
-              sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,acos_before,reason,ad_product)
+              sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,roas_before,reason,ad_product)
                     VALUES (?,?,?,?,?,?,?)`,
-              args: [b.keywordId, at, b.from ?? 0, b.to, b.acos > 0 ? b.acos : null, b.reason ?? null, "SPONSORED_PRODUCTS"],
+              args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS"],
             });
           } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
         }
@@ -934,7 +938,7 @@ export function summarizeAdEngine(r: AdEngineResult): string {
   }
   if (r.added.length) { lines.push("HARVESTED keywords (converted at >=2x ROAS, into the source ad group, accepted by Amazon):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }
   if (r.bids.length) {
-    lines.push(`BID changes (one per keyword per ${BID_COOLDOWN_DAYS} days, and a raise that hurt is reversed):`);
+    lines.push(`BID search (climb while profitable, turn around when a move makes it worse):`);
     r.bids.slice(0, 30).forEach((b) => lines.push(`  $${b.from}->$${b.to}  ${b.text}${b.reason ? `   [${b.reason}]` : ""}`));
     lines.push("");
   }

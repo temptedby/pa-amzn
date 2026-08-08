@@ -711,3 +711,61 @@ $82.09 against an independent pull. Rollback snapshot of all 3,458 keyword bids 
 `as_of='2026-08-05'`. Nothing applied to the account. Wave one is blocked on two fixes: assigning
 waves by word so duplicate copies move together, and protecting the cohort from the automated bid
 cut that would otherwise reverse the test within days.
+
+## 2026-08-07 — keep it spending, and above 2x
+
+**Context.** The morning review found the engine running cleanly on schedule and achieving almost
+nothing: one bid change in four days, the same impossible keyword submitted 40 times, and a $4 kill
+that fired once and paused one copy of a word that has eighteen. Separately, one Sponsored Brands
+keyword had taken $49.20 of the month's $75.11 and returned $18.98, invisible because v3 reporting
+returns zero rows for legacy single-ad-group campaigns. William's framing all day: "the company is
+losing money", "what is going on how are you reporting such mixed information".
+
+**Options.** For the bid engine specifically, three were built and two were killed:
+(A) a 7-day cooldown plus a rollback of any raise that hurt — rejected, "every 7 days thats wild??";
+(B) a hill climb with direction memory and turn-arounds — rejected, "thats not how you max roas you
+have to spend to max roas"; (C) a single threshold: keep it spending and above 2x. Also considered
+and rejected: an account-level monthly spend cap, and summing spend across duplicate copies of a
+word before killing.
+
+**Decision.** (C). Every run, each keyword moves a flat $0.10 toward the bid that keeps it both
+spending and returning 2x. Not spending → up. Spending at 2x or better → up. Spending under 2x →
+down. The $4 kill is untouched and stays per keyword, judged on its own spend, never summed across
+copies. The monthly cap was dropped. Duplicates are left alone.
+
+**Reasoning.** The threshold steers on its own, so no direction memory is needed: the bid climbs
+until ROAS falls through 2x, drops back, and settles at the highest bid the word can carry while
+still paying for itself. Crucially it refuses to treat "no data" as a reason to hold — a keyword
+winning nothing can never produce evidence, which is precisely how 1,830 of 2,282 enabled keywords
+parked at $0.10 with the best ratios in the account and no sales. William: "you have to spend to max
+roas so .10 is not ok". The flat dime rather than a percentage matters for the same reason: 10% of
+$0.10 is one cent, needing 19 runs to reach the $0.59 market CPC, against five for a dime.
+
+The monthly cap was dropped on evidence, not preference: $6.42 against $1,165/day authorised is
+0.6%, so the cap has never been the binding constraint. Bids are.
+
+**Industry source.** RBB written up in `RBB-duplicate-keywords-2026-08-07.md`. Amazon does not let
+an advertiser bid against itself — only one eligible ad enters any given auction, chosen on bid and
+relevance, in a second-price auction. Confirmed against our own account: of the duplicate groups
+that spent anything this month, **5 of 5 put all spend on one copy and 0 split it.** That disproved
+my own argument for summing spend across copies, and vindicated William's per-keyword rule.
+
+**Trade-offs accepted.** A word with five enabled copies can lose up to ~$20 before all five are
+off, in $4 steps — the cost of judging each keyword alone, and William's explicit choice. Judging a
+raise on data younger than Amazon's 14-day attribution window risks reading uncredited orders as
+failure; the 2x threshold mitigates this only partially, and the 14-day reprieve for killed keywords
+is not yet built. The bid search only sees keywords that appear in the month-to-date report, so a
+keyword with zero impressions has no row and is still reached only by the reintroduction job.
+
+**Status.** Committed on PR #2, not merged, therefore not deployed. 225 tests, tsc clean, verified
+by live dry run: 73 bid moves, all floored keywords climbing ($0.10 → $0.20, $0.34 → $0.44). The only
+changes actually made to the live account today were pausing `phone security` and archiving two test
+keywords, both verified by reading state back from Amazon.
+
+**Corrections logged.** Five numbers reported wrong today, all from quoting one of five data sources
+without stating its coverage or age: `phone security` at $15.81/0 orders (really $49.20/2 orders);
+$6.42 "spent today" (really the previous day's tail, from a budget-usage figure stale since the
+07:00Z reset); 1.99x "profitable" from `kw_lifetime` (really 1.72x and never profitable, once auto
+campaigns and Sponsored Display are included); `over4.mjs` reporting "0 words past $4" in a month
+containing a $49.20 word; and shipping a kill-all-copies design written up as though William had
+agreed to it when he had not.
