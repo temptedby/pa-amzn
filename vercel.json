@@ -1,6 +1,10 @@
 {
   "crons": [
     {
+      "path": "/api/cron/report-warm",
+      "schedule": "40 */6 * * *"
+    },
+    {
       "path": "/api/cron/daily-sync",
       "schedule": "0 14 * * *"
     },

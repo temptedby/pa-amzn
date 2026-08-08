@@ -98,11 +98,44 @@ async function ads(cfg: AdsConfig, token: string, path: string, method: string, 
 // queue (measured ~9 min on this account against the old 140s inline budget). Returns [] plus a
 // human-readable note when the data is not ready yet — that is a normal outcome, not an error.
 const SP_COLS = ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"];
+const ST_COLS = ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"];
+
+/** The ONE place a Sponsored Products report spec is built. Everything that needs a spec goes
+ *  through here, so the warm-up job and the engine cannot drift into different cache keys — a
+ *  mismatch of one column name would silently request a second report instead of reusing the
+ *  warmed one, which is exactly the failure this indirection exists to prevent. */
+export function spSpec(
+  purpose: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string,
+): ReportSpec {
+  return { purpose, adProduct: "SPONSORED_PRODUCTS", reportTypeId, groupBy, columns, startDate: sd, endDate: ed };
+}
+
+/**
+ * Every report the Sponsored Products engines will ask for on a run starting at `nowMs`.
+ *
+ * Amazon takes 9-15 minutes to build a report, so an engine that requests and acts in the same run
+ * can never act on that run — it exits, and the next run six hours later collects. That is why a
+ * keyword change could sit six hours behind the data. The warm-up cron calls getReport() on each of
+ * these ~20 minutes ahead of the engines, so by the time an engine runs, every report it needs is
+ * already COMPLETED and it acts immediately on ~20-minute-old data instead of ~6-hour-old data.
+ */
+export function spReportSpecs(nowMs = Date.now()): ReportSpec[] {
+  const now = new Date(nowMs);
+  const ed = iso(now), sd = iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)));
+  const specs: ReportSpec[] = [spSpec("engine-mtd", "spTargeting", ["targeting"], SP_COLS, sd, ed)];
+  const hw = harvestWindows(HARVEST_WINDOW_DAYS, nowMs);
+  hw.forEach(([a, b], i) => specs.push(spSpec(`engine-harvest-${i}`, "spSearchTerm", ["searchTerm"], ST_COLS, a, b)));
+  const rw = harvestWindows(REINTRO_HISTORY_DAYS, nowMs);
+  rw.forEach(([a, b], i) => specs.push(spSpec(`reintro-history-${i}`, "spTargeting", ["targeting"], SP_COLS, a, b)));
+  specs.push(spSpec("reintro-mtd", "spTargeting", ["targeting"], SP_COLS, sd, ed));
+  return specs;
+}
+
 async function deferredRows(
   cfg: AdsConfig, token: string, notes: string[],
   purpose: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string,
 ): Promise<{ rows: Row[]; ready: boolean }> {
-  const spec: ReportSpec = { purpose, adProduct: "SPONSORED_PRODUCTS", reportTypeId, groupBy, columns, startDate: sd, endDate: ed };
+  const spec: ReportSpec = spSpec(purpose, reportTypeId, groupBy, columns, sd, ed);
   const r = await getReport<Row>(cfg, token, spec);
   if (r.state === "ready") { notes.push(`${purpose}: ready (${r.rows.length} rows, ${r.ageHours}h old)`); return { rows: r.rows, ready: true }; }
   if (r.state === "failed") { notes.push(`${purpose}: FAILED — ${r.reason}`); return { rows: [], ready: false }; }
@@ -423,7 +456,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     const hw = harvestWindows(HARVEST_WINDOW_DAYS, Date.now());
     for (let i = 0; i < hw.length; i++) {
       const { rows: chunk } = await deferredRows(cfg, token, out.notes, `engine-harvest-${i}`, "spSearchTerm", ["searchTerm"],
-        ["searchTerm", "campaignId", "adGroupId", "clicks", "cost", "sales14d", "purchases14d"], hw[i][0], hw[i][1]);
+        ST_COLS, hw[i][0], hw[i][1]);
       for (const r of chunk) stRows.push(r as SearchTermRow);
     }
     addOps = harvestCandidates(stRows, haveByAg, NEW_KW_BID);

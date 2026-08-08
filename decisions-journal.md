@@ -769,3 +769,69 @@ $6.42 "spent today" (really the previous day's tail, from a budget-usage figure 
 campaigns and Sponsored Display are included); `over4.mjs` reporting "0 words past $4" in a month
 containing a $49.20 word; and shipping a kill-all-copies design written up as though William had
 agreed to it when he had not.
+
+## 2026-08-08 — one rule across all three ad products, and reports stop setting the pace
+
+**Context.** The morning review found the engine healthy and achieving little: 1,810 of 2,281
+enabled keywords still at the $0.10 floor, one bid change per run, an invalid keyword resubmitted
+twice a run for the fourteenth time, and a $4 kill firing at $6.95 on a keyword whose real
+month-to-date was $13.61. Separately, Sponsored Display had never been under any rule at all despite
+being the worst performer in the account: 0.87x lifetime, returning less than half what it costs, on
+$200/day of authorised budget. William, across the day: "we need 40 a day not 20", "all ads need a
+$4 kill switch — products brands and display, this is so important", "Each spend is individual",
+"max bids go to $.85 then notified", "40minutes for a report is too long we need to sort this".
+
+**Options.** For the launch rate: (A) accept 20/day as the cost of Amazon's report queue;
+(B) poll for the report inline until it completes; (C) fall back to our own lifetime database when
+the window is late. For Display: (A) judge campaigns, which sbsd-engine.ts already previewed;
+(B) judge targets; (C) judge advertised ASINs. For report latency: (A) leave the deferred pattern
+alone and accept up to 6 hours of staleness; (B) poll inline; (C) warm the reports ahead of the
+engines with a separate job.
+
+**Decision.** (C) in all three cases. Promotion falls back to lifetime evidence from `kw_lifetime`,
+restricted to proven 2x+ winners and words with no spending record at all. Display is judged per
+TARGET. A `report-warm` cron at `40 */6` requests every report ~20 minutes before the engines need
+it. Separately, the tier-0 launch order is reversed to CHEAPEST lifetime spend first, the reintro
+ladder steps once per run rather than once per day, the $0.85 ceiling is retained as an approval
+gate, and the Sponsored Brands kill is changed from per-(text, match type) to per-keyword-id.
+
+**Reasoning.** Polling inline was never viable: measured today, Sponsored Products reports take
+about 9 minutes and Sponsored Display 10 to 15, against a 300s function budget. Warming is the only
+option that shortens the loop without blocking, and it costs nothing because the reports were going
+to be built anyway. It is safe only because the report spec is now constructed in exactly one place
+per product, which the live run proved: the warm-up found 8 ready and requested 0, where any drift
+in a single column name would have requested 8 fresh reports.
+
+Target-level for Display because that is where the bid lives, making it the exact analogue of a
+keyword. The advertised ASIN was rejected deliberately: it carries the SAME dollars seen from
+another angle, so acting on both would judge one dollar twice, and pausing a product ad stops
+advertising that product outright rather than trimming what is not working.
+
+Cheapest-first launch order because a word returning 2x on $3 of lifetime spend is an unfinished
+experiment while one returning 2x on $900 has already had its run, and the 2-order evidence bar
+already screens out the 79x-on-one-order noise. Per-keyword-id for Brands because summing a word
+across its copies and pausing them together is precisely what William ruled out, and Products has
+always judged per id, so this makes all three products agree.
+
+**Industry source.** Amazon's own documented behaviour on report retention and the async reporting
+v3 contract, measured rather than assumed: report ids a84b8047 (9m31s) and 5e4572fc (14m07s), both
+read "still pending" at 550s and both COMPLETED when polled later. `targetingId` confirmed present
+and non-null on every row of both.
+
+**Trade-offs accepted.** The lifetime fallback promotes on evidence that can be years old, which is
+the point but also means a word whose market has moved will get $4 of rope to prove it again.
+Warming adds a ninth cron and one more moving part; if it fails silently the engines simply revert
+to the old deferred behaviour, which is a soft failure rather than a hard one. Display's $4 rule
+will rarely fire at current spend (~$3.69/month across the whole product), so it is a guardrail
+against Display scaling up again rather than a fix for the 0.87x lifetime loss. The Display apply
+path is still unexercised live because nothing has crossed the bar.
+
+**Status.** Committed on PR #2, not merged, therefore not deployed. 241 tests, tsc clean. Verified
+live: reintroduction previews 10 promoted of 1,808 eligible and stops on `perRun`, so 40/day; launch
+order confirmed strictly ascending by lifetime spend; the Display engine read 28 targets and $3.69
+month-to-date and correctly paused nothing; the warm-up found 8 of 8 reports ready in 2 seconds.
+
+**Corrections logged.** Two today, both mine. I reported that the $4 kill had paused all six copies
+of `phone tether` PHRASE and implied the engine did it; `kw_state_snapshot` shows five were already
+paused on 08-05 and the engine touched only the one enabled copy. And I removed the $0.85 ladder
+ceiling on my own reading of "until $4 is hit", which William corrected the same day.

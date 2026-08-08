@@ -8,7 +8,13 @@ const stats = (o: Partial<DigestStats> = {}): DigestStats => ({
   kills24h: 1, bids24h: 5, adds24h: 2, rejected24h: 0,
   kills7d: 3, bids7d: 26, adds7d: 8,
   reintroToday: 10, reintroCohort: 30,
-  reports: [{ status: "COMPLETED", n: 4 }], staleReports: 0, ...o,
+  reports: [{ status: "COMPLETED", n: 4 }], staleReports: 0,
+  products: [
+    { label: "Products", kills24h: 1, bids24h: 5, adds24h: 2, kills7d: 3, bids7d: 26, adds7d: 8, rejected24h: 0, lastActionAt: "2026-08-03T12:00:00Z" },
+    { label: "Brands", kills24h: 0, bids24h: 0, adds24h: 0, kills7d: 1, bids7d: 0, adds7d: 0, rejected24h: 0, lastActionAt: "2026-08-02T06:00:00Z" },
+    { label: "Display", kills24h: 0, bids24h: 0, adds24h: 0, kills7d: 0, bids7d: 0, adds7d: 0, rejected24h: 0, lastActionAt: null },
+  ],
+  ...o,
 });
 
 describe("formatAdsDigest", () => {
@@ -112,5 +118,34 @@ describe("splitForTelegram", () => {
   it("loses no content when splitting", () => {
     const src = Array(50).fill("line of text").join("\n");
     expect(splitForTelegram(src, 60).join("\n")).toBe(src);
+  });
+});
+
+describe("every ad product is reported, even at zero (William 2026-08-08)", () => {
+  it("names Products, Brands and Display, whether or not they acted", () => {
+    const out = formatAdsDigest(stats());
+    expect(out).toContain("BY AD PRODUCT");
+    for (const label of ["Products", "Brands", "Display"]) expect(out).toContain(label);
+  });
+
+  it("says plainly when a product has NEVER logged an action", () => {
+    // Display is the case this exists for: 0.87x lifetime and no rule at all until 2026-08-08.
+    const out = formatAdsDigest(stats());
+    expect(out).toContain("Display");
+    expect(out).toMatch(/never logged an action/);
+  });
+
+  it("does not cry wolf when every product has acted", () => {
+    const out = formatAdsDigest(stats({
+      products: stats().products.map((p) => ({ ...p, lastActionAt: "2026-08-03T12:00:00Z" })),
+    }));
+    expect(out).not.toMatch(/never logged an action/);
+  });
+
+  it("surfaces a per-product rejection rather than burying it in the account total", () => {
+    const out = formatAdsDigest(stats({
+      products: stats().products.map((p) => p.label === "Brands" ? { ...p, rejected24h: 4 } : p),
+    }));
+    expect(out).toMatch(/4 action\(s\) REJECTED by Amazon/);
   });
 });

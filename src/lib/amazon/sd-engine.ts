@@ -131,6 +131,20 @@ export interface SdEngineResult {
 
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
+/** The ONE place the Display report spec is built, so the warm-up cron and this engine share a
+ *  cache key exactly. Display reports take 10-15 minutes; warming them ahead is what keeps this
+ *  engine acting on minutes-old data rather than sitting out a whole 6-hour slot. */
+export function sdReportSpec(nowMs = Date.now()): ReportSpec {
+  const now = new Date(nowMs);
+  return {
+    purpose: "sd-engine-mtd", adProduct: "SPONSORED_DISPLAY", reportTypeId: "sdTargeting",
+    groupBy: ["targeting"],
+    columns: ["targetingId", "targetingText", "clicks", "cost", "sales", "purchases"],
+    startDate: iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))),
+    endDate: iso(now),
+  };
+}
+
 async function sd(cfg: AdsConfig, token: string, path: string, method = "GET", body?: unknown) {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -176,13 +190,7 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
 
   // (1) month-to-date, per TARGET. Uses the same deferred report machinery as Sponsored Products,
   //     so a run that only manages to REQUEST the report exits cleanly and the next one collects it.
-  const spec: ReportSpec = {
-    purpose: "sd-engine-mtd", adProduct: "SPONSORED_DISPLAY", reportTypeId: "sdTargeting",
-    groupBy: ["targeting"],
-    columns: ["targetingId", "targetingText", "clicks", "cost", "sales", "purchases"],
-    startDate: monthStart, endDate: iso(now),
-  };
-  const rep = await getReport<Record<string, unknown>>(cfg, token, spec);
+  const rep = await getReport<Record<string, unknown>>(cfg, token, sdReportSpec(now.getTime()));
   if (rep.state !== "ready") {
     // Not an error: Amazon's queue takes minutes and the next 6-hourly run collects it. Acting on a
     // partial month would read a target's spend as lower than it is and let it past the $4 bar.

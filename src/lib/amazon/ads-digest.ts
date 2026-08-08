@@ -22,6 +22,18 @@ export interface DigestStats {
   reintroToday: number; reintroCohort: number;
   reports: { status: string; n: number }[];
   staleReports: number;
+  /** Per ad product, so a channel that has stopped acting cannot hide behind the account total.
+   *  William 2026-08-08: "for display search sponsor whatever it is all should be reported." */
+  products: ProductStats[];
+}
+
+export interface ProductStats {
+  /** Display label: Products / Brands / Display. */
+  label: string;
+  kills24h: number; bids24h: number; adds24h: number;
+  kills7d: number; bids7d: number; adds7d: number;
+  rejected24h: number;
+  lastActionAt: string | null;
 }
 
 const pad = (n: number) => String(n).padStart(3, " ");
@@ -56,6 +68,24 @@ export function formatAdsDigest(s: DigestStats): string {
   L.push(`  added    ${pad(s.adds24h)}   ${pad(s.adds7d)}`);
   L.push("");
 
+  // Every ad product, always, even at zero. An empty row is information: it says that channel's
+  // engine ran and found nothing, or that it is not running at all. Before 2026-08-08 only
+  // Sponsored Products was governed, and Display's 0.87x lifetime return was invisible here.
+  L.push("BY AD PRODUCT");
+  L.push(`                    paused      re-bid      added    last action`);
+  L.push(`                   24h   7d    24h   7d    24h   7d`);
+  for (const p of s.products) {
+    const last = p.lastActionAt ? p.lastActionAt.replace("T", " ").slice(0, 16) : "never";
+    L.push(`  ${p.label.padEnd(16)}${pad(p.kills24h)} ${pad(p.kills7d)}   ${pad(p.bids24h)} ${pad(p.bids7d)}   ${pad(p.adds24h)} ${pad(p.adds7d)}    ${last}`);
+    if (p.rejected24h > 0) L.push(`     ^ ${p.rejected24h} action(s) REJECTED by Amazon in 24h`);
+  }
+  const silent = s.products.filter((p) => p.lastActionAt === null);
+  if (silent.length) {
+    L.push(`  NOTE: ${silent.map((p) => p.label).join(", ")} ${silent.length === 1 ? "has" : "have"} never logged an action.`);
+    L.push(`        That is expected while nothing has crossed the $4 bar, and a red flag if spend is rising.`);
+  }
+  L.push("");
+
   L.push("REINTRODUCTION (floor trap)");
   L.push(`  brought back today : ${s.reintroToday}`);
   L.push(`  cohort to date     : ${s.reintroCohort}`);
@@ -86,6 +116,7 @@ export async function gatherAdsDigest(nowIso = new Date().toISOString()): Promis
     id INTEGER PRIMARY KEY AUTOINCREMENT, run_at TEXT NOT NULL, action TEXT NOT NULL,
     keyword TEXT, match_type TEXT, from_bid REAL, to_bid REAL, acos REAL, spend REAL)`);
   await db().execute("ALTER TABLE ad_engine_log ADD COLUMN applied INTEGER DEFAULT 1").catch(() => {});
+  await db().execute("ALTER TABLE ad_engine_log ADD COLUMN ad_product TEXT").catch(() => {});
   await db().execute(`CREATE TABLE IF NOT EXISTS ad_reintro_cohort (
     keyword_id TEXT PRIMARY KEY, keyword_text TEXT, match_type TEXT,
     promoted_at TEXT NOT NULL, from_bid REAL, to_bid REAL, reason TEXT)`);
@@ -101,6 +132,28 @@ export async function gatherAdsDigest(nowIso = new Date().toISOString()): Promis
 
   const reportRows = await db().execute("SELECT status, COUNT(*) AS n FROM ads_report_jobs GROUP BY status");
 
+  // Sponsored Products rows predate the ad_product column and were written with it NULL, so NULL
+  // means Products. Brands and Display always name themselves.
+  const WHERE: Record<string, string> = {
+    "Products": "(ad_product IS NULL OR ad_product = 'SPONSORED_PRODUCTS')",
+    "Brands": "ad_product = 'SPONSORED_BRANDS'",
+    "Display": "ad_product = 'SPONSORED_DISPLAY'",
+  };
+  const products: ProductStats[] = [];
+  for (const [label, w] of Object.entries(WHERE)) {
+    const c = (action: string, since: string) =>
+      scalar(`SELECT COUNT(*) FROM ad_engine_log WHERE ${w} AND action = ? AND run_at >= ?`, [action, since]);
+    const lastRow = await db().execute(`SELECT MAX(run_at) AS m FROM ad_engine_log WHERE ${w} AND action <> 'run'`);
+    const last = (lastRow.rows as unknown as Record<string, unknown>[])[0]?.m as string | null;
+    products.push({
+      label,
+      kills24h: await c("kill", since24), bids24h: await c("rebid", since24), adds24h: await c("add", since24),
+      kills7d: await c("kill", since7), bids7d: await c("rebid", since7), adds7d: await c("add", since7),
+      rejected24h: await scalar(`SELECT COUNT(*) FROM ad_engine_log WHERE ${w} AND applied = 0 AND run_at >= ?`, [since24]),
+      lastActionAt: last ? String(last) : null,
+    });
+  }
+
   return {
     generatedAt: nowIso,
     runs24h: await scalar("SELECT COUNT(*) FROM ad_engine_log WHERE action = 'run' AND run_at >= ?", [since24]),
@@ -113,5 +166,6 @@ export async function gatherAdsDigest(nowIso = new Date().toISOString()): Promis
     reintroCohort: await scalar("SELECT COUNT(*) FROM ad_reintro_cohort"),
     reports: (reportRows.rows as unknown as Record<string, unknown>[]).map((r) => ({ status: String(r.status), n: Number(r.n) })),
     staleReports: await scalar("SELECT COUNT(*) FROM ads_report_jobs WHERE status <> 'COMPLETED' AND requested_at < ?", [since24]),
+    products,
   };
 }
