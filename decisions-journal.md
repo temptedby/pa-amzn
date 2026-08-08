@@ -835,3 +835,65 @@ month-to-date and correctly paused nothing; the warm-up found 8 of 8 reports rea
 of `phone tether` PHRASE and implied the engine did it; `kw_state_snapshot` shows five were already
 paused on 08-05 and the engine touched only the one enabled copy. And I removed the $0.85 ladder
 ceiling on my own reading of "until $4 is hit", which William corrected the same day.
+
+## 2026-08-08 (part B) — track external traffic properly, and stop guessing at the account
+
+**Context.** William is forwarding `phoneassured.com` to the Amazon listing and asked whether to
+"wrap it in a UTM so we can track". Separately, three Amazon compliance threads were stalled and we
+had been reasoning about them from emails rather than from the account itself.
+
+**Options.** For tracking: (A) UTM parameters on the Amazon URL; (B) Amazon Attribution tag;
+(C) a thin landing page of our own carrying Google Analytics, which then links onward to Amazon with
+an Attribution tag. For the compliance threads: keep inferring from email, or read Seller Central
+directly with browser access.
+
+**Decision.** (B), plus enrolling in the Brand Referral Bonus. Read Seller Central directly.
+Deliberately NOT done: removing the Shopify DNS record, and filling in the W-9.
+
+**Reasoning.** A UTM only does something if a system you control reads it. With a bare domain
+forward there is no page of ours in between, Google Analytics cannot run on Amazon's pages, and
+Amazon never returns query strings to sellers, so a UTM would have produced a longer URL and zero
+data. Attribution is the mechanism Amazon actually reports on, and its campaign and ad group names
+do the job `utm_source` and `utm_medium` would have. (C) remains the better long-term shape if the
+domain ever serves a real page, and is worth revisiting rather than dismissed.
+
+Enrolling in BRB followed from the same choice rather than being separate: the bonus is only earned
+on traffic carrying an Attribution tag, so the tag was a precondition and the credit is free money
+on traffic we were going to send anyway. It is a credit against referral fees, not cash, averaging
+~10% and capped at the referral fee on each transaction.
+
+Reading the account directly settled in minutes what email could not settle in three days, and
+corrected me twice. "Securisee" turned out to be only the STORE name, so my concern that the bank
+statement's `Douglas Dean Holdings LLC` would not match was wrong — the business name matches
+exactly. And the address problem is not the `Unit 162` versus `Ste 162` wording I had focused on: the
+PRIMARY CONTACT record has no unit number at all, which cannot match a document carrying a suite line
+under any matching logic.
+
+**Industry source.** Brand Referral Bonus rates of roughly 6.5-11.2% by category
+(velocitysellers.com, ecomranker.com), and Amazon's own on-page wording: "a bonus averaging 10% of
+product sales driven by your non-Amazon marketing efforts ... provided as a credit on your referral
+fees". The BRB Terms and Conditions, read in full before accepting, define Qualified Traffic as
+requiring both an Attribution tag AND a landing page we own in Brand Registry.
+
+**Trade-offs accepted.** BRB and Amazon Associates cannot be combined on the same traffic, and
+attempting both risks termination of the selling account, so today's enrolment forecloses a
+conventional affiliate programme unless affiliates are paid from our own margin. On $9.49 with $4.93
+of contribution there is little room, so this is a real constraint rather than a formality. The tag
+also concentrates the domain on ONE detail page; a Store page would show the full range and is worth
+testing later.
+
+**Status.** Attribution tag live and verified by loading it, `maas` parameters intact. BRB
+**enrolled**, confirmed by the "You are enrolled!" badge rather than by an acknowledgment — the
+distinction that cost us three days on INFORM. The GoDaddy forward is NOT live: the apex still
+points at Shopify's IP and `www` has no record, so `phoneassured.com` returns an error from
+Shopify's edge. Removing that record is a destructive change on a live domain and awaits William.
+
+**Corrections logged.** Three. I claimed the entity name might not match the bank, when Securisee is
+only the store name. I said the domain was on Cloudflare, when the nameservers are GoDaddy and the
+Cloudflare error came from Shopify's edge. And I framed `Unit` versus `Ste` as the address blocker
+when the contact record is missing the unit entirely.
+
+**Also learned, and worth keeping.** There are THREE unrelated Amazon tax records: INFORM Tax
+Verification, the advertising-side tax information, and the Seller Central Tax Information Interview
+(W-9). Only the third unblocks the Brand Referral Bonus. Completing it enrolled the account
+automatically, exactly as the dialog promised.
