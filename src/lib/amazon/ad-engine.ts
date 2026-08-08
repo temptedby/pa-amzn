@@ -6,6 +6,7 @@ import {
   bidWithMemory, BID_COOLDOWN_HOURS, type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
+  REINTRO_LIFETIME_ROAS_MIN, REINTRO_LIFETIME_MIN_ORDERS,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
 } from "./ad-rules";
 
@@ -669,11 +670,21 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
       if (id) mtd.set(id, { cost: r.cost ?? 0, orders: r.purchases14d ?? 0 });
     }
 
-    if (!historyComplete || !mtdOut.ready) {
-      out.reason = "reports not collected yet — promoting nothing this run (incomplete history would misjudge eligibility)";
-      out.notes.push(out.reason);
-      out.ok = true; out.durationMs = Date.now() - start;
-      return out;
+    // REPORTS PENDING NO LONGER STOPS THE LAUNCH (William 2026-08-08: "we need 40 a day not 20").
+    //
+    // Amazon's report queue takes minutes, so a run that REQUESTS a window cannot also collect it.
+    // The old code returned empty whenever any window was outstanding, which meant roughly every
+    // other 6-hourly run promoted nothing — 20/day against the 40 the schedule was built for.
+    //
+    // The original safety concern was real and is preserved: without the window, a keyword that
+    // recently spent badly reads as "never spent" and would be promoted as untested. So when the
+    // window is missing we fall back to LIFETIME evidence from our own database (kw_lifetime, 2019
+    // onward, which is broader than Amazon's 95-day retention) and promote only the two groups
+    // William named — proven 2x+ winners, and words with no spending record at all. Anything
+    // holding a lifetime record that FAILS the 2x bar is skipped this run rather than guessed at.
+    const reportsReady = historyComplete && mtdOut.ready;
+    if (!reportsReady) {
+      out.notes.push("reports still queued — promoting on lifetime evidence only (2x+ winners and never-spent words); window-only candidates wait for the next run");
     }
 
     // (4) measure the throttle state from reality
@@ -728,7 +739,17 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
         };
       });
     out.notes.push(`lifetime evidence: ${lifetime.size} words, ${deadKeys.size} tombstoned`);
-    const plan = selectReintroductions(candidates, out.state, { deadKeys });
+    // With no window to judge on, a word carrying a lifetime record that does not clear the 2x bar
+    // is a known non-winner, not an untested one. Skip it this run rather than let a missing report
+    // launder it into the "never spent" tier.
+    const pool = reportsReady ? candidates : candidates.filter((c) => {
+      const proven = (c.lifetimeRoas ?? null) !== null
+        && (c.lifetimeRoas as number) >= REINTRO_LIFETIME_ROAS_MIN
+        && (c.lifetimeOrders ?? 0) >= REINTRO_LIFETIME_MIN_ORDERS;
+      return proven || (c.lifetimeSpend ?? 0) === 0;   // 2x+ winner, or no spending record at all
+    });
+    if (!reportsReady) out.notes.push(`lifetime-only pool: ${pool.length} of ${candidates.length} candidates`);
+    const plan = selectReintroductions(pool, out.state, { deadKeys });
     out.promoted = plan.promote;
     out.eligible = plan.eligible;
     out.blockedBy = plan.blockedBy;
@@ -756,22 +777,39 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
       }
     }
 
-    // ---- Rule 5, the bid ladder (William 2026-08-05, wired 2026-08-06) --------------------
-    // Enter at $0.25. Each whole day a promoted keyword goes without spending a cent, add $0.10,
-    // up to $0.85. A keyword that HAS spent is left alone: it is producing data, so the ACOS rule
-    // owns it and the $4 kill bounds it. At $0.85 and still silent, ask William rather than guess.
+    // ---- Rule 5, the bid ladder (William 2026-08-05; revised 2026-08-08) ------------------
+    // Enter at $0.25. EVERY RUN a promoted keyword goes without spending a cent, add $0.10, until
+    // it spends. A keyword that HAS spent is left alone: it is producing data, so the ACOS rule owns
+    // it and the $4 kill bounds it. There is no $0.85 stop any more — William 2026-08-08, "increase
+    // their bids until they spend ... at $.1 each until $4 is hit and turn off if they dont have a
+    // roas of 2x". BID_CAP is the only absolute stop.
+    //
+    // UNLIKE promotion, the ladder cannot run on lifetime evidence. Its whole input is "has this
+    // keyword spent since I last raised it", which only the month-to-date window answers. With no
+    // window, every keyword reads as zero-spend and the ladder would raise words that are already
+    // spending — the exact compounding that walked `phone tethered` 0.49 -> 0.94 -> 0.35. So it sits
+    // out any run whose report is still queued.
+    if (!mtdOut.ready) out.notes.push("bid ladder skipped this run: month-to-date report still queued, and raising on unknown spend is how the oscillation started");
     try {
-      const st = await db().execute(
-        "SELECT keyword_id, word, match_type, current_bid, last_bid_change_at, escalated_at FROM kw_bid_state WHERE ladder_active = 1");
+      const st = mtdOut.ready
+        ? await db().execute(
+            "SELECT keyword_id, word, match_type, current_bid, last_bid_change_at, escalated_at FROM kw_bid_state WHERE ladder_active = 1")
+        : { rows: [] as Record<string, unknown>[] };
       const ladderOps: { keywordId: string; bid: number }[] = [];
       for (const row of st.rows) {
         const id = String(row.keyword_id);
         const k = byIdRe.get(id);
         if (!k || k.state !== "ENABLED") continue;             // paused or gone: not our business
+        // ONE JOB PER KEYWORD PER RUN. The main ad-engine's bid search also steps a flat $0.10 up
+        // when a keyword is not spending, and it acts on every keyword that HAS a row in the
+        // month-to-date report. If the ladder also stepped those, they would climb $0.20 a run —
+        // double what William specified. So the ladder takes only the keywords the main engine
+        // cannot see: the truly silent ones, with no report row at all.
+        if (mtd.has(id)) continue;
         const changedAt = Date.parse(String(row.last_bid_change_at ?? "")) || 0;
         const v = ladderVerdict({
           bid: Number(row.current_bid ?? k.bid ?? 0),
-          spendSinceStep: mtd.get(id)?.cost ?? 0,               // any spend at all means hands off
+          spendSinceStep: 0,                                    // no report row at all: it has spent nothing
           daysSinceStep: changedAt ? Math.floor((Date.now() - changedAt) / 864e5) : 0,
         });
         if (v.action === "raise") {

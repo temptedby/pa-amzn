@@ -15,8 +15,8 @@
 //         in, then lives under the kill rule. Amazon caps keyword text at 80 chars / 10 words, so
 //         an over-long term is shortened to a valid root rather than retried forever (see below).
 //
-//   REINTRODUCTION: keywords parked at the $0.10 floor come back at most 10/day, triple-throttled,
-//         eligible only if they never spent or spent at ACOS < 50%.
+//   REINTRODUCTION: keywords parked at the $0.10 floor come back 10 per run, 4 runs a day = 40/day
+//         (William 2026-08-08). Cheapest proven 2x+ winners first, then words that never spent.
 //
 // Pure functions so they unit-test without the Ads API (whose async report queue is unreliable).
 // Each per-ad-product engine feeds in {spend, orders, sales} and applies the verdict via that
@@ -71,9 +71,21 @@ export const REINTRO_PROTECT_DAYS = 14;        // no automatic bid CUT inside th
 // Rationale: a keyword that is not spending is not risking anything, so raising it costs nothing
 // and is the only way to find the bid that actually wins an auction. This supersedes the earlier
 // 3-days-per-rung / $0.50-top version from the same conversation.
-export const BID_LADDER_STEP = 0.10;   // added per day of zero spend
-export const BID_LADDER_MAX = 0.85;    // ceiling; never climbs past this on non-spend alone
-export const LADDER_STEP_DAYS = 1;     // one day at a rung earns the next
+// REVISED 2026-08-08 (William): "increase their bids until they spend and convert at $.1 each
+// until $4 is hit and turn off if they dont have a roas of 2x".
+//
+// Two changes from the 2026-08-05 version:
+//   - the step is per RUN, not per day. The job runs every 6h, so a floored word reaches the $0.59
+//     market CPC in 5 runs (~30h) instead of 5 days. William: "we will get better over time as we
+//     review each 6 hours".
+//   - the $0.85 ceiling is gone as a STOPPING point. A keyword that will not spend is risking
+//     nothing, so holding it below the market clearing price only preserves the floor trap that
+//     parked 1,810 words. What bounds the downside is not the bid, it is the $4 kill: the moment the
+//     word actually spends $4 without returning 2x, shouldKill() pauses it. BID_CAP remains the
+//     absolute stop so a runaway climb is still impossible.
+export const BID_LADDER_STEP = 0.10;   // added per RUN of zero spend
+export const BID_LADDER_MAX = BID_CAP; // absolute stop only; the $4 kill is the real bound
+export const LADDER_STEP_DAYS = 0;     // 0 = every run earns the next rung (6-hourly cron)
 
 export interface Perf {
   spend: number;   // month-to-date cost, $
@@ -327,10 +339,14 @@ export function selectReintroductions(
   eligible.sort((a, b) => {
     if (a.tier !== b.tier) return a.tier - b.tier;
     if (a.tier === 0) {
-      // Every tier-0 word is already profitable, so rank by the money it has produced, not by the
-      // ratio. Ratio decides eligibility; volume decides priority.
-      const sd = (b.lifetimeSales ?? 0) - (a.lifetimeSales ?? 0);
+      // LOW SPEND FIRST among the 2x+ winners (William 2026-08-08): "launch key words that are low
+      // in spend that 2x roas or higher first". This REVERSES the 2026-08-06 rule, which led on
+      // lifetime sales volume. A word returning 2x on $3 of lifetime spend is an unfinished
+      // experiment; one returning 2x on $900 has already had its run. The cheap winners are where
+      // the untested headroom is, and $4 of rope buys far more new evidence on them.
+      const sd = (a.lifetimeSpend ?? 0) - (b.lifetimeSpend ?? 0);
       if (Math.abs(sd) > 1e-9) return sd;
+      // Tie on spend: better ratio first.
       const d = (b.lifetimeRoas as number) - (a.lifetimeRoas as number);
       if (Math.abs(d) > 1e-9) return d;
     }
@@ -398,8 +414,8 @@ export interface LadderState {
 }
 
 /**
- * Next bid for a reintroduced keyword that is failing to spend: current + $0.10 per day of zero
- * spend, capped at $0.85. Returns null when no change is due, so callers skip the write entirely.
+ * Next bid for a reintroduced keyword that is failing to spend: current + $0.10 per RUN of zero
+ * spend, stopping only at BID_CAP. Returns null when no change is due, so callers skip the write.
  *
  * A keyword that HAS spent is deliberately left alone: it is generating data now, so the normal
  * ACOS rule in nextBid() owns it and the $4 kill rule bounds its downside. The ladder exists only
@@ -419,9 +435,9 @@ export function nextLadderBid(
 }
 
 /**
- * Ladder verdict including the approval gate at the ceiling (William 2026-08-05).
+ * Ladder verdict including the approval gate at the cap (William 2026-08-05, cap raised 2026-08-08).
  *
- * A keyword that has climbed all the way to $0.85 and STILL will not spend is telling us something
+ * A keyword that has climbed all the way to BID_CAP and STILL will not spend is telling us something
  * the rules cannot decide alone: the word may be worth more than our ceiling, or it may be dead.
  * Rather than silently parking it forever, the engine asks. "escalate" means notify William via
  * Telegram and wait for a human answer; it never raises the bid on its own.

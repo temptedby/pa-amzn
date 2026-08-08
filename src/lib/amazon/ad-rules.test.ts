@@ -226,12 +226,14 @@ describe("selectReintroductions — lifetime ROAS ranking (William 2026-08-06)",
     expect(plan.promote[3].reason).toBe("untested");
   });
 
-  it("breaks a ROAS tie toward the word that produced more money", () => {
+  it("ranks the CHEAPEST proven winner first (William 2026-08-08)", () => {
+    // Reversed from 2026-08-06, which led on lifetime sales volume. Both words return 2.5x; the one
+    // that has only ever been given $12 is the unfinished experiment, so it goes first.
     const plan = selectReintroductions([
-      cand({ keywordId: "thin", lifetimeRoas: 2.5, lifetimeSpend: 12, lifetimeSales: 30, lifetimeOrders: 3 }),
       cand({ keywordId: "thick", lifetimeRoas: 2.5, lifetimeSpend: 4000, lifetimeSales: 10000, lifetimeOrders: 400 }),
+      cand({ keywordId: "thin", lifetimeRoas: 2.5, lifetimeSpend: 12, lifetimeSales: 30, lifetimeOrders: 3 }),
     ], fresh);
-    expect(plan.promote.map((p) => p.keywordId)).toEqual(["thick", "thin"]);
+    expect(plan.promote.map((p) => p.keywordId)).toEqual(["thin", "thick"]);
   });
 
   it("never resurrects a tombstoned word, however good its lifetime ROAS", () => {
@@ -246,12 +248,14 @@ describe("selectReintroductions — lifetime ROAS ranking (William 2026-08-06)",
     expect(selectReintroductions([noise], fresh).promote).toHaveLength(0);
   });
 
-  it("ranks the word that produced the most money first, not the biggest ratio", () => {
+  it("ranks by how little the word has been given, not by how much it produced", () => {
+    // Both are real kw_lifetime rows. The 2-order evidence bar has already screened out noise, so
+    // among survivors the $0.42 word is the one we know least about and is launched first.
     const plan = selectReintroductions([
-      cand({ keywordId: "ratio", lifetimeRoas: 61.7, lifetimeSpend: 0.42, lifetimeSales: 25.90, lifetimeOrders: 2 }),
       cand({ keywordId: "money", lifetimeRoas: 24.4, lifetimeSpend: 9.81, lifetimeSales: 239.40, lifetimeOrders: 10 }),
+      cand({ keywordId: "ratio", lifetimeRoas: 61.7, lifetimeSpend: 0.42, lifetimeSales: 25.90, lifetimeOrders: 2 }),
     ], fresh);
-    expect(plan.promote.map((p) => p.keywordId)).toEqual(["money", "ratio"]);
+    expect(plan.promote.map((p) => p.keywordId)).toEqual(["ratio", "money"]);
   });
 
   it("promotes only one copy of a duplicated word per run", () => {
@@ -263,8 +267,10 @@ describe("selectReintroductions — lifetime ROAS ranking (William 2026-08-06)",
                          lifetimeRoas: 27.4, lifetimeSpend: 2.66, lifetimeSales: 72.80, lifetimeOrders: 4 });
     const plan = selectReintroductions([...copies, other], fresh);
     expect(plan.promote).toHaveLength(2);
+    // Cheapest-first ordering puts the $2.66 word ahead of the $9.81 one; the point of the test is
+    // that only ONE of the three duplicate copies travels.
     expect(plan.promote.map((p) => p.keywordText)).toEqual([
-      "retractable smartphone safety leash", "smartphone safety leash",
+      "smartphone safety leash", "retractable smartphone safety leash",
     ]);
   });
 
@@ -383,51 +389,63 @@ describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
   it("steps $0.25 -> $0.35 after a full day of zero spend", () => {
     expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.35);
   });
-  it("holds when the day is not yet complete", () => {
-    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 0 })).toBeNull();
+  it("steps EVERY RUN, not once a day (William 2026-08-08)", () => {
+    // The cron is 6-hourly, so a run is the unit. Waiting a whole calendar day per dime is what
+    // left 1,810 words at the floor: at one step a day a $0.10 word needs five days to reach the
+    // $0.59 market CPC, against ~30 hours at one step a run.
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 0 })).toBe(0.35);
   });
   it("holds the moment the keyword spends anything, however small", () => {
     expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0.01, daysSinceStep: 9 })).toBeNull();
   });
-  it("stops at the $0.85 ceiling instead of overshooting", () => {
+  it("no longer stops at $0.85 — it climbs until the word spends", () => {
     expect(nextLadderBid({ bid: 0.75, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.85);
-    expect(nextLadderBid({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 30 })).toBeNull();
+    expect(nextLadderBid({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.95);
   });
-  it("climbs 0.25 to 0.85 in exactly six daily steps", () => {
+  it("stops only at the absolute BID_CAP, never above it", () => {
+    expect(nextLadderBid({ bid: BID_CAP - 0.05, spendSinceStep: 0, daysSinceStep: 1 })).toBe(BID_CAP);
+    expect(nextLadderBid({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 365 })).toBeNull();
+  });
+  it("climbs from the entry bid to the cap in dimes and then stops", () => {
     const seen: number[] = [];
     let bid = REINTRO_START_BID;
-    for (let d = 0; d < 20; d++) {
-      const next = nextLadderBid({ bid, spendSinceStep: 0, daysSinceStep: 1 });
+    for (let run = 0; run < 200; run++) {
+      const next = nextLadderBid({ bid, spendSinceStep: 0, daysSinceStep: 0 });
       if (next === null) break;
       bid = next; seen.push(next);
     }
-    expect(seen).toEqual([0.35, 0.45, 0.55, 0.65, 0.75, 0.85]);
-  });
-  it("never exceeds the ceiling even with an absurd wait", () => {
-    expect(nextLadderBid({ bid: 0.8, spendSinceStep: 0, daysSinceStep: 365 })).toBe(0.85);
+    expect(seen[0]).toBe(0.35);
+    expect(seen[seen.length - 1]).toBe(BID_CAP);
+    expect(Math.max(...seen)).toBeLessThanOrEqual(BID_CAP);
+    // Every step is a flat dime apart from the final clamp onto the cap.
+    for (let i = 1; i < seen.length - 1; i++) {
+      expect(Math.round((seen[i] - seen[i - 1]) * 100)).toBe(10);
+    }
   });
 });
 
-describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
-  it("raises while below the ceiling", () => {
+describe("ladderVerdict — BID_CAP is the approval gate now, not $0.85", () => {
+  it("raises while below the cap", () => {
     expect(ladderVerdict({ bid: 0.45, spendSinceStep: 0, daysSinceStep: 1 }))
       .toEqual({ action: "raise", bid: 0.55 });
   });
-  it("escalates at the ceiling when it still will not spend", () => {
+  it("keeps climbing straight past the old $0.85 stop", () => {
     expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 }))
-      .toEqual({ action: "escalate", bid: 0.85 });
+      .toEqual({ action: "raise", bid: 0.95 });
   });
-  it("NEVER raises past the ceiling on its own", () => {
-    const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 99 });
+  it("escalates only at BID_CAP, when it still will not spend", () => {
+    expect(ladderVerdict({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 1 }))
+      .toEqual({ action: "escalate", bid: BID_CAP });
+  });
+  it("NEVER raises past the cap on its own", () => {
+    const v = ladderVerdict({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 99 });
     expect(v.action).toBe("escalate");
     expect("bid" in v ? v.bid : 0).toBeLessThanOrEqual(BID_LADDER_MAX);
   });
-  it("holds at the ceiling once it starts spending, no notification", () => {
+  it("holds the moment it starts spending, at any bid — the $4 kill takes over from here", () => {
     expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0.4, daysSinceStep: 5 }))
       .toEqual({ action: "hold" });
-  });
-  it("does not escalate before the waiting period elapses", () => {
-    expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 0 }))
+    expect(ladderVerdict({ bid: BID_CAP, spendSinceStep: 0.01, daysSinceStep: 0 }))
       .toEqual({ action: "hold" });
   });
 });
