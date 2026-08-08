@@ -71,20 +71,17 @@ export const REINTRO_PROTECT_DAYS = 14;        // no automatic bid CUT inside th
 // Rationale: a keyword that is not spending is not risking anything, so raising it costs nothing
 // and is the only way to find the bid that actually wins an auction. This supersedes the earlier
 // 3-days-per-rung / $0.50-top version from the same conversation.
-// REVISED 2026-08-08 (William): "increase their bids until they spend and convert at $.1 each
-// until $4 is hit and turn off if they dont have a roas of 2x".
+// REVISED 2026-08-08 (William): the step is per RUN, not per day. The job runs every 6h, so a
+// floored word reaches the $0.59 market CPC in 5 runs (~30h) instead of 5 days. William: "increase
+// their bids ... at $.1 each", "we will get better over time as we review each 6 hours".
 //
-// Two changes from the 2026-08-05 version:
-//   - the step is per RUN, not per day. The job runs every 6h, so a floored word reaches the $0.59
-//     market CPC in 5 runs (~30h) instead of 5 days. William: "we will get better over time as we
-//     review each 6 hours".
-//   - the $0.85 ceiling is gone as a STOPPING point. A keyword that will not spend is risking
-//     nothing, so holding it below the market clearing price only preserves the floor trap that
-//     parked 1,810 words. What bounds the downside is not the bid, it is the $4 kill: the moment the
-//     word actually spends $4 without returning 2x, shouldKill() pauses it. BID_CAP remains the
-//     absolute stop so a runaway climb is still impossible.
+// THE $0.85 CEILING STANDS. William 2026-08-08: "max bids go to $.85 then notified". An earlier
+// pass on this change raised the ceiling to BID_CAP on the reasoning that the $4 kill was bound
+// enough; that was wrong and is reverted. $0.85 is a human decision point, not a soft limit — a
+// word that has climbed the whole ladder and still will not spend is telling us something the
+// rules cannot settle alone, so the engine asks rather than keeps buying.
 export const BID_LADDER_STEP = 0.10;   // added per RUN of zero spend
-export const BID_LADDER_MAX = BID_CAP; // absolute stop only; the $4 kill is the real bound
+export const BID_LADDER_MAX = 0.85;    // ceiling; at it, escalate to William — never auto-raise past
 export const LADDER_STEP_DAYS = 0;     // 0 = every run earns the next rung (6-hourly cron)
 
 export interface Perf {
@@ -415,7 +412,7 @@ export interface LadderState {
 
 /**
  * Next bid for a reintroduced keyword that is failing to spend: current + $0.10 per RUN of zero
- * spend, stopping only at BID_CAP. Returns null when no change is due, so callers skip the write.
+ * spend, capped at $0.85. Returns null when no change is due, so callers skip the write entirely.
  *
  * A keyword that HAS spent is deliberately left alone: it is generating data now, so the normal
  * ACOS rule in nextBid() owns it and the $4 kill rule bounds its downside. The ladder exists only
@@ -435,9 +432,9 @@ export function nextLadderBid(
 }
 
 /**
- * Ladder verdict including the approval gate at the cap (William 2026-08-05, cap raised 2026-08-08).
+ * Ladder verdict including the approval gate at the ceiling (William 2026-08-05, reaffirmed 08-08).
  *
- * A keyword that has climbed all the way to BID_CAP and STILL will not spend is telling us something
+ * A keyword that has climbed all the way to $0.85 and STILL will not spend is telling us something
  * the rules cannot decide alone: the word may be worth more than our ceiling, or it may be dead.
  * Rather than silently parking it forever, the engine asks. "escalate" means notify William via
  * Telegram and wait for a human answer; it never raises the bid on its own.

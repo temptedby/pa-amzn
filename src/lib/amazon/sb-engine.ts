@@ -31,11 +31,12 @@ import {
 import { shouldKill, KILL_SPEND, ACOS_PIVOT, type Perf } from "./ad-rules";
 
 export interface SbKillRow {
+  keywordId: string;
   keywordText: string; matchType: string;
   spend: number; sales: number; orders: number; clicks: number;
   acos: number | null;
-  copies: number; pausedIds: string[]; refusedIds: { keywordId: string; code: string }[];
-  unwritable: number;   // ENABLED copies sitting in a campaign that is not ENABLED
+  applied: boolean; refusedCode?: string;
+  unwritable: boolean;   // ENABLED, but its campaign is not, so Amazon will refuse the write
 }
 
 export interface SbEngineResult {
@@ -125,14 +126,18 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
     } catch (e) { out.errors.push(`ingest ${day}: ${e instanceof Error ? e.message : String(e)}`); }
   }
 
-  // (2) month to date, aggregated by WORD across every copy. This is the whole point: a word split
-  //     over several keyword ids stays under $4 forever while the word bleeds.
+  // (2) month to date, per KEYWORD ID. Each spend is judged on its own (William 2026-08-08:
+  //     "i do not want you to combine the same word across all display products and brands and
+  //     stop all the spending. Each spend is individual"). An earlier version summed a word across
+  //     its copies and paused all of them together; that is reverted here. This matches Sponsored
+  //     Products, where the $4 rule has always been per keyword id, so all three products agree.
   const q = await db().execute({
-    sql: `SELECT lower(trim(keyword_text)) AS text, upper(match_type) AS match_type,
+    sql: `SELECT keyword_id,
+                 lower(trim(MAX(keyword_text))) AS text, upper(MAX(match_type)) AS match_type,
                  SUM(cost) AS spend, SUM(sales) AS sales, SUM(orders) AS orders, SUM(clicks) AS clicks
             FROM sb_daily
            WHERE day >= ? AND day <= ? AND keyword_text IS NOT NULL AND trim(keyword_text) <> ''
-           GROUP BY 1,2`,
+           GROUP BY keyword_id`,
     args: [out.month, today],
   });
   const perf = new Map<string, Perf & { text: string; match: string; clicks: number }>();
@@ -144,28 +149,22 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
       orders: Number(r.orders ?? 0), clicks: Number(r.clicks ?? 0),
     };
     out.monthSpend += p.spend; out.monthSales += p.sales;
-    perf.set(wordKey(text, match), p);
+    perf.set(String(r.keyword_id), p);
   }
   out.monthSpend = +out.monthSpend.toFixed(2);
   out.monthSales = +out.monthSales.toFixed(2);
-  out.words = perf.size;
+  out.words = perf.size;   // spending keyword IDs, not distinct texts
 
   // (3) which copies are actually writable. A keyword in a non-ENABLED campaign returns 207 and
   //     changes nothing, so it is counted and reported rather than silently attempted.
   const [live, camps] = await Promise.all([fetchSbKeywords(cfg, token), fetchSbCampaigns(cfg, token)]);
-  const copiesByWord = new Map<string, SbKeyword[]>();
-  for (const k of live) {
-    const key = wordKey(k.keywordText, k.matchType);
-    const arr = copiesByWord.get(key) ?? [];
-    arr.push(k);
-    copiesByWord.set(key, arr);
-  }
+  const byId = new Map<string, SbKeyword>(live.map((k) => [k.keywordId, k]));
 
   // (4) decide, using the SAME rule Sponsored Products uses: $4+ month-to-date AND unprofitable
   //     (no sale at all, or ACOS at/above the 52% break-even pivot).
   const ops: { keywordId: string; adGroupId: string; state: string }[] = [];
   const pending: SbKillRow[] = [];
-  for (const [key, p] of perf) {
+  for (const [keywordId, p] of perf) {
     const acos = p.orders > 0 && p.sales > 0 ? p.spend / p.sales : null;
     if (!shouldKill(p)) {
       if (p.spend >= KILL_SPEND) {
@@ -173,16 +172,18 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
       }
       continue;
     }
-    const copies = copiesByWord.get(key) ?? [];
-    const enabled = copies.filter((c) => c.state === "ENABLED");
-    const writable = enabled.filter((c) => camps.get(c.campaignId)?.state === "ENABLED");
-    for (const c of writable) ops.push({ keywordId: c.keywordId, adGroupId: c.adGroupId, state: "PAUSED" });
+    const k = byId.get(keywordId);
+    if (!k || k.state !== "ENABLED") continue;          // already off: nothing to do
+    // A keyword inside a non-ENABLED campaign returns 207 and changes nothing, so it is reported
+    // rather than silently attempted (sb-keyword-write-recipe, verified live 2026-08-06).
+    const writable = camps.get(k.campaignId)?.state === "ENABLED";
+    if (writable) ops.push({ keywordId, adGroupId: k.adGroupId, state: "PAUSED" });
     pending.push({
+      keywordId,
       keywordText: p.text, matchType: p.match,
       spend: +p.spend.toFixed(2), sales: +p.sales.toFixed(2), orders: p.orders, clicks: p.clicks,
       acos: acos === null ? null : +acos.toFixed(2),
-      copies: copies.length, pausedIds: [], refusedIds: [],
-      unwritable: enabled.length - writable.length,
+      applied: false, unwritable: !writable,
     });
   }
 
@@ -207,18 +208,15 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
 
   const runAt = new Date().toISOString();
   for (const row of pending) {
-    const copies = copiesByWord.get(wordKey(row.keywordText, row.matchType)) ?? [];
-    for (const c of copies) {
-      if (succeeded.has(c.keywordId)) row.pausedIds.push(c.keywordId);
-      else if (failedBy.has(c.keywordId)) row.refusedIds.push({ keywordId: c.keywordId, code: failedBy.get(c.keywordId)! });
-    }
+    row.applied = succeeded.has(row.keywordId);
+    if (!row.applied && failedBy.has(row.keywordId)) row.refusedCode = failedBy.get(row.keywordId);
     out.killed.push(row);
     try {
       await db().execute({
         sql: `INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend,applied,ad_product)
               VALUES (?,?,?,?,?,?,?,?,?,?)`,
         args: [runAt, "kill", row.keywordText, row.matchType, null, null, row.acos, row.spend,
-               row.pausedIds.length > 0 ? 1 : 0, "SPONSORED_BRANDS"],
+               row.applied ? 1 : 0, "SPONSORED_BRANDS"],
       });
     } catch (e) { out.errors.push(`log: ${e instanceof Error ? e.message : String(e)}`); }
   }
@@ -236,7 +234,7 @@ export function summarizeSbEngine(r: SbEngineResult): string {
     for (const k of r.killed) {
       const acos = k.acos === null ? "no sale" : `${Math.round(k.acos * 100)}% ACOS`;
       L.push(`  $${k.spend.toFixed(2)}  ${k.orders} orders, ${acos}  ${k.matchType} "${k.keywordText}"`);
-      L.push(`     ${k.pausedIds.length}/${k.copies} copies paused${k.refusedIds.length ? `, ${k.refusedIds.length} refused (${k.refusedIds[0].code})` : ""}${k.unwritable ? `, ${k.unwritable} in a non-ENABLED campaign` : ""}`);
+      L.push(`     id ${k.keywordId}: ${k.applied ? "PAUSED" : k.refusedCode ? `refused (${k.refusedCode})` : k.unwritable ? "not writable — campaign is not ENABLED" : "not applied"}`);
     }
   }
   if (r.survived.length) {

@@ -1,0 +1,282 @@
+// Sponsored Display kill engine — William's $4 rule, applied to the last ad product that had no
+// rule at all.
+//
+// Context (2026-08-08). Sponsored Display is the worst performer in the account: $4,546.85 spent
+// since 2019 against $3,976.33 of sales, a 0.87x return, against a 1.92x break-even. It returns
+// less than half what it costs and it has never been governed by anything — Sponsored Products has
+// had the $4 rule for weeks, Sponsored Brands got it on 2026-08-07, and Display was still running
+// on $200/day of authorised budget with nobody watching. William 2026-08-08: "all ads need a $4
+// kill switch — products brands and display. this is so important."
+//
+// Three design choices, each one a lesson already paid for on another ad product:
+//
+//  1. EVERY TARGET STANDS ALONE (William 2026-08-08: "Each spend is individual"). A target is
+//     judged on its own month-to-date spend and paused on its own. Spend is NEVER summed across
+//     targets that happen to point at the same ASIN, and pausing one never pauses another. This is
+//     the same rule Sponsored Products has always applied per keyword id.
+//
+//  2. THE TARGET IS THE UNIT, NOT THE ADVERTISED ASIN. In Display the bid lives on the target, so
+//     the target is the exact analogue of a keyword. The advertised product carries the SAME
+//     dollars seen from a different angle — acting on both would judge one dollar twice, and
+//     pausing a product ad stops advertising that product entirely rather than trimming what is
+//     not working. ASIN-level spend is REPORTED here so nothing is invisible, and left unjudged.
+//
+//  3. IT RECORDS OUTCOMES, NOT INTENTIONS. Amazon answers bulk writes with per-item results, and
+//     treating the envelope as success is how one impossible keyword logged applied=1 forty times
+//     while never existing. Only ids Amazon confirmed are recorded as paused.
+//
+// Verified against the live account 2026-08-08 before this was written: GET /sd/targets 200
+// (104 targets, 81 enabled), GET /sd/productAds 200 (129, 88 enabled), GET /sd/campaigns 200
+// (14, 8 enabled). State strings come back LOWERCASE from Display, unlike Products.
+
+import { db } from "@/lib/db/client";
+import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
+import { getReport, type ReportSpec } from "./ads-reports";
+import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf } from "./ad-rules";
+
+const BASE = "https://advertising-api.amazon.com";
+
+/** Month-to-date performance of one Display target, straight from the sdTargeting report. */
+export interface SdTargetPerf {
+  targetId: string;
+  text: string;          // resolved targeting expression, for the log and the email
+  spend: number; sales: number; orders: number; clicks: number;
+}
+/** Current live state of one Display target. Display returns states lowercase. */
+export interface SdTargetState {
+  targetId: string; state: string; campaignId: string; adGroupId: string; bid: number | null;
+}
+export interface SdKillRow {
+  targetId: string; text: string;
+  spend: number; sales: number; orders: number;
+  acos: number | null;
+  applied: boolean; refusedCode?: string;
+  /** ENABLED, but its campaign is not, so Amazon accepts the call and changes nothing. */
+  unwritable: boolean;
+}
+export interface SdKillPlan {
+  kill: SdKillRow[];
+  /** Past $4 but profitable — left running, and named so the decision is visible. */
+  survived: { targetId: string; text: string; spend: number; acos: number | null }[];
+  /** Past $4 and unprofitable, but already paused or archived. Nothing to do. */
+  alreadyOff: number;
+}
+
+/**
+ * PURE selector, unit-tested without the API.
+ *
+ * Each target is judged on its OWN spend against the shared rule: $4+ month-to-date AND
+ * unprofitable, meaning no orders at all or an ACOS at/above the 52% break-even pivot. Nothing is
+ * grouped, nothing is summed across targets, and one target's verdict never touches another's.
+ */
+export function selectSdKills(
+  perf: SdTargetPerf[],
+  byId: Map<string, SdTargetState>,
+  enabledCampaigns: Set<string>,
+  killSpend = KILL_SPEND,
+  pivot = ACOS_PIVOT,
+): SdKillPlan {
+  const plan: SdKillPlan = { kill: [], survived: [], alreadyOff: 0 };
+  for (const p of perf) {
+    const m: Perf = { spend: p.spend, orders: p.orders, sales: p.sales };
+    const acos = acosOf(m);
+    if (!shouldKill(m, killSpend, pivot)) {
+      if (p.spend >= killSpend) {
+        plan.survived.push({ targetId: p.targetId, text: p.text, spend: +p.spend.toFixed(2), acos: acos === null ? null : +acos.toFixed(2) });
+      }
+      continue;
+    }
+    const live = byId.get(p.targetId);
+    if (!live || live.state.toUpperCase() !== "ENABLED") { plan.alreadyOff++; continue; }
+    plan.kill.push({
+      targetId: p.targetId, text: p.text,
+      spend: +p.spend.toFixed(2), sales: +p.sales.toFixed(2), orders: p.orders,
+      acos: acos === null ? null : +acos.toFixed(2),
+      applied: false,
+      unwritable: !enabledCampaigns.has(live.campaignId),
+    });
+  }
+  // Most expensive first, so a truncated email still leads with the worst offender.
+  plan.kill.sort((a, b) => b.spend - a.spend);
+  plan.survived.sort((a, b) => b.spend - a.spend);
+  return plan;
+}
+
+export interface SdEngineResult {
+  ok: boolean; dryRun: boolean;
+  month: string;
+  scanned: number;            // targets with a report row
+  monthSpend: number; monthSales: number;
+  killed: SdKillRow[];
+  survived: SdKillPlan["survived"];
+  alreadyOff: number;
+  /** ASIN-level spend, reported for visibility only — never judged (see design note 2). */
+  asins: { asin: string; spend: number; sales: number; orders: number }[];
+  notes: string[]; errors: string[];
+  durationMs: number; reason?: string;
+}
+
+const iso = (d: Date) => d.toISOString().slice(0, 10);
+
+async function sd(cfg: AdsConfig, token: string, path: string, method = "GET", body?: unknown) {
+  const res = await fetch(`${BASE}${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Amazon-Advertising-API-ClientId": cfg.clientId,
+      "Amazon-Advertising-API-Scope": String(cfg.profileId),
+      "Content-Type": "application/json",
+    },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const text = await res.text();
+  let json: unknown = null;
+  try { json = text ? JSON.parse(text) : null; } catch { /* keep the raw text for the error path */ }
+  return { ok: res.ok, status: res.status, json, text };
+}
+
+/** Page through a Display collection endpoint. Display uses startIndex/count, not nextToken. */
+async function pageAll<T>(cfg: AdsConfig, token: string, path: string): Promise<T[]> {
+  const out: T[] = [];
+  for (let start = 0; ; start += 500) {
+    const sep = path.includes("?") ? "&" : "?";
+    const r = await sd(cfg, token, `${path}${sep}count=500&startIndex=${start}`);
+    const page = Array.isArray(r.json) ? (r.json as T[]) : [];
+    out.push(...page);
+    if (page.length < 500) break;
+  }
+  return out;
+}
+
+export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEngineResult> {
+  const dryRun = opts.dryRun ?? true;
+  const start = Date.now();
+  const now = new Date();
+  const monthStart = iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)));
+  const out: SdEngineResult = {
+    ok: false, dryRun, month: monthStart, scanned: 0, monthSpend: 0, monthSales: 0,
+    killed: [], survived: [], alreadyOff: 0, asins: [], notes: [], errors: [], durationMs: 0,
+  };
+  const cfg = adsConfigFromEnv();
+  if (!cfg?.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
+  const token = await getAdsAccessToken(cfg);
+
+  // (1) month-to-date, per TARGET. Uses the same deferred report machinery as Sponsored Products,
+  //     so a run that only manages to REQUEST the report exits cleanly and the next one collects it.
+  const spec: ReportSpec = {
+    purpose: "sd-engine-mtd", adProduct: "SPONSORED_DISPLAY", reportTypeId: "sdTargeting",
+    groupBy: ["targeting"],
+    columns: ["targetingId", "targetingText", "clicks", "cost", "sales", "purchases"],
+    startDate: monthStart, endDate: iso(now),
+  };
+  const rep = await getReport<Record<string, unknown>>(cfg, token, spec);
+  if (rep.state !== "ready") {
+    // Not an error: Amazon's queue takes minutes and the next 6-hourly run collects it. Acting on a
+    // partial month would read a target's spend as lower than it is and let it past the $4 bar.
+    out.reason = `sdTargeting report ${rep.state} — nothing judged this run`;
+    out.notes.push(out.reason);
+    out.ok = true; out.durationMs = Date.now() - start; return out;
+  }
+
+  const perf: SdTargetPerf[] = [];
+  for (const r of rep.rows) {
+    const targetId = String(r.targetingId ?? "");
+    if (!targetId) continue;
+    const p: SdTargetPerf = {
+      targetId,
+      text: String(r.targetingText ?? ""),
+      spend: Number(r.cost ?? 0), sales: Number(r.sales ?? 0),
+      orders: Number(r.purchases ?? 0), clicks: Number(r.clicks ?? 0),
+    };
+    out.monthSpend += p.spend; out.monthSales += p.sales;
+    perf.push(p);
+  }
+  out.scanned = perf.length;
+  out.monthSpend = +out.monthSpend.toFixed(2);
+  out.monthSales = +out.monthSales.toFixed(2);
+
+  // (2) live state. A target inside a non-ENABLED campaign is reported, not silently attempted.
+  const [targets, camps] = await Promise.all([
+    pageAll<{ targetId: number; state: string; campaignId: number; adGroupId: number; bid?: number }>(cfg, token, "/sd/targets"),
+    pageAll<{ campaignId: number; state: string }>(cfg, token, "/sd/campaigns"),
+  ]);
+  const byId = new Map<string, SdTargetState>(targets.map((t) => [String(t.targetId), {
+    targetId: String(t.targetId), state: String(t.state ?? ""), campaignId: String(t.campaignId),
+    adGroupId: String(t.adGroupId), bid: t.bid ?? null,
+  }]));
+  const enabledCampaigns = new Set(
+    camps.filter((c) => String(c.state ?? "").toUpperCase() === "ENABLED").map((c) => String(c.campaignId)));
+
+  // (3) decide — each target on its own
+  const plan = selectSdKills(perf, byId, enabledCampaigns);
+  out.survived = plan.survived;
+  out.alreadyOff = plan.alreadyOff;
+
+  if (!plan.kill.length) {
+    out.notes.push(`nothing past $${KILL_SPEND} unprofitably (pivot ${Math.round(ACOS_PIVOT * 100)}% ACOS)`);
+    out.ok = true; out.durationMs = Date.now() - start; return out;
+  }
+  if (dryRun) {
+    out.killed = plan.kill;
+    out.ok = true; out.durationMs = Date.now() - start; return out;
+  }
+
+  // (4) apply. PUT /sd/targets takes a bare array and answers per item with a code.
+  const writable = plan.kill.filter((k) => !k.unwritable);
+  if (writable.length) {
+    const r = await sd(cfg, token, "/sd/targets", "PUT",
+      writable.map((k) => ({ targetId: Number(k.targetId), state: "paused" })));
+    const items = Array.isArray(r.json) ? r.json as { targetId?: number; code?: string; details?: string }[] : [];
+    const byTarget = new Map(items.map((i) => [String(i.targetId), i]));
+    for (const k of writable) {
+      const item = byTarget.get(k.targetId);
+      // SUCCESS is the only thing that counts as applied. No item mentioned, no claim made.
+      if (item && String(item.code ?? "").toUpperCase() === "SUCCESS") k.applied = true;
+      else k.refusedCode = item ? String(item.code ?? "UNKNOWN") : "NOT_ACKNOWLEDGED";
+    }
+    if (!r.ok) out.errors.push(`sd kill: HTTP ${r.status} ${r.text.slice(0, 160)}`);
+    const refused = writable.filter((k) => !k.applied).length;
+    if (refused) out.errors.push(`sd kill: ${refused}/${writable.length} refused`);
+  }
+  const blocked = plan.kill.length - writable.length;
+  if (blocked) out.notes.push(`${blocked} target(s) past the bar sit in a campaign that is not ENABLED — Amazon will not change them`);
+
+  // (5) log what actually happened, per target
+  const runAt = new Date().toISOString();
+  for (const k of plan.kill) {
+    out.killed.push(k);
+    try {
+      await db().execute({
+        sql: `INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend,applied,ad_product)
+              VALUES (?,?,?,?,?,?,?,?,?,?)`,
+        args: [runAt, "kill", k.text || k.targetId, "TARGET", null, null, k.acos, k.spend,
+               k.applied ? 1 : 0, "SPONSORED_DISPLAY"],
+      });
+    } catch (e) { out.errors.push(`log: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+
+  out.ok = true; out.durationMs = Date.now() - start;
+  return out;
+}
+
+export function summarizeSdEngine(r: SdEngineResult): string {
+  const L: string[] = [];
+  L.push(`Sponsored Display ${r.month} to date: $${r.monthSpend.toFixed(2)} spend, $${r.monthSales.toFixed(2)} sales, ${r.scanned} targets with activity.`);
+  if (r.reason) L.push(`  ${r.reason}`);
+  if (r.killed.length) {
+    L.push(``, `PAUSED (past $${KILL_SPEND} and unprofitable), each judged on its own spend:`);
+    for (const k of r.killed) {
+      const acos = k.acos === null ? "no sale" : `${Math.round(k.acos * 100)}% ACOS`;
+      L.push(`  $${k.spend.toFixed(2)}  ${k.orders} orders, ${acos}  ${k.text || k.targetId}`);
+      L.push(`     target ${k.targetId}: ${k.applied ? "PAUSED" : k.refusedCode ? `refused (${k.refusedCode})` : k.unwritable ? "not writable — campaign is not ENABLED" : "not applied"}`);
+    }
+  }
+  if (r.survived.length) {
+    L.push(``, `Over $${KILL_SPEND} but PROFITABLE, left running:`);
+    for (const s of r.survived) L.push(`  $${s.spend.toFixed(2)}  ${s.acos === null ? "-" : Math.round(s.acos * 100) + "% ACOS"}  ${s.text || s.targetId}`);
+  }
+  if (r.alreadyOff) L.push(``, `${r.alreadyOff} target(s) past the bar were already paused or archived.`);
+  for (const n of r.notes) L.push(`note: ${n}`);
+  for (const e of r.errors) L.push(`ERROR: ${e}`);
+  return L.join("\n");
+}

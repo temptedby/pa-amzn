@@ -398,15 +398,14 @@ describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
   it("holds the moment the keyword spends anything, however small", () => {
     expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0.01, daysSinceStep: 9 })).toBeNull();
   });
-  it("no longer stops at $0.85 — it climbs until the word spends", () => {
+  it("stops at the $0.85 ceiling instead of overshooting (William 2026-08-08: max bids go to $.85)", () => {
     expect(nextLadderBid({ bid: 0.75, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.85);
-    expect(nextLadderBid({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 })).toBe(0.95);
+    expect(nextLadderBid({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 30 })).toBeNull();
   });
-  it("stops only at the absolute BID_CAP, never above it", () => {
-    expect(nextLadderBid({ bid: BID_CAP - 0.05, spendSinceStep: 0, daysSinceStep: 1 })).toBe(BID_CAP);
-    expect(nextLadderBid({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 365 })).toBeNull();
+  it("never exceeds the ceiling even with an absurd wait", () => {
+    expect(nextLadderBid({ bid: 0.8, spendSinceStep: 0, daysSinceStep: 365 })).toBe(0.85);
   });
-  it("climbs from the entry bid to the cap in dimes and then stops", () => {
+  it("climbs 0.25 to 0.85 in six dime steps — one per RUN, not one per day", () => {
     const seen: number[] = [];
     let bid = REINTRO_START_BID;
     for (let run = 0; run < 200; run++) {
@@ -414,38 +413,26 @@ describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
       if (next === null) break;
       bid = next; seen.push(next);
     }
-    expect(seen[0]).toBe(0.35);
-    expect(seen[seen.length - 1]).toBe(BID_CAP);
-    expect(Math.max(...seen)).toBeLessThanOrEqual(BID_CAP);
-    // Every step is a flat dime apart from the final clamp onto the cap.
-    for (let i = 1; i < seen.length - 1; i++) {
-      expect(Math.round((seen[i] - seen[i - 1]) * 100)).toBe(10);
-    }
+    expect(seen).toEqual([0.35, 0.45, 0.55, 0.65, 0.75, 0.85]);
   });
 });
 
-describe("ladderVerdict — BID_CAP is the approval gate now, not $0.85", () => {
-  it("raises while below the cap", () => {
+describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
+  it("raises while below the ceiling", () => {
     expect(ladderVerdict({ bid: 0.45, spendSinceStep: 0, daysSinceStep: 1 }))
       .toEqual({ action: "raise", bid: 0.55 });
   });
-  it("keeps climbing straight past the old $0.85 stop", () => {
+  it("escalates at the ceiling when it still will not spend", () => {
     expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 }))
-      .toEqual({ action: "raise", bid: 0.95 });
+      .toEqual({ action: "escalate", bid: 0.85 });
   });
-  it("escalates only at BID_CAP, when it still will not spend", () => {
-    expect(ladderVerdict({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 1 }))
-      .toEqual({ action: "escalate", bid: BID_CAP });
-  });
-  it("NEVER raises past the cap on its own", () => {
-    const v = ladderVerdict({ bid: BID_CAP, spendSinceStep: 0, daysSinceStep: 99 });
+  it("NEVER raises past the ceiling on its own", () => {
+    const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 99 });
     expect(v.action).toBe("escalate");
     expect("bid" in v ? v.bid : 0).toBeLessThanOrEqual(BID_LADDER_MAX);
   });
-  it("holds the moment it starts spending, at any bid — the $4 kill takes over from here", () => {
+  it("holds the moment it starts spending — the $4 kill takes over from here", () => {
     expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0.4, daysSinceStep: 5 }))
-      .toEqual({ action: "hold" });
-    expect(ladderVerdict({ bid: BID_CAP, spendSinceStep: 0.01, daysSinceStep: 0 }))
       .toEqual({ action: "hold" });
   });
 });
