@@ -151,8 +151,25 @@ the platform decision until there is data to make it with.
 **Rollback:** stop issuing tags and stop paying. There is no contract, no platform subscription and
 no listing change. Existing tags keep working or get retired individually.
 
-## 7. Before anything ships
+## 7. Before anything ships — PROBED 2026-08-08
 
-Per [[cbc-confirm-before-claim]], prove with a real call, not config, that Attribution reporting
-returns per-tag order and revenue data we can actually pay against. If we cannot read what a partner
-sold, we cannot run this programme at all.
+The gate was: prove with a real call that Attribution reporting returns per-tag data we can pay
+against. Result, via `scripts/live-attribution-probe.mjs`:
+
+```
+GET  /attribution/advertisers   200   Phone Assured, id 593385895532730388
+GET  /attribution/publishers    200
+POST /attribution/report        200   groupBy CAMPAIGN / ADGROUP / CREATIVE
+```
+
+**Access confirmed, on the ordinary ADS_* credentials, no extra onboarding.** `groupBy: CREATIVE` is
+the per-tag view, so one tag per partner gives one row per partner. Exactly the shape the programme
+needs.
+
+**Not yet fully proven.** Every report returned `{"reports":[],"count":0}`. Expected: the tag was
+created 2026-08-08 and no click has flowed through it. So this is *access confirmed, data not yet
+observed*. **Re-run the probe once real traffic exists and confirm a non-zero row before paying any
+partner.** Signing partners we cannot measure is the exact failure this section exists to prevent.
+
+Gotcha recorded: `attributedTotal*14d` metrics 400 on `reportType: PERFORMANCE`. Working set is in
+the script.
