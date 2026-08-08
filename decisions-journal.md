@@ -897,3 +897,70 @@ when the contact record is missing the unit entirely.
 Verification, the advertising-side tax information, and the Seller Central Tax Information Interview
 (W-9). Only the third unblocks the Brand Referral Bonus. Completing it enrolled the account
 automatically, exactly as the dialog promised.
+
+---
+
+## 2026-08-08 (part C) — Weight classes, a 40% affiliate rate, and two corrections I had to take
+
+**Context.** The domain forward went live, so external traffic is now attributed. William then asked
+for a phone compatibility rule (BLACK versus PRO by weight), for that to reach Megan's listing copy,
+and for an affiliate programme paying 40% of revenue instead of the ~50% we hand Amazon in ads. The
+governing goal is unchanged: move the ~2,000 units on hand with no new investment.
+
+**Options.**
+*Compatibility line:* hold at 170 g (iPhone 16 exactly), or 171 g (admit iPhone 15), or 177 g (admit
+iPhone 15, 14, 13 and 17). Each step adds a large installed base at the cost of a wider claim.
+*Listing emphasis:* keep BLACK as the hero, or promote PRO on the grounds that almost every popular
+phone is too heavy for BLACK.
+*Affiliate rate:* 25% (market is 15-25%) or 40% (William's proposal).
+*Affiliate platform:* Levanta at $150-750/month, Archer, or manual on our own Attribution tags.
+
+**Decision.** 171 g line. BLACK stays the hero listing. 40% commission, framed as a dated
+founding-partner rate. Manual programme, no platform fee. Compatibility research delivered to Megan
+as comments and an appended section, never as edits over her copy.
+
+**Reasoning.** The weight line is a *weight class* claim, not a strength claim, which matters because
+cord load capacity is still unconfirmed for both products — so nothing can say "holds X pounds" yet.
+On emphasis I was wrong and William corrected me: I saw that only two of the world's ten best selling
+phones fit BLACK and concluded PRO should lead. He pointed out BLACK carries the reviews and the sales
+history, and moving the hero position away from the listing that ranks would throw that away. The
+better move is the cross sell — keep BLACK in front and route heavy phone shoppers to the PRO from
+there. On the rate, I recommended 25% and he chose 40% to make a splash. His reasoning holds: partner
+acquisition is the binding constraint, not partner cost, and even 40% returns $2.08 a unit against
+$0.19 from ads. What I added was the mechanism that makes his stated intent to lower later actually
+work — a rate with a review date in the terms can step down on schedule; an open-ended one cannot be
+cut without partners treating it as a broken deal.
+
+**Industry source.** Amazon's Brand Referral Bonus terms, which state you can earn either a BRB or an
+Associates commission **for a single Attribution tag**, not both. Levanta's published pricing
+($150-750/month) and the 15-25% commission norm for Amazon creator programmes. Amazon's documented
+249-byte cap on backend search terms, where exceeding it drops the entire field silently.
+
+**Trade-offs accepted.** A 171 g line sends iPhone 14 and 13 owners to the PRO over a 1-3 gram
+difference; erring toward PRO is defensible while cord capacity is unconfirmed, and PRO is the
+higher-value unit anyway. 40% is 15 points above market, which we accept in exchange for partner
+interest and the option to step down on the stated date. Manual means no partner marketplace and about
+an hour a month of reading reports, which beats $150/month at our volume.
+
+**Status.** Compatibility research committed and delivered to Megan's doc as eight comments plus an
+appended section. Affiliate RBB committed at 40%. Attribution reporting **probed**: 200s on our
+existing credentials, with `groupBy: CREATIVE` giving the per-tag view a payout needs. Deliberately
+recorded as *access confirmed, data not observed* — every report returned zero rows because the tag is
+hours old, so the gate before paying any partner is a re-run showing a real row.
+
+### Corrections taken this session
+
+1. **BRB versus Associates is per tag, not per account.** A memory I wrote this morning said the two
+   conflict at account level and called an affiliate programme "incompatible" with the bonus. Wrong.
+   Both run side by side on different tags. Corrected in memory, because it was about to rule out a
+   programme we are now building.
+2. **"All-time" sales were not all time.** I quoted 5,149 units for the flagship from a file headed
+   "All-Time Sales". William said that could not be right for eight years, and he was right: the
+   SP-API only reaches back ~2 years, a caveat buried at the bottom of that same file. The number had
+   already been written into listing copy. The file is now retitled with the caveat at the top, since
+   a misleading heading caused a wrong claim once and would have done it again.
+3. **Two accidental edits to Megan's document.** Google Docs' find box and comment reply box both
+   silently failed to take focus, and my text landed in the document body instead. Caught and undone
+   both times, and the saved document verified against the original. The durable lesson: in the Docs
+   canvas only *new* comments are reliable; replying to an existing thread is not, so do not attempt
+   it on someone else's document.

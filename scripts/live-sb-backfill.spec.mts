@@ -18,6 +18,9 @@ it("reads the missing Sponsored Brands days", async () => {
   for (const day of (process.env.SB_DAYS || "2026-08-06,2026-08-07,2026-08-08").split(",")) {
     try {
       const rows = await fetchSbKeywordDay(cfg, token, day);
+      // null means "report not ready", which is not the same as "no data" — say so
+      // rather than reporting a day as zero when we simply could not see it.
+      if (!rows) { L.push(`${day}  report NOT READY (null) — not zero, just unseen`); continue; }
       const cost = rows.reduce((a, r) => a + (r.cost ?? 0), 0);
       const sales = rows.reduce((a, r) => a + (r.sales ?? 0), 0);
       const active = rows.filter((r) => (r.cost ?? 0) > 0);
