@@ -57,3 +57,6 @@ scripts/pw-*.png
 
 # Legal/identity docs - never commit (may contain payment/PII)
 .docs/
+
+# Seller Central status reads — account PII, never commit
+.sc-status/
