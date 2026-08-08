@@ -1,4 +1,9 @@
-# Phone Assured — All-Time Sales & Units (SP-API all-orders, stitched)
+# Phone Assured — Last ~2 Years of Sales & Units (SP-API all-orders, stitched)
+
+> **This is NOT all time.** The SP-API only reaches back about 2 years (Amazon order-data
+> retention). The real all-time figure is roughly **18,000 units over 8 years**, per William and
+> Campaign Manager (8,926 ad-attributed). Retitled 2026-08-08 after the old "All-Time" heading led
+> to a wrong claim being written into listing copy.
 
 Generated 2026-06-24. Source: GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL, 28 windows, ex-cancelled.
 
