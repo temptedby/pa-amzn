@@ -97,7 +97,13 @@ entire current volume** just to break even. That is a large bet on a business be
 
 ## 5. Recommendation
 
-**Option 1 first. Manual programme, our own tags, 25% commission, zero fixed cost.**
+**Option 1. Manual programme, our own tags, 40% launch commission, zero fixed cost.**
+
+**Rate decided by William, 2026-08-08:** *"nope i want to open at 40% and then we can lower."* I had
+recommended 25% on the grounds that market is 15-25% and a rate is hard to walk back. William
+overrode that and the reasoning holds up: partner *acquisition* is the binding constraint here, not
+partner *cost*. A rate nobody signs up for is worth nothing, and 40% still returns $2.08 a unit
+against $0.19 from ads. Recorded, decided, proceeding at 40%.
 
 Structure, and the structure is the important part:
 
@@ -106,17 +112,22 @@ Structure, and the structure is the important part:
   ~$0.95 bonus lands with us on every referred sale.
 - **One tag per partner**, so attribution is unambiguous and a non-performer can be cut without
   touching anyone else.
-- **25%, not 40%.** Market is 15-25%. Opening at 40% gives away $1.43 a unit against 25% and we
-  cannot quietly claw it back later. Hold 40% in reserve as a proven-performer tier.
+- **40%, and call it a LAUNCH rate in writing.** This is the one thing that makes "then we can
+  lower" actually work. A commission described as *"40% founding-partner rate through [date]"* can
+  step down on schedule without it reading as a cut, because the end was stated up front. An
+  open-ended 40% cannot be reduced later without partners treating it as a broken deal and leaving.
+  Same number, same appeal, and it keeps the exit William asked for. Put the review date in the
+  partner terms from day one.
 - **Pay on Amazon-confirmed orders only**, from Attribution reporting, monthly in arrears, after the
   return window. Not on clicks and not on self-reported numbers.
-- Revisit Levanta only once affiliate volume alone clears ~43 units/month. Then the fee pays for
+- Revisit Levanta only once affiliate volume alone clears **~72 units/month**, which is the
+break-even at 40% on the $150 plan. Then the fee pays for
   itself and the marketplace is worth having.
 
 ### What NOT to do, and why
 
-- **Do not open at 40%.** Not because it loses money, it does not, but because it is 15 points above
-  market for a channel with no proven partners yet. You can raise a rate. You cannot lower one.
+- **Do not leave the 40% open-ended.** The rate is fine; an undated promise is not. Without a stated
+  review date the step-down William is planning for becomes a fight.
 - **Do not let partners use Amazon Associates links.** Per-tag rule: they take the Associates
   commission and we forfeit the BRB on that same sale. We would be paying twice for one referral.
 - **Do not pay a platform fee before the channel exists.** $150/month against ~99 total units/month
@@ -128,7 +139,7 @@ Structure, and the structure is the important part:
 ## 6. Open questions, trade-offs, rollback
 
 **Open questions for William:**
-1. 25% to start as recommended, or hold at 40% because partner acquisition is the harder problem?
+1. ~~Rate~~ **Decided: 40% launch rate.**
 2. Who are the first partners? A manual programme needs names. Existing customers, phone-accessory
    reviewers, travel and cruise creators?
 3. Is the Pro ($10.49) in the programme too, or flagship only to start?
