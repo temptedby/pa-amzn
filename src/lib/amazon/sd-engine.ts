@@ -28,6 +28,19 @@
 // Verified against the live account 2026-08-08 before this was written: GET /sd/targets 200
 // (104 targets, 81 enabled), GET /sd/productAds 200 (129, 88 enabled), GET /sd/campaigns 200
 // (14, 8 enabled). State strings come back LOWERCASE from Display, unlike Products.
+//
+// The sdTargeting report is CONFIRMED working, and `targetingId` carries a real, actionable id on
+// every row. Worth knowing: Sponsored Display reports take about TEN TO FIFTEEN MINUTES to
+// complete, where Sponsored Products finishes in ~9. Two separate probes read "still pending" after
+// 550s and both were COMPLETED when polled again later. That is why this engine uses the deferred
+// getReport() path rather than polling inline — a run that only manages to request the report exits
+// clean and the next 6-hourly run collects it.
+//
+// First live read, 2026-08-08: 28 targets with rows, 5 with spend, $3.69 month-to-date and $0.00
+// sales. Nothing past the $4 bar, so nothing was paused — correct, not a failure. Note the
+// implication: at ~$3.69/month across the whole product, a single target rarely reaches $4 inside
+// one calendar month, so this rule is a guardrail against Display scaling up again rather than
+// something that will claw back the 0.87x lifetime loss on its own.
 
 import { db } from "@/lib/db/client";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
