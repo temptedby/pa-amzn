@@ -3,7 +3,7 @@ import { db } from "@/lib/db/client";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
-  bidWithMemory, BID_COOLDOWN_HOURS, type BidChange, type SinceChange,
+  bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   REINTRO_LIFETIME_ROAS_MIN, REINTRO_LIFETIME_MIN_ORDERS,
@@ -79,6 +79,10 @@ export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
   killed: { text: string; spend: number; matchType: string; keywordId: string; applied?: boolean }[];
   bids: { text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string; roasBefore?: number | null }[];
+  /** Wanted a raise past the $0.85 ceiling and stopped. William confirms these by hand. */
+  needsConfirm: { text: string; matchType: string; keywordId: string; bid: number; wouldBe: number; roas: number | null }[];
+  /** Killed earlier this month, then vindicated by late attribution and switched back on. */
+  revived: { text: string; matchType: string; keywordId: string; roas: number; spend: number; sales: number; applied?: boolean }[];
   added: { text: string; matchType: string }[];
   /** Report-readiness lines. A pass with data still queued is normal, so it is a note, not an error. */
   notes: string[];
@@ -314,6 +318,104 @@ export function reactivationCandidates(
 }
 
 // ---------------------------------------------------------------------------
+// THE $4 KILL, as a pure function (William 2026-08-08: "should not be pausing all key words when
+// only 1 spends")
+// ---------------------------------------------------------------------------
+// This was always per-keyword-id, but only Sponsored Brands and Sponsored Display had a test
+// saying so, so the claim rested on reading the loop. Now it is pinned like the other two.
+//
+// The unit of judgement is the KEYWORD ID, never the text. 541 groups on this account hold more
+// than one copy of the same (text, match type); each copy is a separate row with its own bid, its
+// own spend and its own verdict. A word can be paused in one campaign and running in another, and
+// that is correct, not a bug to be tidied up.
+
+/** One keyword the $4 rule would pause, identified by id. */
+export interface KillPick { keywordId: string; text: string; matchType: string; spend: number }
+
+export function killPlan(
+  rows: { keywordId?: string | number | null; cost?: number; purchases14d?: number; sales14d?: number }[],
+  byId: Map<string, { keywordText: string; matchType: string; state: string; bid?: number | null }>,
+  newKwBid = NEW_KW_BID,
+): KillPick[] {
+  const out: KillPick[] = [];
+  const seen = new Set<string>();
+  for (const r of rows) {
+    if (r.keywordId == null) continue;
+    const id = String(r.keywordId);
+    if (seen.has(id)) continue;                              // one verdict per id, whatever the report repeats
+    const k = byId.get(id);
+    if (!k || k.state !== "ENABLED") continue;               // already off, or gone from the account
+    const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
+    if (decide(k.bid || newKwBid, perf).action !== "kill") continue;
+    seen.add(id);
+    out.push({ keywordId: id, text: k.keywordText, matchType: k.matchType, spend: +perf.spend.toFixed(2) });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// IN-MONTH REVIVAL after attribution (William 2026-08-08)
+// ---------------------------------------------------------------------------
+// "if a word is turned off and the 14 day attribution kicks in for sales dont turn it back on that
+// month until that word reaches a 2.0 roas", and "turn it back on the moment the attribtion credits
+// it above a 2.0".
+//
+// The problem this fixes, measured on the live account 2026-08-08. Amazon credits a sale to the
+// click that caused it, up to 14 days later. The $4 kill reads month-to-date on the day it runs, so
+// a keyword whose sale has not landed yet reads as zero orders and gets paused. Both kills the
+// engine has made this month turned out to have converted:
+//
+//   phone tether PHRASE                       killed as "$5.55, 0 orders"  -> $7.55 -> $9.49,  1 order
+//   hand strap universal phone lanyard...     killed as "$6.95, 0 orders"  -> $13.61 -> $16.49, 1 order
+//
+// Until now the only way back was the monthly reset on the 1st, so a word that proved itself on the
+// 3rd sat dark for four weeks. This re-checks every 6h and switches it back on as soon as the credit
+// lands.
+//
+// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below the 52% ACOS pivot,
+// which is 1.923x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
+// and revived by the same data. The 1.923x-2.0x band is deliberately dead space.
+export const REVIVE_MIN_ROAS = 2.0;
+
+/** One keyword the $4 kill paused, with the month it happened in. */
+export interface KillLedgerRow { keywordId: string; word: string; matchType: string; month: string }
+export interface RevivalPick { keywordId: string; word: string; matchType: string; roas: number; spend: number; sales: number }
+
+/**
+ * Which of this month's killed keywords attribution has now vindicated.
+ *
+ * Deliberately narrow. It considers ONLY keywords this engine killed in the CURRENT month, so it
+ * can never resurrect a word paused by hand, paused in an earlier month, or retired for good. And
+ * it re-enables only what is still PAUSED on the account right now: if William turned something
+ * back on himself, the engine leaves it alone rather than writing over his decision.
+ */
+export function inMonthRevivals(
+  ledger: KillLedgerRow[],
+  liveById: Map<string, { state: string }>,
+  mtdById: Map<string, { spend: number; sales: number; orders: number }>,
+  month: string,
+  minRoas = REVIVE_MIN_ROAS,
+): RevivalPick[] {
+  const out: RevivalPick[] = [];
+  const seen = new Set<string>();
+  for (const row of ledger) {
+    if (row.month !== month) continue;                     // this month's kills only
+    const id = String(row.keywordId);
+    if (seen.has(id)) continue;
+    const live = liveById.get(id);
+    if (!live || live.state !== "PAUSED") continue;        // gone, archived, or already back on
+    const p = mtdById.get(id);
+    if (!p || p.spend <= 0 || p.orders <= 0 || p.sales <= 0) continue;
+    const roas = p.sales / p.spend;
+    if (roas < minRoas) continue;                          // not vindicated yet, keep waiting
+    seen.add(id);
+    out.push({ keywordId: id, word: row.word, matchType: row.matchType,
+               roas: +roas.toFixed(2), spend: +p.spend.toFixed(2), sales: +p.sales.toFixed(2) });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Bid memory storage (William 2026-08-07).
 //
 // `kw_bid_history` is what the engine did. `kw_perf_snapshot` is what the account looked like when
@@ -334,6 +436,46 @@ async function ensureBidMemory(): Promise<void> {
     mtd_spend REAL DEFAULT 0, mtd_sales REAL DEFAULT 0, mtd_orders INTEGER DEFAULT 0, mtd_clicks INTEGER DEFAULT 0,
     PRIMARY KEY (taken_at, keyword_id))`);
   await db().execute(`CREATE INDEX IF NOT EXISTS kw_perf_snapshot_kw ON kw_perf_snapshot (keyword_id, taken_at DESC)`);
+}
+
+/**
+ * The kill ledger. A row per keyword the $4 rule paused, so the revival check knows exactly which
+ * words are ITS to reconsider. ad_engine_log cannot do this job: it records kills by text with a
+ * null match type and no keyword id, and three copies of one word share that text.
+ */
+async function ensureKillLedger(): Promise<void> {
+  await db().execute(`CREATE TABLE IF NOT EXISTS kw_kill_ledger (
+    keyword_id TEXT NOT NULL, month TEXT NOT NULL, word TEXT, match_type TEXT,
+    killed_at TEXT NOT NULL, kill_spend REAL, revived_at TEXT, revive_roas REAL,
+    PRIMARY KEY (keyword_id, month))`);
+}
+
+/** Record kills Amazon ACCEPTED. A refused kill left the keyword running, so it is not ours to revive. */
+async function recordKills(killed: AdEngineResult["killed"], month: string): Promise<void> {
+  const at = new Date().toISOString();
+  for (const k of killed) {
+    if (k.applied === false) continue;
+    // ON CONFLICT DO NOTHING: a keyword killed, revived, then killed again inside one month keeps
+    // its FIRST kill row. Overwriting would clear revived_at and let it be revived twice off one
+    // sale, which is the loop this whole rule is meant to avoid.
+    await db().execute({
+      sql: `INSERT INTO kw_kill_ledger (keyword_id, month, word, match_type, killed_at, kill_spend)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(keyword_id, month) DO NOTHING`,
+      args: [String(k.keywordId), month, k.text, k.matchType, at, k.spend],
+    });
+  }
+}
+
+/** This month's kills that have not been revived yet. */
+async function openKills(month: string): Promise<KillLedgerRow[]> {
+  const r = await db().execute({
+    sql: "SELECT keyword_id, word, match_type, month FROM kw_kill_ledger WHERE month = ? AND revived_at IS NULL",
+    args: [month],
+  });
+  return r.rows.map((row) => ({
+    keywordId: String(row.keyword_id), word: String(row.word ?? ""),
+    matchType: String(row.match_type ?? ""), month: String(row.month),
+  }));
 }
 
 /** The most recent bid change per keyword. */
@@ -390,7 +532,7 @@ async function perfSinceChange(
 export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
-  const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], added: [], notes: [], errors: [], durationMs: 0 };
+  const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], needsConfirm: [], revived: [], added: [], notes: [], errors: [], durationMs: 0 };
   const cfg = adsConfigFromEnv();
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
@@ -445,20 +587,36 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   // the same text are separate keywords with separate bids, so they are separate decisions.
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   const killedAt = new Map<number, number>();   // kill-op index -> index into out.killed
+  for (const p of killPlan(kt, byId)) {
+    killedAt.set(killOps.length, out.killed.length);
+    killOps.push({ keywordId: p.keywordId, state: "PAUSED" });
+    out.killed.push({ text: p.text, matchType: p.matchType, spend: p.spend, keywordId: p.keywordId });
+  }
+  const killIds = new Set(out.killed.map((k) => k.keywordId));
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
-    const v = decide(k.bid || NEW_KW_BID, perf); // $4-MTD kill + ±10% bid at the 52% pivot (ad-rules.ts)
-    if (v.action === "kill") {
-      killedAt.set(killOps.length, out.killed.length);
-      killOps.push({ keywordId: String(k.keywordId), state: "PAUSED" });
-      out.killed.push({ text: k.keywordText, matchType: k.matchType, spend: +perf.spend.toFixed(2), keywordId: String(k.keywordId) });
-    } else {
+    if (killIds.has(String(k.keywordId))) continue;   // paused this run; no bid decision on a dead word
+    {
       // Bid decisions go through memory: cooldown first, then roll back a raise that hurt, then
       // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
       const id = String(k.keywordId);
       const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs);
-      if (m.bid === null) { if (m.reason.startsWith("held:")) heldByCooldown++; continue; }
+      if (m.bid === null) {
+        if (m.reason.startsWith("held:")) heldByCooldown++;
+        // The $0.85 line. The engine has run out of authority here, so it surfaces the word rather
+        // than raising it or quietly dropping it. Reported EVERY run it wants more, on purpose:
+        // this is a standing ask, and one that goes silent after the first mention gets forgotten.
+        else if (m.escalate) {
+          const ev = since.get(id);
+          out.needsConfirm.push({
+            text: k.keywordText, matchType: k.matchType, keywordId: id,
+            bid: k.bid || NEW_KW_BID, wouldBe: m.wouldBe ?? 0,
+            roas: ev && ev.spend > 0 ? +(ev.sales / ev.spend).toFixed(2) : null,
+          });
+        }
+        continue;
+      }
       const promotedAt = protectedIds.get(id);
       const isCut = m.bid < (k.bid || NEW_KW_BID);
       if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
@@ -474,6 +632,42 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
   if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_HOURS}h`);
+  // ---- IN-MONTH REVIVAL (William 2026-08-08) --------------------------------------------
+  // Runs BEFORE this run's kills are recorded, so a keyword cannot be killed and revived in the
+  // same pass. It reads the same month-to-date rows the kill just used, which is the point: those
+  // rows now carry sales that had not been attributed when the kill was made.
+  try {
+    await ensureKillLedger();
+    const open = await openKills(month);
+    if (open.length) {
+      const picks = inMonthRevivals(open, byId, nowMtd, month);
+      for (const p of picks) out.revived.push({ text: p.word, matchType: p.matchType, keywordId: p.keywordId, roas: p.roas, spend: p.spend, sales: p.sales });
+      if (!dryRun && picks.length) {
+        const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: picks.map((p) => ({ keywordId: p.keywordId, state: "ENABLED" })) }, KW_CT);
+        // Amazon answers 207 with a per-item body, so res.ok alone would call a refusal a success.
+        const okIds = new Set(((r.json?.success ?? []) as { keywordId?: string | number }[]).map((x) => String(x.keywordId)));
+        const perItem = Array.isArray(r.json?.success) || Array.isArray(r.json?.error);
+        const at = new Date().toISOString();
+        for (const p of out.revived) {
+          const applied = r.ok && (!perItem || okIds.has(p.keywordId));
+          p.applied = applied;
+          if (!applied) continue;
+          await db().execute({
+            sql: "UPDATE kw_kill_ledger SET revived_at = ?, revive_roas = ? WHERE keyword_id = ? AND month = ?",
+            args: [at, p.roas, p.keywordId, month],
+          });
+        }
+        if (!r.ok) out.errors.push(`revive: ${r.status}`);
+      }
+      out.notes.push(`revival: ${open.length} killed this month, ${picks.length} back above ${REVIVE_MIN_ROAS.toFixed(1)}x`);
+    }
+  } catch (e) { out.errors.push("revive: " + (e instanceof Error ? e.message : String(e))); }
+
+  if (out.needsConfirm.length) {
+    out.notes.push(
+      `NEEDS YOU: ${out.needsConfirm.length} keyword(s) want a bid above the $${BID_CONFIRM_CEILING.toFixed(2)} ceiling and were left alone.\n` +
+      out.needsConfirm.map((n) => `  $${n.bid.toFixed(2)} -> $${n.wouldBe.toFixed(2)}  ${n.roas === null ? "no ROAS yet" : n.roas + "x"}  ${n.text} (${n.matchType})`).join("\n"));
+  }
   if (rolledBack) out.notes.push(`${rolledBack} keyword(s) turned around: the last bid move made them worse`);
 
   // (2) search terms -> harvest into the SOURCE ad group (H1 fix), William's >=$4 & ACOS<=50% rule.
@@ -565,6 +759,8 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
 
     // Persist every action to the decision log so the algorithm is auditable + trackable over time.
     try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
+    // Ledger the kills so the next run can reconsider them once attribution catches up.
+    try { await ensureKillLedger(); await recordKills(out.killed, month); } catch (e) { out.errors.push("kill ledger: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   out.ok = true; out.durationMs = Date.now() - start;
@@ -1033,6 +1229,12 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     lines.push("PAUSED (>=$4 MTD spend on that keyword, no sale or ACOS>=52%):");
     r.killed.forEach((k) => lines.push(
       `  $${k.spend} wasted  ${k.matchType} "${k.text}"${k.applied === false ? "   [AMAZON REFUSED]" : ""}`));
+    lines.push("");
+  }
+  if (r.revived.length) {
+    lines.push("BACK ON — killed this month, then attribution credited the sale (>=2.0x):");
+    r.revived.forEach((v) => lines.push(
+      `  ${v.roas}x  $${v.spend} -> $${v.sales}  ${v.matchType} "${v.text}"${v.applied === false ? "   [AMAZON REFUSED]" : ""}`));
     lines.push("");
   }
   if (r.added.length) { lines.push("HARVESTED keywords (converted at >=2x ROAS, into the source ad group, accepted by Amazon):"); r.added.forEach((a) => lines.push(`  ${a.matchType}  ${a.text}`)); lines.push(""); }

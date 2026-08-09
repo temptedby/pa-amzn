@@ -81,8 +81,21 @@ export const REINTRO_PROTECT_DAYS = 14;        // no automatic bid CUT inside th
 // word that has climbed the whole ladder and still will not spend is telling us something the
 // rules cannot settle alone, so the engine asks rather than keeps buying.
 export const BID_LADDER_STEP = 0.10;   // added per RUN of zero spend
-export const BID_LADDER_MAX = 0.85;    // ceiling; at it, escalate to William — never auto-raise past
 export const LADDER_STEP_DAYS = 0;     // 0 = every run earns the next rung (6-hourly cron)
+
+// THE $0.85 CEILING IS ACCOUNT-WIDE, NOT LADDER-ONLY. William 2026-08-08:
+// "after .85 we communicate to confirm you dont go over $.85 per keyword".
+//
+// It used to bind only the ladder, the path for keywords that will not spend. The ROAS bid search
+// ran to BID_CAP instead, which is how `retractable phone holder belt clip` compounded $0.82 ->
+// $1.94 in three days off ONE conversion, and how 100 keywords ended up bid above $0.85 with
+// several at $2.50. Both paths now stop at the same number.
+//
+// Behaviour at the line: climb TO $0.85, then stop and ask. A raise that would cross it is not
+// silently clamped and retried forever, it is reported so William can decide. Cuts are never
+// blocked, because lowering a bid reduces risk and needs no permission.
+export const BID_CONFIRM_CEILING = 0.85;
+export const BID_LADDER_MAX = BID_CONFIRM_CEILING;   // same line, under the name the ladder reads
 
 export interface Perf {
   spend: number;   // month-to-date cost, $
@@ -612,7 +625,8 @@ export function inCooldown(last: BidChange | null | undefined, nowMs = Date.now(
 
 export type SearchStep =
   | { bid: number; direction: "up" | "down"; reason: string }
-  | { bid: null; reason: string };
+  /** escalate = the rule wanted to raise past $0.85 and stopped. wouldBe is the bid it wanted. */
+  | { bid: null; reason: string; escalate?: true; wouldBe?: number };
 
 /**
  * One bid step for one keyword.
@@ -638,11 +652,12 @@ export function searchStep(
   currentBid: number,
   since: SinceChange | null | undefined,
   _last?: BidChange | null,
-  opts: { step?: number; floor?: number; cap?: number; minClicks?: number; target?: number } = {},
+  opts: { step?: number; floor?: number; cap?: number; ceiling?: number; minClicks?: number; target?: number } = {},
 ): SearchStep {
   const step = opts.step ?? BID_SEARCH_STEP;
   const floor = opts.floor ?? BID_FLOOR;
   const cap = opts.cap ?? BID_CAP;
+  const ceiling = opts.ceiling ?? BID_CONFIRM_CEILING;
   const minClicks = opts.minClicks ?? SEARCH_MIN_CLICKS;
   const target = opts.target ?? TARGET_ROAS;
   const base = currentBid > 0 ? currentBid : floor;
@@ -656,8 +671,23 @@ export function searchStep(
   const move = (dir: "up" | "down", reason: string): SearchStep => {
     const stepC = Math.round(step * 100), baseC = Math.round(base * 100);
     const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);
+    const ceilC = Math.round(ceiling * 100);
     const target = dir === "up" ? baseC + stepC : baseC - stepC;
-    const bidC = Math.max(floorC, Math.min(capC, target));
+
+    // THE $0.85 STOP, on the way up only (William 2026-08-08). A keyword already at or above the
+    // ceiling does not get raised again by a rule — it gets reported. Cuts fall through untouched,
+    // which is what lets a keyword sitting at $1.94 today walk back down without asking.
+    if (dir === "up" && baseC >= ceilC) {
+      return {
+        bid: null,
+        reason: `${reason}, but $${(base).toFixed(2)} is already at or past the $${ceiling.toFixed(2)} ceiling — needs your confirmation`,
+        escalate: true,
+        wouldBe: target / 100,
+      };
+    }
+    // Below the ceiling a raise is allowed to land ON it, never through it: $0.80 + $0.10 -> $0.85.
+    const upperC = dir === "up" ? Math.min(capC, ceilC) : capC;
+    const bidC = Math.max(floorC, Math.min(upperC, target));
     if (bidC === baseC) return { bid: null, reason: `${reason} (already at the ${dir === "up" ? "cap" : "floor"})` };
     return { bid: bidC / 100, direction: dir, reason };
   };
@@ -681,11 +711,11 @@ export function bidWithMemory(
   last: BidChange | null | undefined,
   since: SinceChange | null | undefined,
   nowMs = Date.now(),
-  opts: { step?: number; floor?: number; cap?: number; hours?: number; minClicks?: number; target?: number } = {},
-): { bid: number | null; reason: string } {
+  opts: { step?: number; floor?: number; cap?: number; ceiling?: number; hours?: number; minClicks?: number; target?: number } = {},
+): { bid: number | null; reason: string; escalate?: true; wouldBe?: number } {
   if (inCooldown(last, nowMs, opts.hours ?? BID_COOLDOWN_HOURS)) {
     return { bid: null, reason: `held: last change was ${(daysSince(last!.changedAt, nowMs) * 24).toFixed(1)}h ago` };
   }
   const v = searchStep(currentBid, since, last, opts);
-  return { bid: v.bid, reason: v.reason };
+  return { bid: v.bid, reason: v.reason, escalate: v.bid === null ? v.escalate : undefined, wouldBe: v.bid === null ? v.wouldBe : undefined };
 }

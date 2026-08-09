@@ -6,7 +6,7 @@ import {
   isProtected, KILL_SPEND,
   nextLadderBid, ladderVerdict, REINTRO_START_BID, BID_LADDER_MAX, BID_LADDER_STEP,
   isPermanentlyDead, deadKey, shouldRetirePermanently, isNextMonth, type MonthPerf,
-  inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, TARGET_ROAS,
+  inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
 } from "./ad-rules";
@@ -564,14 +564,16 @@ describe("searchStep — keep it spending, and above 2x", () => {
     expect(searchStep(BID_CAP, ev(10, 50)).bid).toBeNull();
   });
 
-  it("settles at the highest bid that still returns 2x, and stays there", () => {
+  it("settles at the highest bid that still returns 2x, when the ceiling allows it", () => {
     // Realistic shape: a higher bid buys pricier clicks, so ROAS falls as the bid rises.
     // 4.0x at $0.00 down through 2.0x at $1.00. The search should find and hold that edge.
+    // The ceiling is lifted here on purpose: this test is about the ECONOMICS converging, and the
+    // $0.85 stop is a separate, human rule tested directly below.
     const trueRoas = (bid: number) => Math.max(0, 4.0 - 2 * bid);
     let bid = 0.30;
     const visited: number[] = [];
     for (let run = 0; run < 80; run++) {
-      const v = searchStep(bid, ev(10, 10 * trueRoas(bid)));
+      const v = searchStep(bid, ev(10, 10 * trueRoas(bid)), null, { ceiling: BID_CAP });
       if (v.bid === null) break;
       bid = v.bid;
       if (run > 60) visited.push(bid);                          // where it ends up living
@@ -581,6 +583,72 @@ describe("searchStep — keep it spending, and above 2x", () => {
     // A flat dime means it straddles the 2x line one dime either side, and stays there.
     for (const b of visited) expect(b).toBeGreaterThan(0.85);
     for (const b of visited) expect(b).toBeLessThan(1.25);
+  });
+});
+
+// William 2026-08-08: "after .85 we communicate to confirm you dont go over $.85 per keyword".
+// Before this the ceiling bound only the ladder, so a profitable word compounded past it unattended:
+// `retractable phone holder belt clip` went $0.82 -> $1.94 in three days on ONE conversion.
+describe("the $0.85 ceiling — the engine asks instead of buying", () => {
+  const ev = (spend: number, sales: number, clicks = 10, orders = 1): SinceChange => ({ spend, sales, clicks, orders });
+  const rich = ev(10, 100);            // 10x, as profitable as a keyword ever looks
+
+  it("climbs onto the ceiling but never through it", () => {
+    const v = searchStep(0.80, rich);
+    expect(v.bid).toBe(BID_CONFIRM_CEILING);   // $0.80 + $0.10 lands ON $0.85, not at $0.90
+  });
+
+  it("stops and escalates once it is sitting at $0.85", () => {
+    const v = searchStep(BID_CONFIRM_CEILING, rich);
+    expect(v.bid).toBeNull();
+    if (v.bid === null) {
+      expect(v.escalate).toBe(true);
+      expect(v.wouldBe).toBeCloseTo(0.95, 2);   // what it WANTED, so William can judge the ask
+    }
+  });
+
+  it("escalates rather than raising a keyword already above the line", () => {
+    // The live account has 100 of these today, several at $2.50.
+    const v = searchStep(1.94, rich);
+    expect(v.bid).toBeNull();
+    if (v.bid === null) expect(v.escalate).toBe(true);
+  });
+
+  it("still CUTS a keyword above the line without asking — lowering risk needs no permission", () => {
+    const v = searchStep(1.94, ev(10, 5));       // 0.5x, badly underwater
+    expect(v.bid).toBe(1.84);
+    if (v.bid !== null) expect(v.direction).toBe("down");
+  });
+
+  it("never escalates on the way down", () => {
+    const v = searchStep(0.85, ev(10, 5));
+    expect(v.bid).toBe(0.75);
+  });
+
+  it("carries the escalation through bidWithMemory, which is what the engine calls", () => {
+    const r = bidWithMemory(BID_CONFIRM_CEILING, { spend: 10, sales: 100, orders: 5 }, null,
+      { spend: 10, sales: 100, orders: 5, clicks: 20 });
+    expect(r.bid).toBeNull();
+    expect(r.escalate).toBe(true);
+  });
+
+  it("does not mistake a cooldown hold for an escalation", () => {
+    const justMoved: BidChange = { changedAt: new Date(Date.now() - 3600e3).toISOString(), fromBid: 0.75, toBid: 0.85, roasBefore: 3 };
+    const r = bidWithMemory(BID_CONFIRM_CEILING, { spend: 10, sales: 100, orders: 5 }, justMoved,
+      { spend: 10, sales: 100, orders: 5, clicks: 20 });
+    expect(r.bid).toBeNull();
+    expect(r.escalate).toBeUndefined();
+  });
+
+  it("a floored keyword still has a clear run to the ceiling", () => {
+    let bid = BID_FLOOR, runs = 0;
+    for (; runs < 25; runs++) {
+      const v = searchStep(bid, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+      if (v.bid === null) break;
+      bid = v.bid;
+    }
+    expect(bid).toBe(BID_CONFIRM_CEILING);   // $0.10 -> $0.85, then it asks
+    expect(runs).toBeLessThanOrEqual(8);
   });
 });
 

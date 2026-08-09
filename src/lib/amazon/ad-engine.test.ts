@@ -179,7 +179,7 @@ describe("harvestWindows — chunked <=31d trailing windows", () => {
 });
 
 
-import { reactivationCandidates, REACT_WINDOW_DAYS } from "./ad-engine";
+import { reactivationCandidates, REACT_WINDOW_DAYS, inMonthRevivals, REVIVE_MIN_ROAS, killPlan } from "./ad-engine";
 
 // Monthly reactivation (ad-engine-harvest-rule.md step 4, William 2026-06-26): re-enable a PAUSED
 // keyword whose trailing 65d recovered to the same winner bar as harvest (cost >= $4 AND ACOS <= 50%).
@@ -373,5 +373,134 @@ describe("only BROAD discoveries are harvested (William 2026-08-08)", () => {
       row({ searchTerm: "shared term", cost: 90, sales14d: 0, purchases14d: 0, matchType: "PHRASE" }),
     ], new Set());
     expect(adds).toHaveLength(2);
+  });
+});
+
+
+// William 2026-08-08: "if a word is turned off and the 14 day attribution kicks in for sales dont
+// turn it back on that month until that word reaches a 2.0 roas" / "turn it back on the moment the
+// attribtion credits it above a 2.0".
+import { shouldKill } from "./ad-rules";
+
+describe("inMonthRevivals — the $4 kill undone once attribution lands", () => {
+  const MONTH = "2026-08";
+  const led = (id = "K1", word = "phone tether", match = "PHRASE", month = MONTH) =>
+    [{ keywordId: id, word, matchType: match, month }];
+  const live = (state = "PAUSED", id = "K1") => new Map([[id, { state }]]);
+  const mtd = (spend: number, sales: number, orders = 1, id = "K1") =>
+    new Map([[id, { spend, sales, orders }]]);
+
+  it("brings back the real case: killed at 0 orders, then credited above 2x", () => {
+    const out = inMonthRevivals(led(), live(), mtd(4.50, 9.49), MONTH);
+    expect(out).toHaveLength(1);
+    expect(out[0].roas).toBeCloseTo(2.11, 2);
+    expect(out[0].word).toBe("phone tether");
+  });
+
+  it("leaves it off at the ACTUAL numbers both August kills are sitting on", () => {
+    // 1.26x and 1.21x on 2026-08-08. Converting is not the bar, returning 2x is.
+    expect(inMonthRevivals(led(), live(), mtd(7.55, 9.49), MONTH)).toHaveLength(0);
+    expect(inMonthRevivals(led(), live(), mtd(13.61, 16.49), MONTH)).toHaveLength(0);
+  });
+
+  it("holds the line exactly at 2.0", () => {
+    expect(inMonthRevivals(led(), live(), mtd(10, 19.99), MONTH)).toHaveLength(0);
+    expect(inMonthRevivals(led(), live(), mtd(10, 20), MONTH)).toHaveLength(1);
+  });
+
+  it("cannot flap: nothing sits in both the kill window and the revival window", () => {
+    // shouldKill pauses below the 52% ACOS pivot (1.923x); revival needs 2.0x. The band between
+    // them is dead space on purpose, so one set of numbers can never do both.
+    for (const roas of [1.93, 1.95, 1.99]) {
+      expect(shouldKill({ spend: 10, sales: 10 * roas, orders: 1 })).toBe(false);
+      expect(inMonthRevivals(led(), live(), mtd(10, 10 * roas), MONTH)).toHaveLength(0);
+    }
+  });
+
+  it("ignores a kill from a previous month — that is the monthly reset's job", () => {
+    expect(inMonthRevivals(led("K1", "phone tether", "PHRASE", "2026-07"), live(), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("never overwrites a keyword William turned back on himself", () => {
+    expect(inMonthRevivals(led(), live("ENABLED"), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("skips a keyword that is gone from the account entirely", () => {
+    expect(inMonthRevivals(led(), new Map(), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("will not revive on sales with no order behind them", () => {
+    expect(inMonthRevivals(led(), live(), mtd(4, 20, 0), MONTH)).toHaveLength(0);
+  });
+
+  it("will not revive a keyword with no month-to-date row at all", () => {
+    expect(inMonthRevivals(led(), live(), new Map(), MONTH)).toHaveLength(0);
+  });
+
+  it("returns one pick per keyword even if the ledger holds duplicates", () => {
+    const dupes = [...led(), ...led()];
+    expect(inMonthRevivals(dupes, live(), mtd(4, 20), MONTH)).toHaveLength(1);
+  });
+
+  it("pins the bar at 2.0 so it cannot quietly drift to break-even", () => {
+    expect(REVIVE_MIN_ROAS).toBe(2.0);
+  });
+});
+
+
+// William 2026-08-08: "should not be pausing all key words when only 1 spends". Sponsored Brands and
+// Sponsored Display already had this pinned; Sponsored Products did not, so the guarantee rested on
+// reading a loop. The real shape on the account: 541 groups hold more than one copy of the same
+// (text, match type), and 281 of them are legitimately in mixed states.
+describe("killPlan — the $4 kill judges a keyword id, never a word", () => {
+  const kw = (id: string, text: string, match: string, state = "ENABLED", bid = 0.5) =>
+    [id, { keywordText: text, matchType: match, state, bid }] as const;
+  const live = (...ks: ReturnType<typeof kw>[]) => new Map(ks.map((k) => [k[0], k[1]]));
+  const row = (id: string, cost: number, sales = 0, orders = 0) =>
+    ({ keywordId: id, cost, sales14d: sales, purchases14d: orders });
+
+  it("pauses only the copy that spent, leaving its siblings running", () => {
+    // The real 2026-08-08 case: three copies of one text, one of them over $4 with nothing to show.
+    const byId = live(
+      kw("A", "hand strap universal phone lanyard clip to belt", "BROAD"),
+      kw("B", "hand strap universal phone lanyard clip to belt", "EXACT"),
+      kw("C", "hand strap universal phone lanyard clip to belt", "PHRASE"),
+    );
+    const out = killPlan([row("A", 6.95), row("B", 0.40), row("C", 0.10)], byId);
+    expect(out).toHaveLength(1);
+    expect(out[0].keywordId).toBe("A");
+  });
+
+  it("pauses two copies when two copies each spent $4 on their own", () => {
+    // Independence cuts both ways: this is not "one per word", it is "each on its own evidence".
+    const byId = live(kw("A", "phone tether", "PHRASE"), kw("B", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 5), row("B", 6)], byId)).toHaveLength(2);
+  });
+
+  it("does not let a sibling's spend push a copy over the $4 line", () => {
+    // $3 + $3 = $6 across two copies. Neither copy reaches $4, so neither dies.
+    const byId = live(kw("A", "phone tether", "PHRASE"), kw("B", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 3), row("B", 3)], byId)).toHaveLength(0);
+  });
+
+  it("ignores a copy that is already paused", () => {
+    const byId = live(kw("A", "phone tether", "PHRASE", "PAUSED"));
+    expect(killPlan([row("A", 99)], byId)).toHaveLength(0);
+  });
+
+  it("ignores a report row for a keyword that is no longer on the account", () => {
+    expect(killPlan([row("GONE", 99)], live())).toHaveLength(0);
+  });
+
+  it("spares a copy that spent $4 but is converting well", () => {
+    // $4 alone is not the rule. $4 AND failing the 52% ACOS pivot is.
+    const byId = live(kw("A", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 5, 20, 2)], byId)).toHaveLength(0);
+    expect(killPlan([row("A", 5, 6, 1)], byId)).toHaveLength(1);
+  });
+
+  it("returns one verdict per id even if the report repeats a row", () => {
+    const byId = live(kw("A", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 9), row("A", 9)], byId)).toHaveLength(1);
   });
 });
