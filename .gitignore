@@ -60,3 +60,8 @@ scripts/pw-*.png
 
 # Seller Central status reads — account PII, never commit
 .sc-status/
+
+# Creative sources pulled from Drive (203MB of originals). Drive is the master copy;
+# these are a working cache and must never be committed.
+/assets/source/
+/build/creative/

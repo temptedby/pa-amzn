@@ -1,0 +1,22 @@
+{
+  "asset_type": "image",
+  "surface": "amazon-secondary",
+  "product": "BOTH",
+  "slot": 3,
+  "template_id": "weight-class-split",
+  "size": "2000x2000",
+  "background": "white",
+  "product_visible": true,
+  "shows_phone_hauled_up": false,
+  "headline": "Which one fits your phone?",
+  "body": [
+    "BLACK is for phones 171 g (6.0 oz) and under, about the weight of an iPhone 16.",
+    "PRO is for everything heavier.",
+    "Not sure? Your phone's weight is on the maker's spec page."
+  ],
+  "alt_text": "Comparison chart showing Phone Assured Black for phones 171 grams and under and Phone Assured Pro for heavier phones, with example models listed under each.",
+  "source_assets": [
+    { "id": "packof1-black", "name": "Final Black 1 Clip Images/Packof1.jpg", "provenance": "own-photo" },
+    { "id": "packof1-pro", "name": "Megan Updated Images/1 Pack Pro.jpg", "provenance": "own-photo" }
+  ]
+}

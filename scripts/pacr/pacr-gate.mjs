@@ -14,7 +14,7 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkIntent, canonical } from "../../src/lib/creative/pacr-rules.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -25,6 +25,14 @@ export const tokenPath = (intent) =>
 
 const loadLog = () => { try { return JSON.parse(readFileSync(LOG, "utf8")); } catch { return []; } };
 
+// Only run the CLI when this file IS the program. Without this guard, the renderer guard's
+// `import { tokenPath }` executed the whole CLI and exited 64 on a usage error, which is exactly
+// how the first real render attempt failed.
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (!isMain) { /* imported as a library: export only */ }
+else main();
+
+function main() {
 const args = process.argv.slice(2);
 const flag = (n) => { const i = args.indexOf(n); return i >= 0 ? args[i + 1] : null; };
 const intentPath = flag("--intent") || flag("--hash");
@@ -70,4 +78,5 @@ if (args.includes("--commit")) {
   });
   writeFileSync(LOG, JSON.stringify(log, null, 1));
   console.log(`PACR GATE: logged template "${intent.template_id}" on ${intent.surface}`);
+}
 }
