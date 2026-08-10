@@ -57,7 +57,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const iso = (d: Date) => d.toISOString().slice(0, 10);
 
 interface Kw { keywordId: string; keywordText: string; matchType: string; state: string; bid: number; campaignId: string; adGroupId: string }
-interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
+interface Row { keywordId?: string; keyword?: string; searchTerm?: string; matchType?: string; clicks?: number; impressions?: number; cost?: number; sales14d?: number; purchases14d?: number; campaignId?: string | number; adGroupId?: string | number }
 export interface SearchTermRow {
   searchTerm?: string; campaignId?: string | number; adGroupId?: string | number;
   cost?: number; sales14d?: number; purchases14d?: number;
@@ -108,7 +108,7 @@ async function ads(cfg: AdsConfig, token: string, path: string, method: string, 
 // Deferred report accessor. Wraps ads-reports.getReport so an engine pass NEVER blocks on Amazon's
 // queue (measured ~9 min on this account against the old 140s inline budget). Returns [] plus a
 // human-readable note when the data is not ready yet — that is a normal outcome, not an error.
-const SP_COLS = ["keywordId", "keyword", "clicks", "cost", "sales14d", "purchases14d"];
+const SP_COLS = ["keywordId", "keyword", "clicks", "impressions", "cost", "sales14d", "purchases14d"];
 // `keyword` and `matchType` added 2026-08-08: without them a search term cannot be attributed to
 // the keyword that caught it, so "terms that hit on broad match" was not expressible. Probed live
 // first — Amazon accepts both on spSearchTerm and returns them populated on every row.
@@ -434,8 +434,42 @@ async function ensureBidMemory(): Promise<void> {
   await db().execute(`CREATE TABLE IF NOT EXISTS kw_perf_snapshot (
     taken_at TEXT NOT NULL, keyword_id TEXT NOT NULL, month TEXT NOT NULL,
     mtd_spend REAL DEFAULT 0, mtd_sales REAL DEFAULT 0, mtd_orders INTEGER DEFAULT 0, mtd_clicks INTEGER DEFAULT 0,
+    mtd_impressions INTEGER DEFAULT 0,
     PRIMARY KEY (taken_at, keyword_id))`);
+  // Added 2026-08-10 with the direction reversal. Existing databases predate the column, and a
+  // missing one would make every keyword read as zero impressions and get RAISED — the opposite of
+  // the intended behaviour — so it is added explicitly and the failure is swallowed only when the
+  // column is already there.
+  try { await db().execute(`ALTER TABLE kw_perf_snapshot ADD COLUMN mtd_impressions INTEGER DEFAULT 0`); }
+  catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   await db().execute(`CREATE INDEX IF NOT EXISTS kw_perf_snapshot_kw ON kw_perf_snapshot (keyword_id, taken_at DESC)`);
+  // THE FOUND FLOOR (William 2026-08-10). When a cut silences a keyword, the engine puts the bid
+  // back and writes the restored bid here. From then on the search will not cut at or below it.
+  // Without this the word would be re-cut every run and flap two cents forever, and with every
+  // path in the new rule pointing DOWN this table is the only thing that stops a working keyword
+  // walking to the $0.10 floor where 1,750 others are already stuck.
+  await db().execute(`CREATE TABLE IF NOT EXISTS kw_bid_floor (
+    keyword_id TEXT NOT NULL, month TEXT NOT NULL, bid REAL NOT NULL, found_at TEXT NOT NULL,
+    PRIMARY KEY (keyword_id, month))`);
+}
+
+/** The proven floors for this month, keyed by keyword id. */
+async function foundFloors(month: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    const r = await db().execute({ sql: "SELECT keyword_id, bid FROM kw_bid_floor WHERE month = ?", args: [month] });
+    for (const row of r.rows) out.set(String(row.keyword_id), Number(row.bid));
+  } catch { /* table is created above; an empty map just means no floors are known yet */ }
+  return out;
+}
+
+/** Remember the bid a keyword was restored to. Keeps the HIGHEST floor found in the month. */
+async function recordFloor(keywordId: string, month: string, bid: number): Promise<void> {
+  await db().execute({
+    sql: `INSERT INTO kw_bid_floor (keyword_id, month, bid, found_at) VALUES (?,?,?,?)
+          ON CONFLICT(keyword_id, month) DO UPDATE SET bid = max(bid, excluded.bid), found_at = excluded.found_at`,
+    args: [keywordId, month, bid, new Date().toISOString()],
+  });
 }
 
 /**
@@ -514,15 +548,18 @@ async function perfSinceChange(
     if (ch.changedAt.slice(0, 7) !== month.slice(0, 7)) { out.set(kwId, now); continue; }
     try {
       const r = await db().execute({
-        sql: `SELECT mtd_spend s, mtd_sales sa, mtd_orders o, mtd_clicks c FROM kw_perf_snapshot
+        sql: `SELECT mtd_spend s, mtd_sales sa, mtd_orders o, mtd_clicks c, mtd_impressions i FROM kw_perf_snapshot
                WHERE keyword_id = ? AND month = ? AND taken_at <= ? ORDER BY taken_at DESC LIMIT 1`,
         args: [kwId, month, ch.changedAt],
       });
       const b = r.rows[0];
-      const base = b ? { spend: Number(b.s ?? 0), sales: Number(b.sa ?? 0), orders: Number(b.o ?? 0), clicks: Number(b.c ?? 0) } : { spend: 0, sales: 0, orders: 0, clicks: 0 };
+      const base = b
+        ? { spend: Number(b.s ?? 0), sales: Number(b.sa ?? 0), orders: Number(b.o ?? 0), clicks: Number(b.c ?? 0), impressions: Number(b.i ?? 0) }
+        : { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
       out.set(kwId, {
         spend: Math.max(0, now.spend - base.spend), sales: Math.max(0, now.sales - base.sales),
         orders: Math.max(0, now.orders - base.orders), clicks: Math.max(0, now.clicks - base.clicks),
+        impressions: Math.max(0, (now.impressions ?? 0) - base.impressions),
       });
     } catch { out.set(kwId, now); }
   }
@@ -575,6 +612,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     if (r.keywordId == null) continue;
     nowMtd.set(String(r.keywordId), {
       spend: r.cost ?? 0, sales: r.sales14d ?? 0, orders: r.purchases14d ?? 0, clicks: r.clicks ?? 0,
+      impressions: r.impressions ?? 0,
     });
   }
   const lastChange = await lastBidChanges();
@@ -593,6 +631,10 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     out.killed.push({ text: p.text, matchType: p.matchType, spend: p.spend, keywordId: p.keywordId });
   }
   const killIds = new Set(out.killed.map((k) => k.keywordId));
+  // The bids this month's search has already proven a keyword needs. Read once; the loop below
+  // never cuts at or below one of these. See ensureBidMemory() for why this table exists.
+  const floors = await foundFloors(month);
+  const restoredFloors: { keywordId: string; bid: number }[] = [];
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
@@ -601,7 +643,8 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // Bid decisions go through memory: cooldown first, then roll back a raise that hurt, then
       // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
       const id = String(k.keywordId);
-      const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs);
+      const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs,
+        { floorFound: floors.get(id) ?? null });
       if (m.bid === null) {
         if (m.reason.startsWith("held:")) heldByCooldown++;
         // The $0.85 line. The engine has run out of authority here, so it surfaces the word rather
@@ -626,6 +669,9 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // compare against. Using month-to-date here would blur the very signal the climb depends on.
       const ev = since.get(id);
       const roasBefore = ev && ev.spend > 0 ? ev.sales / ev.spend : null;
+      // An UNDO: the previous cut silenced this word, so this bid is the cheapest one it is known
+      // to work at. Recorded only after Amazon accepts the write, below.
+      if (m.restored) restoredFloors.push({ keywordId: id, bid: m.bid });
       bidOps.push({ keywordId: id, bid: m.bid });
       out.bids.push({ text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100, reason: m.reason, keywordId: id, roasBefore });
     }
@@ -729,6 +775,15 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
               args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS"],
             });
           } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
+          // A restored bid becomes this word's proven floor, but ONLY once Amazon has accepted the
+          // restore. Writing it on intent would floor a keyword at a bid it never actually got back
+          // to, which is the same "applied=1 for a write that failed" fault that logged 40 phantom
+          // keyword additions in August.
+          const rf = restoredFloors.find((f) => f.keywordId === b.keywordId);
+          if (rf) {
+            try { await recordFloor(rf.keywordId, month, rf.bid); }
+            catch (e) { out.errors.push("bid floor: " + (e instanceof Error ? e.message : String(e))); }
+          }
         }
       }
       if (addOps.length) {
@@ -748,9 +803,9 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       const at = new Date().toISOString();
       for (const [kwId, p] of nowMtd) {
         await db().execute({
-          sql: `INSERT OR REPLACE INTO kw_perf_snapshot (taken_at,keyword_id,month,mtd_spend,mtd_sales,mtd_orders,mtd_clicks)
-                VALUES (?,?,?,?,?,?,?)`,
-          args: [at, kwId, sd, p.spend, p.sales, p.orders, p.clicks],
+          sql: `INSERT OR REPLACE INTO kw_perf_snapshot (taken_at,keyword_id,month,mtd_spend,mtd_sales,mtd_orders,mtd_clicks,mtd_impressions)
+                VALUES (?,?,?,?,?,?,?,?)`,
+          args: [at, kwId, sd, p.spend, p.sales, p.orders, p.clicks, p.impressions ?? 0],
         });
       }
       // 90 days of snapshots is far more than the 7-day evaluation window needs.

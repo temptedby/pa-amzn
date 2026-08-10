@@ -504,44 +504,71 @@ describe("shouldRetirePermanently — 3 consecutive dead months cuts a former wi
 //   retractable phone holder belt clip   $0.82 -> $1.45 in 4 days
 //   phone tethered                       0.49 -> 0.94 -> 0.35 in 6 days
 // ---------------------------------------------------------------------------
-describe("searchStep — keep it spending, and above 2x", () => {
-  // William 2026-08-07: "just have to try to keep ads spending and roas above 2x that's the goal."
-  const ev = (spend: number, sales: number, clicks = 10, orders = 1): SinceChange => ({ spend, sales, clicks, orders });
+describe("searchStep — find the cheapest bid that still works (William 2026-08-10)", () => {
+  // "If the bid isn't getting impressions or clicks, then you have to raise it. If the bid is
+  //  getting clicks and hopefully conversions, then you lower the bid and try to find that magical
+  //  bid price where you can still get conversions and clicks without completely turning off the
+  //  keyword."
+  //
+  // This REVERSES the 2026-08-07 rule, which raised anything at 2x or better. Both rules are
+  // William's; they optimise different things. These tests pin the new one.
+  const ev = (spend: number, sales: number, clicks = 10, orders = 1, impressions = 500): SinceChange =>
+    ({ spend, sales, clicks, orders, impressions });
+  const silent: SinceChange = { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
 
-  it("raises a profitable word by a flat ten cents — 3x means buy more of it", () => {
+  it("SHAVES a profitable word by two cents — 3x means hunt for a cheaper bid, not a bigger one", () => {
     const v = searchStep(0.50, ev(10, 30));
-    expect(v.bid).toBe(0.60);
-    if (v.bid !== null) expect(v.direction).toBe("up");
+    expect(v.bid).toBe(0.48);
+    if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
-  it("lowers a word under 2x — it is paying too much per sale", () => {
+  it("cuts a word under 2x by the full ten cents — it is paying too much per sale", () => {
     const v = searchStep(0.50, ev(10, 15));                    // 1.5x
     expect(v.bid).toBe(0.40);
     if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
-  it("treats exactly 2x as good enough to keep buying", () => {
+  it("treats exactly 2x as working, so it shaves gently rather than cutting hard", () => {
     const v = searchStep(0.50, ev(10, 20));
-    if (v.bid !== null) expect(v.direction).toBe("up");
+    expect(v.bid).toBe(0.48);
   });
 
-  it("lowers a hair under 2x", () => {
+  it("a hair under 2x gets the fast cut, not the gentle one", () => {
     const v = searchStep(0.50, ev(10, 19.9));
-    if (v.bid !== null) expect(v.direction).toBe("down");
+    expect(v.bid).toBe(0.40);
   });
 
-  // "you have to spend to max roas ... so .10 is not ok"
-  it("RAISES a keyword that is not spending, instead of waiting for evidence it cannot produce", () => {
-    const v = searchStep(0.10, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+  // The asymmetry is the point (William: "rather be cautious to test a profitable keyword slowly
+  // then move too quick and turn off the spending and lose market share").
+  it("never cuts a working word faster than a failing one", () => {
+    const working = searchStep(1.00, ev(10, 30));              // 3x
+    const failing = searchStep(1.00, ev(10, 5));               // 0.5x
+    expect(working.bid).toBe(0.98);
+    expect(failing.bid).toBe(0.90);
+    if (working.bid !== null && failing.bid !== null) {
+      expect(1.00 - working.bid).toBeLessThan(1.00 - failing.bid);
+    }
+  });
+
+  it("RAISES a keyword with no impressions and no clicks — it is not in the auction at all", () => {
+    const v = searchStep(0.10, silent);
     expect(v.bid).toBe(0.20);
     if (v.bid !== null) expect(v.direction).toBe("up");
   });
 
+  // The old test read `spend <= 0` as "not spending" and raised. That is wrong when the word IS
+  // being shown: a bid buys the impression, the listing buys the click, and raising the bid to fix
+  // a listing problem just pays more for the same silence.
+  it("HOLDS a keyword that is shown thousands of times and never clicked", () => {
+    const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 4000 });
+    expect(v.bid).toBeNull();
+    expect(v.reason).toMatch(/listing is losing the click/);
+  });
+
   it("clears the $0.59 market CPC in five runs, not nineteen", () => {
-    // A percentage step is worst where it matters most: 10% of $0.10 is one cent.
     let bid = 0.10, runs = 0;
     for (; runs < 25; runs++) {
-      const v = searchStep(bid, { spend: 0, sales: 0, orders: 0, clicks: 0 });
+      const v = searchStep(bid, silent);
       if (v.bid === null) break;
       bid = v.bid;
       if (bid > 0.59) break;
@@ -550,56 +577,85 @@ describe("searchStep — keep it spending, and above 2x", () => {
     expect(runs).toBeLessThanOrEqual(5);
   });
 
-  it("does NOT park at the floor just because a tiny bid shows a beautiful ratio", () => {
-    const v = searchStep(0.10, ev(1, 50));                      // 50x at $0.10
-    if (v.bid !== null) expect(v.direction).toBe("up");
+  it("cuts cautiously when there are too few clicks to trust the ratio", () => {
+    // 2 clicks cannot tell 3x from 0.3x, so it takes the cheap-mistake step.
+    expect(searchStep(0.50, ev(3, 0, 2)).bid).toBe(0.48);
   });
 
-  it("will not judge on 2 clicks that did spend", () => {
-    expect(searchStep(0.50, ev(3, 0, 2)).bid).toBeNull();
+  it("respects the floor, and the cap no longer binds because nothing profitable climbs", () => {
+    expect(searchStep(BID_FLOOR, ev(10, 5)).bid).toBeNull();    // already at $0.10, cannot go lower
+    expect(searchStep(BID_CAP, ev(10, 50)).bid).toBe(2.48);     // 5x at the cap: shaved, not held
   });
 
-  it("respects the floor and the cap", () => {
-    expect(searchStep(BID_FLOOR, ev(10, 5)).bid).toBeNull();
-    expect(searchStep(BID_CAP, ev(10, 50)).bid).toBeNull();
+  // THE UNDO. This is the only thing standing between a working keyword and the $0.10 floor, so it
+  // gets the sharpest tests in the file.
+  describe("the undo — putting a bid back when the cut silenced the word", () => {
+    const cut: BidChange = { changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3 };
+
+    it("restores the previous bid when a cut took the clicks to zero", () => {
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 300 }, cut);
+      expect(v.bid).toBe(0.50);
+      if (v.bid !== null) {
+        expect(v.direction).toBe("up");
+        expect(v.restored).toBe(true);
+      }
+    });
+
+    it("does NOT undo after a RAISE that produced no clicks — that word needs to keep climbing", () => {
+      const raise: BidChange = { changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.20, toBid: 0.30, roasBefore: null };
+      const v = searchStep(0.30, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, raise);
+      expect(v.bid).toBe(0.40);
+      if (v.bid !== null) expect(v.direction).toBe("up");
+    });
+
+    it("holds at a bid already proven to be the word's floor, instead of cutting through it again", () => {
+      const v = searchStep(0.50, ev(10, 30), null, { floorFound: 0.50 });
+      expect(v.bid).toBeNull();
+      expect(v.reason).toMatch(/known to still work at/);
+    });
+
+    it("cannot flap: cut, undo, then hold once the floor is known", () => {
+      // Modelled on the real failure this prevents — a word oscillating two cents forever.
+      const first = searchStep(0.50, ev(10, 30));                              // shave to 0.48
+      expect(first.bid).toBe(0.48);
+      const undo = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 300 }, cut);
+      expect(undo.bid).toBe(0.50);                                             // back to 0.50
+      const held = searchStep(0.50, ev(10, 30), null, { floorFound: 0.50 });   // and it stays
+      expect(held.bid).toBeNull();
+    });
   });
 
-  it("settles at the highest bid that still returns 2x, when the ceiling allows it", () => {
-    // Realistic shape: a higher bid buys pricier clicks, so ROAS falls as the bid rises.
-    // 4.0x at $0.00 down through 2.0x at $1.00. The search should find and hold that edge.
-    // The ceiling is lifted here on purpose: this test is about the ECONOMICS converging, and the
-    // $0.85 stop is a separate, human rule tested directly below.
-    const trueRoas = (bid: number) => Math.max(0, 4.0 - 2 * bid);
-    let bid = 0.30;
-    const visited: number[] = [];
-    for (let run = 0; run < 80; run++) {
-      const v = searchStep(bid, ev(10, 10 * trueRoas(bid)), null, { ceiling: BID_CAP });
+  // A property worth stating out loud: with every path pointing down, the ONLY thing that stops a
+  // working word walking to the $0.10 floor is the undo. 1,750 keywords are stuck at that floor
+  // today, so this is not a theoretical worry.
+  it("walks a working word down toward the floor when nothing ever interrupts it", () => {
+    let bid = 0.85;
+    for (let run = 0; run < 200; run++) {
+      const v = searchStep(bid, ev(10, 30));
       if (v.bid === null) break;
       bid = v.bid;
-      if (run > 60) visited.push(bid);                          // where it ends up living
     }
-    expect(bid).toBeGreaterThan(0.85);                          // did not stay at $0.30
-    expect(bid).toBeLessThan(1.25);                             // did not run to the $2.50 cap
-    // A flat dime means it straddles the 2x line one dime either side, and stays there.
-    for (const b of visited) expect(b).toBeGreaterThan(0.85);
-    for (const b of visited) expect(b).toBeLessThan(1.25);
+    expect(bid).toBe(BID_FLOOR);
   });
 });
 
 // William 2026-08-08: "after .85 we communicate to confirm you dont go over $.85 per keyword".
-// Before this the ceiling bound only the ladder, so a profitable word compounded past it unattended:
-// `retractable phone holder belt clip` went $0.82 -> $1.94 in three days on ONE conversion.
+// NOTE 2026-08-10: after the direction reversal, the ONLY path that can reach this ceiling is a
+// word with no impressions and no clicks climbing the ladder. Profitable words never ask to go up
+// any more, so the escalation fires far less often than it did. These tests were rewritten to use
+// silent evidence for exactly that reason.
 describe("the $0.85 ceiling — the engine asks instead of buying", () => {
-  const ev = (spend: number, sales: number, clicks = 10, orders = 1): SinceChange => ({ spend, sales, clicks, orders });
-  const rich = ev(10, 100);            // 10x, as profitable as a keyword ever looks
+  const ev = (spend: number, sales: number, clicks = 10, orders = 1, impressions = 500): SinceChange =>
+    ({ spend, sales, clicks, orders, impressions });
+  const silent: SinceChange = { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 };
 
   it("climbs onto the ceiling but never through it", () => {
-    const v = searchStep(0.80, rich);
+    const v = searchStep(0.80, silent);
     expect(v.bid).toBe(BID_CONFIRM_CEILING);   // $0.80 + $0.10 lands ON $0.85, not at $0.90
   });
 
   it("stops and escalates once it is sitting at $0.85", () => {
-    const v = searchStep(BID_CONFIRM_CEILING, rich);
+    const v = searchStep(BID_CONFIRM_CEILING, silent);
     expect(v.bid).toBeNull();
     if (v.bid === null) {
       expect(v.escalate).toBe(true);
@@ -607,11 +663,17 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
     }
   });
 
-  it("escalates rather than raising a keyword already above the line", () => {
-    // The live account has 100 of these today, several at $2.50.
-    const v = searchStep(1.94, rich);
+  it("escalates rather than raising a silent keyword already above the line", () => {
+    // The live account has 109 enabled keywords above $0.85 today, several at $2.50.
+    const v = searchStep(1.94, silent);
     expect(v.bid).toBeNull();
     if (v.bid === null) expect(v.escalate).toBe(true);
+  });
+
+  it("a PROFITABLE keyword above the line is cut, not escalated — the new rule never asks to raise it", () => {
+    const v = searchStep(1.94, ev(10, 100));     // 10x, as good as a keyword ever looks
+    expect(v.bid).toBe(1.92);
+    if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
   it("still CUTS a keyword above the line without asking — lowering risk needs no permission", () => {
@@ -626,8 +688,8 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
   });
 
   it("carries the escalation through bidWithMemory, which is what the engine calls", () => {
-    const r = bidWithMemory(BID_CONFIRM_CEILING, { spend: 10, sales: 100, orders: 5 }, null,
-      { spend: 10, sales: 100, orders: 5, clicks: 20 });
+    const r = bidWithMemory(BID_CONFIRM_CEILING, { spend: 0, sales: 0, orders: 0 }, null,
+      { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 });
     expect(r.bid).toBeNull();
     expect(r.escalate).toBe(true);
   });

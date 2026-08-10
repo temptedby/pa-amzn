@@ -592,7 +592,23 @@ export function isNextMonth(a: string, b: string): boolean {
 export const BID_COOLDOWN_HOURS = 6;
 /** How much a bid moves per step: a flat ten cents (William: "i asked raising by .10 not 10%"). */
 export const BID_SEARCH_STEP = 0.10;
-/** Clicks needed before a direction is trusted. Below this the reading is noise, so the bid holds. */
+
+// THE GENTLE CUT, for a keyword that is ALREADY profitable. William 2026-08-10:
+// "keyword returning 3x you lower bid slowly very slow maybe $.02 to $.05 every 6 hours to see if
+// you can improve spend and impressions and conversions without sacrificing roi".
+//
+// Two cents, the SLOW end of the range he gave, on his correction: "you dont know what moves too
+// slowly or fast we are testing and rather be cautious to test a profitable keyword slowly then
+// move too quick and turn off the spending and lose market share."
+//
+// The risk is asymmetric and that is the whole argument. Cutting a working word too fast drops it
+// out of auctions it was winning, and the traffic does not return just because the bid does. That
+// is market share, and it is expensive to re-buy. Cutting too slow only costs time. When the
+// evidence cannot tell the two apart, the cheaper mistake is the slow one.
+export const BID_SHAVE_STEP = 0.02;
+
+/** Clicks needed before a ROAS reading is trusted. Below this the ratio is noise: the bid still
+ *  moves, but always on the cautious step, never the fast one. */
 export const SEARCH_MIN_CLICKS = 3;
 // The line the whole search steers by (William 2026-08-07: "roas above 2x that's the goal").
 // Break-even is 1.92x on real fees ($9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA), so 2x is
@@ -607,8 +623,10 @@ export interface BidChange {
   roasBefore: number | null;
 }
 
-/** Performance accumulated SINCE a bid change — the evidence that change produced. */
-export interface SinceChange { spend: number; sales: number; orders: number; clicks: number }
+/** Performance accumulated SINCE a bid change — the evidence that change produced.
+ *  `impressions` is what separates "the bid is too low to enter the auction" from "we are being
+ *  shown and nobody clicks", which are different problems with different fixes. */
+export interface SinceChange { spend: number; sales: number; orders: number; clicks: number; impressions?: number }
 
 /** Whole days between an ISO timestamp and now. */
 export function daysSince(iso: string, nowMs = Date.now()): number {
@@ -624,37 +642,66 @@ export function inCooldown(last: BidChange | null | undefined, nowMs = Date.now(
 }
 
 export type SearchStep =
-  | { bid: number; direction: "up" | "down"; reason: string }
+  /** restored = this move is the UNDO of a cut that silenced the word. The engine records the
+   *  restored bid as that keyword's floor so the search cannot walk it off the same cliff again. */
+  | { bid: number; direction: "up" | "down"; reason: string; restored?: true }
   /** escalate = the rule wanted to raise past $0.85 and stopped. wouldBe is the bid it wanted. */
   | { bid: null; reason: string; escalate?: true; wouldBe?: number };
 
 /**
  * One bid step for one keyword.
  *
- * William 2026-08-07, the goal in his words: "just have to try to keep ads spending and roas above
- * 2x that's the goal."
+ * REWRITTEN 2026-08-10 on William's instruction, and it REVERSES the direction this function used
+ * to take on a profitable keyword. Recording the reversal rather than quietly editing the old
+ * comment, because the previous rule was also his and was correct under a different goal.
  *
- * Two conditions, both required, and the rule falls straight out of them:
+ * The old rule (2026-08-07, "you have to spend to max roas"): a word returning 2x or better was
+ * RAISED, to buy more of a good thing. That maximises total profit dollars.
  *
- *    not spending          -> UP.   A keyword winning nothing is not in the auction. Waiting for
- *                                   evidence it can never produce is how 1,830 words parked at
- *                                   $0.10 forever. "so .10 is not ok".
- *    spending, >= 2x       -> UP.   Profitable, so buy more of it.
- *    spending, under 2x    -> DOWN. Paying too much per sale; bid less for the same clicks.
+ * The new rule (2026-08-10, in his words):
  *
- * That converges on its own. The bid climbs until ROAS falls through 2x, drops back, and then
- * oscillates around the highest bid that still returns 2x — which is the most volume this word can
- * carry while still paying for itself. No direction memory needed: the 2x line does the steering.
+ *   "If the bid isn't getting impressions or clicks, then you have to raise it. If the bid is
+ *    getting clicks and hopefully conversions, then you lower the bid and try to find that magical
+ *    bid price where you can still get conversions and clicks without completely turning off the
+ *    keyword. And then, of course, the big hanger is if it spends $4, you've got to turn it off
+ *    for the month."
+ *
+ * So a profitable word is now SHAVED, not bought up, hunting the cheapest bid that still buys the
+ * clicks. That maximises profit per dollar rather than total dollars.
+ *
+ *   no impressions, no clicks   -> UP   $0.10.  Not in the auction at all. Raising costs nothing,
+ *                                              because a bid only charges when it wins a click.
+ *   getting clicks, under 2x    -> DOWN $0.10.  Paying too much per sale, so cut at pace.
+ *   getting clicks, 2x or over  -> DOWN $0.02.  Works. Shave gently and watch. See BID_SHAVE_STEP.
+ *   shown but never clicked     -> HOLD.        Not a bid problem. A bid buys the impression; the
+ *                                              image, title and price buy the click. Moving the
+ *                                              bid here treats a creative fault as a pricing one.
+ *   the last cut killed the clicks -> UNDO, and remember that bid as this word's floor.
+ *
+ * ONE THING THIS RULE CANNOT DO, said plainly because the instruction hoped for it: lowering a bid
+ * never RAISES impressions. The bid is what gets you into the auction, so cutting it can only hold
+ * or lose placement. What it wins is a cheaper click. Normally cheaper clicks stretch the budget
+ * into more of them, but budget is not this account's constraint ($1,165/day authorised against
+ * about $5 spent), so the gain here is margin, not volume. Growth has to come from the ~1,750
+ * keywords parked at the $0.10 floor, not from this function.
  *
  * Only the $4 kill switches a keyword off. This never returns "stop".
  */
 export function searchStep(
   currentBid: number,
   since: SinceChange | null | undefined,
-  _last?: BidChange | null,
-  opts: { step?: number; floor?: number; cap?: number; ceiling?: number; minClicks?: number; target?: number } = {},
+  last?: BidChange | null,
+  opts: {
+    step?: number; floor?: number; cap?: number; ceiling?: number; minClicks?: number; target?: number;
+    /** the gentle cut for a word that already works (BID_SHAVE_STEP) */
+    shave?: number;
+    /** the lowest bid this word has been PROVEN to still need; never cut at or below it */
+    floorFound?: number | null;
+  } = {},
 ): SearchStep {
   const step = opts.step ?? BID_SEARCH_STEP;
+  const shave = opts.shave ?? BID_SHAVE_STEP;
+  const floorFound = opts.floorFound ?? null;
   const floor = opts.floor ?? BID_FLOOR;
   const cap = opts.cap ?? BID_CAP;
   const ceiling = opts.ceiling ?? BID_CONFIRM_CEILING;
@@ -668,11 +715,11 @@ export function searchStep(
   // the $0.59 market CPC. A flat dime gets there in five. Arithmetic is in whole cents throughout,
   // because comparing dollars as floats made $0.10 -> $0.11 read as "no change" and pinned every
   // floored keyword at exactly the floor this rule exists to escape.
-  const move = (dir: "up" | "down", reason: string): SearchStep => {
-    const stepC = Math.round(step * 100), baseC = Math.round(base * 100);
+  const move = (dir: "up" | "down", reason: string, thisStep: number = step): SearchStep => {
+    const stepC = Math.round(thisStep * 100), baseC = Math.round(base * 100);
     const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);
     const ceilC = Math.round(ceiling * 100);
-    const target = dir === "up" ? baseC + stepC : baseC - stepC;
+    const wantC = dir === "up" ? baseC + stepC : baseC - stepC;
 
     // THE $0.85 STOP, on the way up only (William 2026-08-08). A keyword already at or above the
     // ceiling does not get raised again by a rule — it gets reported. Cuts fall through untouched,
@@ -682,22 +729,62 @@ export function searchStep(
         bid: null,
         reason: `${reason}, but $${(base).toFixed(2)} is already at or past the $${ceiling.toFixed(2)} ceiling — needs your confirmation`,
         escalate: true,
-        wouldBe: target / 100,
+        wouldBe: wantC / 100,
       };
     }
     // Below the ceiling a raise is allowed to land ON it, never through it: $0.80 + $0.10 -> $0.85.
     const upperC = dir === "up" ? Math.min(capC, ceilC) : capC;
-    const bidC = Math.max(floorC, Math.min(upperC, target));
+    const bidC = Math.max(floorC, Math.min(upperC, wantC));
     if (bidC === baseC) return { bid: null, reason: `${reason} (already at the ${dir === "up" ? "cap" : "floor"})` };
     return { bid: bidC / 100, direction: dir, reason };
   };
 
-  if (!since || since.spend <= 0) return move("up", "not spending — raising until it enters the auction");
-  if (since.clicks < minClicks) return { bid: null, reason: `only ${since.clicks} clicks since the last move — not enough to judge` };
+  // THE UNDO, checked before anything else. If the last move was a CUT and the word has gone silent
+  // since, that cut is what silenced it: put the bid back and remember the restored bid as this
+  // word's floor, so the search never walks it off the same cliff twice. William: "without
+  // completely turning off the keyword."
+  if (last && last.toBid < last.fromBid && since && since.clicks === 0) {
+    const backC = Math.round(last.fromBid * 100);
+    if (backC !== Math.round(base * 100)) {
+      return {
+        bid: backC / 100,
+        direction: "up",
+        reason: `the cut to $${last.toBid.toFixed(2)} stopped the clicks — back to $${last.fromBid.toFixed(2)} and holding there`,
+        restored: true,
+      };
+    }
+  }
 
-  const roas = since.sales / since.spend;
+  // Never cut below a bid we have already proved this word needs.
+  const atFloorFound = floorFound !== null && Math.round(base * 100) <= Math.round(floorFound * 100);
+
+  // NOT IN THE AUCTION. No impressions and no clicks means the bid never won a placement, so there
+  // is nothing to judge and nothing at risk. Raise. Note this reads impressions, not spend: a word
+  // can be shown thousands of times, spend nothing because nobody clicked, and the old
+  // `spend <= 0` test would have called that "not spending" and raised the bid at a creative fault.
+  const impressions = since?.impressions ?? 0;
+  const clicks = since?.clicks ?? 0;
+  if (!since || (impressions === 0 && clicks === 0)) {
+    return move("up", "no impressions and no clicks — raising until it enters the auction");
+  }
+
+  // SHOWN, NEVER CLICKED. The bid is doing its job and the listing is not. Hold.
+  if (clicks === 0) {
+    return { bid: null, reason: `${impressions} impressions and no clicks — the listing is losing the click, not the bid` };
+  }
+
+  if (atFloorFound) {
+    return { bid: null, reason: `at $${base.toFixed(2)}, the lowest bid this word is known to still work at — holding` };
+  }
+
+  // GETTING CLICKS. Every path from here is DOWN, hunting the cheapest bid that still converts.
+  // Only the SIZE of the cut varies, and it varies on how confident we are that the word works.
+  const roas = since.spend > 0 ? since.sales / since.spend : 0;
+  if (clicks < minClicks) {
+    return move("down", `${clicks} click${clicks === 1 ? "" : "s"} since the last move, too few to judge ROAS — shaving cautiously`, shave);
+  }
   return roas >= target
-    ? move("up",   `${roas.toFixed(2)}x, at or above ${target}x — buying more`)
+    ? move("down", `${roas.toFixed(2)}x, at or above ${target}x — works, so shaving gently to find the cheapest bid that still converts`, shave)
     : move("down", `${roas.toFixed(2)}x, below ${target}x — paying too much per sale`);
 }
 
@@ -711,11 +798,21 @@ export function bidWithMemory(
   last: BidChange | null | undefined,
   since: SinceChange | null | undefined,
   nowMs = Date.now(),
-  opts: { step?: number; floor?: number; cap?: number; ceiling?: number; hours?: number; minClicks?: number; target?: number } = {},
-): { bid: number | null; reason: string; escalate?: true; wouldBe?: number } {
+  opts: {
+    step?: number; floor?: number; cap?: number; ceiling?: number; hours?: number; minClicks?: number;
+    target?: number; shave?: number; floorFound?: number | null;
+  } = {},
+): { bid: number | null; reason: string; escalate?: true; wouldBe?: number; restored?: true } {
   if (inCooldown(last, nowMs, opts.hours ?? BID_COOLDOWN_HOURS)) {
     return { bid: null, reason: `held: last change was ${(daysSince(last!.changedAt, nowMs) * 24).toFixed(1)}h ago` };
   }
   const v = searchStep(currentBid, since, last, opts);
-  return { bid: v.bid, reason: v.reason, escalate: v.bid === null ? v.escalate : undefined, wouldBe: v.bid === null ? v.wouldBe : undefined };
+  return {
+    bid: v.bid,
+    reason: v.reason,
+    escalate: v.bid === null ? v.escalate : undefined,
+    wouldBe: v.bid === null ? v.wouldBe : undefined,
+    // The engine persists this bid as the keyword's floor so the search cannot re-cut through it.
+    restored: v.bid !== null ? v.restored : undefined,
+  };
 }
