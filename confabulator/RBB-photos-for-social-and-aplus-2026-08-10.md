@@ -164,9 +164,27 @@ the bitrate and calling it improved, because re-encoding cannot restore what was
   social, because they only exist in landscape. Option C covers the ones worth rescuing.
 - **Trade-off accepted:** the 900 x 1280 safe box is the intersection of two platforms, so it is
   tighter than either needs alone. One render for both is worth the lost margin.
-- **Open:** whether we have Premium A+ or only Standard. It changes the file size ceiling from 2 MB
-  to 5 MB and decides whether the A+ video module and the 1464 x 625 Brand Story hero are available
-  to us at all. Seller Central is the only authority; the guides disagree.
+- **CLOSED 2026-08-10, by live API call.** We have **Standard A+ only**. Every one of our 11 A+
+  documents returns `contentType: EBC` with `badgeSet: STANDARD`; not one carries PREMIUM. William
+  confirmed we hold A+ with a registered trademark, and that is exactly what Brand Registry grants:
+  Standard. Premium is a separate eligibility test we have not passed.
+
+  Consequences, and they bind the build:
+  - image ceiling is **2 MB**, not 5 MB
+  - **no A+ video module.** Video has to go on the product detail page, not into A+
+  - **no 1464 x 625 Brand Story hero**
+  - the five module types we actually use are STANDARD_HEADER_IMAGE_TEXT, STANDARD_THREE_IMAGE_TEXT,
+    STANDARD_IMAGE_TEXT_OVERLAY, STANDARD_COMPANY_LOGO and STANDARD_PRODUCT_DESCRIPTION
+
+- **CORRECTION, same call.** Earlier today I recorded that the A+ alt text is Hebrew on a US listing
+  and has been for two years, and I wrote that into Megan's document. **That was wrong.** The en-US
+  document carries 7 alt texts and all 7 are English. The Hebrew (he-IL) and Spanish (es-US)
+  documents are Amazon's own machine translations, flagged `GENERATED`, which Amazon serves to
+  shoppers browsing amazon.com in those languages. That is normal, not a defect.
+
+  What IS true, and is the smaller real problem: our English alt text is keyword stubs rather than
+  descriptions. The live values include "Phone Tether", "sec" and "S". That is poor for screen
+  readers and wastes the field, but it is a quality fix, not a broken listing.
 - **Open:** the 59 raw Mexico clips and 11 installation clips have never been probed. Drive did not
   parse their dimensions, so orientation and rotation flags are unknown until each is downloaded.
   Given the testimonial's rotation flag, assume nothing about them.
