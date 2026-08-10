@@ -556,13 +556,13 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     if (v.bid !== null) expect(v.direction).toBe("up");
   });
 
-  // The old test read `spend <= 0` as "not spending" and raised. That is wrong when the word IS
-  // being shown: a bid buys the impression, the listing buys the click, and raising the bid to fix
-  // a listing problem just pays more for the same silence.
-  it("HOLDS a keyword that is shown thousands of times and never clicked", () => {
+  // William 2026-08-10: "yes it climbs if not spending or converting you raise the bid to find the
+  // optimal". At $0.10 a keyword wins only the positions nobody clicks, so silence there is a
+  // position problem, and position is bought with bid.
+  it("CLIMBS a keyword that is shown and never clicked — position is bought with bid", () => {
     const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 4000 });
-    expect(v.bid).toBeNull();
-    expect(v.reason).toMatch(/listing is losing the click/);
+    expect(v.bid).toBe(0.60);
+    if (v.bid !== null) expect(v.direction).toBe("up");
   });
 
   it("clears the $0.59 market CPC in five runs, not nineteen", () => {
@@ -587,25 +587,74 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     expect(searchStep(BID_CAP, ev(10, 50)).bid).toBe(2.48);     // 5x at the cap: shaved, not held
   });
 
-  // THE UNDO. This is the only thing standing between a working keyword and the $0.10 floor, so it
-  // gets the sharpest tests in the file.
-  describe("the undo — putting a bid back when the cut silenced the word", () => {
-    const cut: BidChange = { changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3 };
+  // THE TURN-AROUND. William 2026-08-10: "we cut until the keyword doesnt perform as well. Less
+  // impressions less sales then we start to go the other way little by little". This is what stops
+  // a working keyword walking to the $0.10 floor, so it gets the sharpest tests in the file.
+  describe("the turn-around — reversing a move that made things worse", () => {
+    // A cut from $0.50 to $0.48, taken when the $0.50 level was producing 300 impressions and $30.
+    const cut: BidChange = {
+      changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3,
+      impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
+    };
 
-    it("restores the previous bid when a cut took the clicks to zero", () => {
-      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 300 }, cut);
+    it("turns round and climbs two cents when a cut cost impressions", () => {
+      const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut);
       expect(v.bid).toBe(0.50);
-      if (v.bid !== null) {
-        expect(v.direction).toBe("up");
-        expect(v.restored).toBe(true);
-      }
+      if (v.bid !== null) expect(v.direction).toBe("up");
+      expect(v.reason).toMatch(/turning round little by little/);
     });
 
-    it("does NOT undo after a RAISE that produced no clicks — that word needs to keep climbing", () => {
-      const raise: BidChange = { changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.20, toBid: 0.30, roasBefore: null };
-      const v = searchStep(0.30, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, raise);
-      expect(v.bid).toBe(0.40);
+    it("turns round when a cut cost sales, even with impressions holding up", () => {
+      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut);
+      expect(v.bid).toBe(0.50);
       if (v.bid !== null) expect(v.direction).toBe("up");
+    });
+
+    it("keeps cutting while the cut is NOT hurting — better on both counts", () => {
+      const v = searchStep(0.48, { spend: 3, sales: 40, orders: 2, clicks: 12, impressions: 350 }, cut);
+      expect(v.bid).toBe(0.46);
+      if (v.bid !== null) expect(v.direction).toBe("down");
+    });
+
+    it("turns a RAISE round too — the reversal is symmetric", () => {
+      const raise: BidChange = {
+        changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.40, toBid: 0.50, roasBefore: 3,
+        impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
+      };
+      const v = searchStep(0.50, { spend: 5, sales: 12, orders: 1, clicks: 9, impressions: 250 }, raise);
+      expect(v.bid).toBe(0.48);
+      if (v.bid !== null) expect(v.direction).toBe("down");
+    });
+
+    it("does not fire without a baseline, so a keyword's first move is never second-guessed", () => {
+      const noBaseline: BidChange = { changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3 };
+      const v = searchStep(0.48, { spend: 3, sales: 0, orders: 0, clicks: 1, impressions: 1 }, noBaseline);
+      expect(v.bid).toBe(0.46);          // falls through to the ordinary cautious shave
+    });
+
+    // The settling behaviour William described: it oscillates a couple of cents around the best
+    // bid rather than stopping dead, and it does that WELL above the $0.10 floor.
+    it("settles by oscillating around the optimum instead of walking to the floor", () => {
+      // Truth: this word needs $0.44 to hold its impressions. Below that they collapse.
+      const impsAt = (bid: number) => (bid >= 0.44 ? 300 : 50);
+      const salesAt = (bid: number) => (bid >= 0.44 ? 30 : 5);
+      let bid = 0.60;
+      let last: BidChange | null = null;
+      const seen: number[] = [];
+      for (let run = 0; run < 60; run++) {
+        const since: SinceChange = { spend: 3, sales: salesAt(bid), orders: 1, clicks: 8, impressions: impsAt(bid) };
+        const v = searchStep(bid, since, last);
+        if (v.bid === null) break;
+        last = {
+          changedAt: "2026-08-01T00:00:00.000Z", fromBid: bid, toBid: v.bid, roasBefore: 3,
+          impressionsBefore: impsAt(bid), clicksBefore: 8, salesBefore: salesAt(bid),
+        };
+        bid = v.bid;
+        if (run > 40) seen.push(bid);
+      }
+      // It never gets anywhere near the floor, which is the whole point.
+      for (const b of seen) expect(b).toBeGreaterThan(0.35);
+      expect(Math.max(...seen) - Math.min(...seen)).toBeLessThanOrEqual(0.06);
     });
 
     it("holds at a bid already proven to be the word's floor, instead of cutting through it again", () => {
@@ -613,25 +662,16 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/known to still work at/);
     });
-
-    it("cannot flap: cut, undo, then hold once the floor is known", () => {
-      // Modelled on the real failure this prevents — a word oscillating two cents forever.
-      const first = searchStep(0.50, ev(10, 30));                              // shave to 0.48
-      expect(first.bid).toBe(0.48);
-      const undo = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 300 }, cut);
-      expect(undo.bid).toBe(0.50);                                             // back to 0.50
-      const held = searchStep(0.50, ev(10, 30), null, { floorFound: 0.50 });   // and it stays
-      expect(held.bid).toBeNull();
-    });
   });
 
-  // A property worth stating out loud: with every path pointing down, the ONLY thing that stops a
-  // working word walking to the $0.10 floor is the undo. 1,750 keywords are stuck at that floor
-  // today, so this is not a theoretical worry.
-  it("walks a working word down toward the floor when nothing ever interrupts it", () => {
+  // Stated out loud because it is the risk the turn-around exists to remove: with NO baseline to
+  // judge by — a keyword whose history predates 2026-08-10 — every path still points down, and the
+  // word walks to the $0.10 floor where 1,750 others are stuck. The turn-around fires from the
+  // second move onward, so this is a one-move exposure, not a permanent one.
+  it("without any baseline to judge by, a working word would walk to the floor", () => {
     let bid = 0.85;
     for (let run = 0; run < 200; run++) {
-      const v = searchStep(bid, ev(10, 30));
+      const v = searchStep(bid, ev(10, 30));     // no `last`, so no baseline, so no turn-around
       if (v.bid === null) break;
       bid = v.bid;
     }

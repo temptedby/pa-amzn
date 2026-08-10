@@ -621,6 +621,14 @@ export interface BidChange {
   toBid: number;
   /** ROAS over the window BEFORE the change; null when it had no sales then. */
   roasBefore: number | null;
+  // What the PREVIOUS bid level actually produced, recorded at the moment of the change. The next
+  // run compares its own window against these to answer "did that move make things better or
+  // worse". Both windows are one cooldown long (~6h), so they are comparable. Undefined on rows
+  // written before 2026-08-10, and the reversal simply does not fire without them rather than
+  // guessing from a half-known baseline.
+  impressionsBefore?: number;
+  clicksBefore?: number;
+  salesBefore?: number;
 }
 
 /** Performance accumulated SINCE a bid change — the evidence that change produced.
@@ -739,19 +747,33 @@ export function searchStep(
     return { bid: bidC / 100, direction: dir, reason };
   };
 
-  // THE UNDO, checked before anything else. If the last move was a CUT and the word has gone silent
-  // since, that cut is what silenced it: put the bid back and remember the restored bid as this
-  // word's floor, so the search never walks it off the same cliff twice. William: "without
-  // completely turning off the keyword."
-  if (last && last.toBid < last.fromBid && since && since.clicks === 0) {
-    const backC = Math.round(last.fromBid * 100);
-    if (backC !== Math.round(base * 100)) {
-      return {
-        bid: backC / 100,
-        direction: "up",
-        reason: `the cut to $${last.toBid.toFixed(2)} stopped the clicks — back to $${last.fromBid.toFixed(2)} and holding there`,
-        restored: true,
-      };
+  // THE TURN-AROUND, checked before anything else. William 2026-08-10:
+  //
+  //   "we cut until the keyword doesnt perform as well. Less impressions less sales then we start
+  //    to go the other way little by little, itll stop spending way before $.1"
+  //
+  // So a move that made things worse is not undone to a frozen floor, it REVERSES: the search
+  // turns round and steps back the other way, two cents at a time, and keeps hunting. That makes
+  // this a hill climb that settles by oscillating a couple of cents around the best bid, rather
+  // than one that stops dead at the first bad step.
+  //
+  // NOTE: a turn-around is a shape William rejected on 2026-08-07 ("no thats not how you max roas
+  // you have to spend to max roas"). That rejection was against the OLD goal of maximising total
+  // spend at 2x. Under the new goal — the cheapest bid that still converts — he asked for it
+  // directly. Recorded so the reversal is not mistaken for drift.
+  //
+  // "Worse" is his test, not mine: fewer impressions, or fewer sales, than the previous bid level
+  // produced. Requires a baseline, so it never fires on the first move of a keyword's life.
+  if (last && since && last.impressionsBefore !== undefined) {
+    const wasCut = last.toBid < last.fromBid;
+    const impNow = since.impressions ?? 0;
+    const worse = impNow < (last.impressionsBefore ?? 0) || since.sales < (last.salesBefore ?? 0);
+    if (worse) {
+      const dir = wasCut ? "up" : "down";
+      const what = impNow < (last.impressionsBefore ?? 0)
+        ? `impressions fell ${last.impressionsBefore} -> ${impNow}`
+        : `sales fell $${(last.salesBefore ?? 0).toFixed(2)} -> $${since.sales.toFixed(2)}`;
+      return move(dir, `the ${wasCut ? "cut" : "raise"} to $${last.toBid.toFixed(2)} made it worse (${what}) — turning round little by little`, shave);
     }
   }
 
@@ -768,9 +790,17 @@ export function searchStep(
     return move("up", "no impressions and no clicks — raising until it enters the auction");
   }
 
-  // SHOWN, NEVER CLICKED. The bid is doing its job and the listing is not. Hold.
+  // SHOWN, NEVER CLICKED. Asked whether a floored word with impressions but no clicks should
+  // climb, William 2026-08-10: "yes it climbs if not spending or converting you raise the bid to
+  // find the optimal". So it RAISES rather than holding.
+  //
+  // I had it holding on the argument that a bid buys the impression and the listing buys the
+  // click, so a bid move cannot fix a click problem. That reasoning is still true in itself, but
+  // it is not the whole picture: at $0.10 a keyword only wins the bottom of the last page, where
+  // nobody clicks whatever the listing says. Position is bought with bid, and 1,750 keywords are
+  // proof that holding them there teaches us nothing.
   if (clicks === 0) {
-    return { bid: null, reason: `${impressions} impressions and no clicks — the listing is losing the click, not the bid` };
+    return move("up", `${impressions} impressions and no clicks — raising to find the position that gets one`);
   }
 
   if (atFloorFound) {

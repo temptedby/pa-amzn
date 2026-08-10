@@ -78,7 +78,12 @@ export interface ReactivationResult {
 export interface AdEngineResult {
   ok: boolean; dryRun: boolean;
   killed: { text: string; spend: number; matchType: string; keywordId: string; applied?: boolean }[];
-  bids: { text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string; roasBefore?: number | null }[];
+  bids: {
+    text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string;
+    roasBefore?: number | null;
+    /** what THIS bid level produced, carried into kw_bid_history as the next run's baseline */
+    impressionsBefore?: number; clicksBefore?: number; salesBefore?: number;
+  }[];
   /** Wanted a raise past the $0.85 ceiling and stopped. William confirms these by hand. */
   needsConfirm: { text: string; matchType: string; keywordId: string; bid: number; wouldBe: number; roas: number | null }[];
   /** Killed earlier this month, then vindicated by late attribution and switched back on. */
@@ -430,6 +435,14 @@ async function ensureBidMemory(): Promise<void> {
   await db().execute(`CREATE TABLE IF NOT EXISTS kw_bid_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT, keyword_id TEXT NOT NULL, changed_at TEXT NOT NULL,
     from_bid REAL NOT NULL, to_bid REAL NOT NULL, roas_before REAL, reason TEXT, ad_product TEXT)`);
+  // What the PREVIOUS bid level produced, so the next run can tell a good move from a bad one
+  // (William 2026-08-10: "Less impressions less sales then we start to go the other way").
+  // Added to an existing table, so each column is added separately and only a genuine
+  // "duplicate column" is swallowed.
+  for (const col of ["imp_before INTEGER", "clicks_before INTEGER", "sales_before REAL"]) {
+    try { await db().execute(`ALTER TABLE kw_bid_history ADD COLUMN ${col}`); }
+    catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
+  }
   await db().execute(`CREATE INDEX IF NOT EXISTS kw_bid_history_kw ON kw_bid_history (keyword_id, changed_at DESC)`);
   await db().execute(`CREATE TABLE IF NOT EXISTS kw_perf_snapshot (
     taken_at TEXT NOT NULL, keyword_id TEXT NOT NULL, month TEXT NOT NULL,
@@ -516,12 +529,18 @@ async function openKills(month: string): Promise<KillLedgerRow[]> {
 async function lastBidChanges(): Promise<Map<string, BidChange>> {
   const out = new Map<string, BidChange>();
   try {
-    const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, roas_before FROM kw_bid_history
+    const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, roas_before,
+             imp_before, clicks_before, sales_before FROM kw_bid_history
       WHERE id IN (SELECT MAX(id) FROM kw_bid_history GROUP BY keyword_id)`);
     for (const row of r.rows) {
       out.set(String(row.keyword_id), {
         changedAt: String(row.changed_at), fromBid: Number(row.from_bid), toBid: Number(row.to_bid),
         roasBefore: row.roas_before == null ? null : Number(row.roas_before),
+        // Left undefined on pre-2026-08-10 rows on purpose. searchStep will not turn a keyword
+        // round on a baseline it does not actually have.
+        impressionsBefore: row.imp_before == null ? undefined : Number(row.imp_before),
+        clicksBefore: row.clicks_before == null ? undefined : Number(row.clicks_before),
+        salesBefore: row.sales_before == null ? undefined : Number(row.sales_before),
       });
     }
   } catch { /* first run — no history yet */ }
@@ -673,7 +692,12 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // to work at. Recorded only after Amazon accepts the write, below.
       if (m.restored) restoredFloors.push({ keywordId: id, bid: m.bid });
       bidOps.push({ keywordId: id, bid: m.bid });
-      out.bids.push({ text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100, reason: m.reason, keywordId: id, roasBefore });
+      out.bids.push({
+        text: k.keywordText, from: k.bid, to: m.bid, acos: +(acos * 100).toFixed(0) / 100,
+        reason: m.reason, keywordId: id, roasBefore,
+        // The evidence THIS bid level produced. Next run compares its own window against it.
+        impressionsBefore: ev?.impressions ?? 0, clicksBefore: ev?.clicks ?? 0, salesBefore: ev?.sales ?? 0,
+      });
     }
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
@@ -770,9 +794,11 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
           const b = out.bids[i]; if (!b || !b.keywordId) continue;
           try {
             await db().execute({
-              sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,roas_before,reason,ad_product)
-                    VALUES (?,?,?,?,?,?,?)`,
-              args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS"],
+              sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,roas_before,reason,ad_product,
+                                               imp_before,clicks_before,sales_before)
+                    VALUES (?,?,?,?,?,?,?,?,?,?)`,
+              args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS",
+                     b.impressionsBefore ?? 0, b.clicksBefore ?? 0, b.salesBefore ?? 0],
             });
           } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
           // A restored bid becomes this word's proven floor, but ONLY once Amazon has accepted the
