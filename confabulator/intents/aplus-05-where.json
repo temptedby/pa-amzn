@@ -1,0 +1,34 @@
+{
+  "asset_type": "image",
+  "surface": "amazon-aplus",
+  "product": "BOTH",
+  "slot": 5,
+  "template_id": "aplus-three-places",
+  "size": "970x600",
+  "background": "white",
+  "product_visible": true,
+  "shows_phone_hauled_up": false,
+  "headline": "Travel, commuting, everyday",
+  "body": [
+    "The same clip works on a belt loop, a bag strap, a backpack or a pocket, so it goes wherever you do."
+  ],
+  "alt_text": "Three photographs showing a Phone Assured tether in use while travelling in a city, getting out of a car, and at home.",
+  "source_assets": [
+    {
+      "id": "bcn",
+      "name": "Megan William Barcelona/Mabel_Llevat_111.jpg",
+      "provenance": "own-photo"
+    },
+    {
+      "id": "car",
+      "name": "Jan 10th/IMG_3290.jpg",
+      "provenance": "own-photo"
+    },
+    {
+      "id": "oax2",
+      "name": "Megan Lindsay Oaxaca/A7_08356.jpg",
+      "provenance": "own-photo"
+    }
+  ],
+  "module_type": "STANDARD_HEADER_IMAGE_TEXT"
+}

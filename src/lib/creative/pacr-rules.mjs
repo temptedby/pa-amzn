@@ -79,6 +79,21 @@ export const TITLE_MAX = 75;
 /** PACR 11 - Amazon needs 2000px on the long side. */
 export const AMAZON_MIN_LONG_SIDE = 2000;
 
+// PACR 11 is SURFACE-SCOPED, corrected 2026-08-10. The 2000px rule is Amazon's requirement for the
+// main and secondary gallery images, where it enables zoom. A+ modules are a different surface with
+// fixed canvases, and 970x600 can never satisfy 2000px — the original rule blocked every legitimate
+// A+ asset. Confirmed against the live account: we hold STANDARD A+ (contentType EBC), so these are
+// the canvases available to us. Premium sizes are deliberately absent because we cannot use them.
+export const APLUS_CANVASES = {
+  STANDARD_HEADER_IMAGE_TEXT:  [970, 600],
+  STANDARD_IMAGE_TEXT_OVERLAY: [970, 300],
+  STANDARD_THREE_IMAGE_TEXT:   [300, 300],
+  STANDARD_FOUR_IMAGE_TEXT:    [220, 220],
+  STANDARD_COMPANY_LOGO:       [600, 180],
+};
+/** Standard A+ caps images at 2 MB. Premium's 5 MB does not apply to us. */
+export const APLUS_MAX_BYTES = 2 * 1024 * 1024;
+
 /** PACR 46 - the product must be on screen before the scroll decision is made. */
 export const HOOK_MAX_SECONDS = 3;
 
@@ -166,9 +181,29 @@ export function checkIntent(intent, ctx = {}) {
 
   if (amazon && intent.size) {
     const [w, h] = String(intent.size).split("x").map(Number);
-    if (Number.isFinite(w) && Number.isFinite(h) && Math.max(w, h) < AMAZON_MIN_LONG_SIDE) {
-      failures.push(fail("PACR 11", `render at ${AMAZON_MIN_LONG_SIDE}px minimum on the long side (got ${intent.size}).`));
+    if (Number.isFinite(w) && Number.isFinite(h)) {
+      if (surface === "amazon-aplus") {
+        // A+ has fixed canvases, so the test is an exact match against the module, not a minimum.
+        // A mis-sized A+ image is not rejected by Amazon; it is silently rescaled and goes soft,
+        // which is worse because nothing tells you it happened.
+        const canvas = APLUS_CANVASES[intent.module_type];
+        if (!intent.module_type) {
+          failures.push(fail("PACR 11", `an A+ asset must name its module_type, one of ${Object.keys(APLUS_CANVASES).join(", ")}.`));
+        } else if (!canvas) {
+          failures.push(fail("PACR 11", `"${intent.module_type}" is not a Standard A+ module. We hold STANDARD A+ only, so Premium modules are unavailable.`));
+        } else if (w !== canvas[0] || h !== canvas[1]) {
+          failures.push(fail("PACR 11", `${intent.module_type} is exactly ${canvas[0]}x${canvas[1]} (got ${intent.size}). Amazon rescales a mismatch silently and the image goes soft.`));
+        }
+      } else if (Math.max(w, h) < AMAZON_MIN_LONG_SIDE) {
+        failures.push(fail("PACR 11", `render at ${AMAZON_MIN_LONG_SIDE}px minimum on the long side (got ${intent.size}).`));
+      }
     }
+  }
+
+  // PACR 11b. Standard A+ caps at 2 MB per image. Only checkable when the caller measures the
+  // rendered file, so it is a no-op at gate time and a real check in the renderer.
+  if (surface === "amazon-aplus" && typeof ctx.renderedBytes === "number" && ctx.renderedBytes > APLUS_MAX_BYTES) {
+    failures.push(fail("PACR 11", `${(ctx.renderedBytes / 1048576).toFixed(2)} MB exceeds the 2 MB Standard A+ limit.`));
   }
 
   if (intent.headline && intent.headline.length > THUMBNAIL_HEADLINE_MAX) {
