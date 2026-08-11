@@ -1206,3 +1206,64 @@ Seller Central and nothing has touched a live listing.
 side for every Amazon surface. That is the main-image zoom rule and it is impossible for a 970x600
 A+ module, so the gate blocked every legitimate A+ asset I tried to build. The gate refusing my own
 work is the system behaving correctly; the rule is now surface-scoped to an exact canvas match.
+
+## 2026-08-11 — The engine killed the winners, and the answer was in another repo all along
+
+**Context.** Morning review found production had paused, at 06:00Z, the three keywords carrying 6 of
+August's 8 orders and $60.94 of $86.92 in sales. `retractable phone tether` had been walked from
+$0.55 to $0.89 over four runs *while converting*, which dragged it under the 1.923x pivot, at which
+point the $4 rule correctly killed it. The rule did what it was told. The bid engine that fed it is
+the pre-08-07 build, because PR #2 has never merged — and it is now CONFLICTING, so the merge button
+does nothing until `origin/main` is merged in.
+
+Separately William judged the 08-10 creative "not clean or professional enough" and asked for an RBB
+on doing it properly, then for volume: 40 videos, 100 graphics, 20 testimonials, in batches.
+
+**Options considered.** For the creative pipeline: (1) tune the existing sharp/SVG compositor,
+(2) render HTML and CSS through headless Chromium, (3) buy design from Megan, (4) ship the 2023
+studio package unedited. For the testimonials: real review quotes over real footage, versus
+AI-generated reenactment, which William asked for three times.
+
+**Decision.** Option 2 for the pipeline, and real footage for the testimonials. One renderer,
+`scripts/pacr/render.mjs`, with the lessons wired in as asserts rather than notes. Testimonials cut
+from a Billo UGC ad already sitting in Drive, plus the Paul Arnoldi customer video, transcribed and
+cut on sentence boundaries.
+
+**Reasoning.** The decisive input was not mine. A Social Scene agent wrote two handover docs into
+this repo, and its diagnosis of its own early work was ours word for word: *"a photo with a frame and
+text... decoration, not composition."* Its first logged rule, dated 2026-06-05, is the exact rule we
+broke on 08-10: never just overlay text on a full-bleed photo. William had reached the same verdict
+on Social Scene creative ten weeks before he reached it on ours, and the answer had been written down
+the whole time. I had built without reading it, and had written **nine** graphics builders into this
+repo, five of them the previous day on top of four that already existed.
+
+On AI: there are no generative credentials in any of the four project environments, verified against
+the env files and the entire MCP tool surface. But the stronger argument turned out to be that we
+already owned the better thing — four real people on camera holding the actual product and saying our
+warranty and anti-theft claims, plus a named customer who says he went through *72 iPhones* and can
+name *seven clear instances* where the clip saved one. AI cannot render our specific tether, so any
+generated product shot would put a competitor's geometry on our page.
+
+**Industry source.** Published A/B testing puts objection-first A+ module ordering 22-38% ahead of
+spec-first; Basic A+ lifts conversion 5-10% and cuts returns 10-15%. Category data: 161K annual
+searches growing 99.7% in 90 days, top five brands holding 75% of demand, average listing price
+$14.07 against our $9.49, incumbents averaging 1,442 reviews at 4.3 against our 480 at 3.8.
+
+**Trade-offs accepted.** Chromium is slower per asset than sharp; accepted because correctness of
+type and layout is the entire point. Paul Arnoldi is 480x848 and upscales soft; accepted because a
+real named customer with specific numbers beats a sharper generic clip. Testimonial quotes cannot go
+in A+ at all under Amazon's rules, so they are social-only.
+
+**Status.** Shipped to `build/creative/` and uploaded to Drive: 5 A+ modules, 4 testimonial cards,
+15 videos. Nothing written to the live listing or the ad account.
+
+**Corrections.** Five, four of them mine and material. I said the main image showed a lanyard; it
+does not, and I had inferred it rather than looked. I said we had no video; one was published and 352
+sat uncut in Drive. I concluded Drive uploads were blocked three separate times — read-only token,
+then "sharing fixes it", then "only a Shared Drive fixes it" — and the real answer was domain-wide
+delegation, available from the start. And I cut four testimonials mid-sentence by guessing boundaries
+off a contact sheet, fixed by transcribing with whisper-cli and cutting on real sentence ends.
+
+Two more worth recording because they argue the same point: the build gate **passed** a render that
+was entirely in 16px Times, and **passed** a module with a quarter of its content off the canvas.
+Neither is catchable by an assert that does not exist yet. Both were found by opening the image.
