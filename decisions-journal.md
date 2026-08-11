@@ -1086,3 +1086,123 @@ William settled what that means: *"we will start running social media and conten
 phoneassured.com w eare not there yet."* Zero rows is the expected state of a tag nobody has been
 sent to, so it stops being a gate on the build and goes back to being a measurement that lights up
 when traffic starts. The partner ledger, payout rules, sync and cron remain unwritten.
+
+## 2026-08-10 — The bid rule turns round, and the photography turns out to be the asset
+
+### Context
+
+Three strands collided in one day.
+
+The morning review found production still running the pre-08-07 engine: one keyword walked to
+**$2.50** on 10%-a-run compounding, 77% of enabled keywords sat at the $0.10 floor, and PR #2 had
+been unmerged for four days behind a red Vercel check that turns out to be a preview-environment
+fault, not a code fault.
+
+Then William rewrote the bid rule across four messages, and the new rule **reverses** the one he
+gave on 08-07.
+
+Then he asked for creative, and a proper crawl of Drive found the library is **2,764 files**, not
+the 98 our own script reports.
+
+### Options
+
+**On bid direction for a profitable keyword.** (a) Keep 08-07: 2x or better means raise, buy more
+of a good thing. (b) Reverse: shave it down to find the cheapest bid that still converts.
+
+**On the step size for that shave.** (a) $0.05, the fast end of the range he offered. (b) $0.02,
+the slow end.
+
+**On what happens when a move makes things worse.** (a) Undo to a frozen floor and stop. (b)
+Reverse direction and keep hunting, two cents at a time.
+
+**On photo routing.** (a) Crop the best frames into every format. (b) Route by the shape each frame
+was shot in. (c) Reshoot for vertical. (d) Outpaint with generative fill to change aspect ratio.
+
+### Decision
+
+Bid direction: (b), reverse. Step: (b), two cents. Bad move: (b), turn round. Routing: (b), route by
+source shape, with a named fallback of cropping 24MP landscape when a subject exists only that way.
+Generative outpainting rejected outright.
+
+### Reasoning
+
+**The reversal is a change of goal, not a correction.** The 08-07 rule maximised total profit
+dollars: buy more of anything clearing 2x. The 08-10 rule maximises profit per dollar: find the
+cheapest bid that still converts. Both are William's and both are coherent; they just answer
+different questions. So the old rule is kept in the code as recorded history rather than
+overwritten, because a future reader needs to know it was deliberate.
+
+**Two cents, because the mistakes are not symmetric.** I argued for five and was wrong twice over.
+First, I asserted "two cents is too slow to read inside a month" without measuring it. Second, and
+the durable point, William named the asymmetry: *"rather be cautious to test a profitable keyword
+slowly then move too quick and turn off the spending and lose market share."* Cutting a working word
+too fast drops it out of auctions it was winning, and that traffic does not return just because the
+bid does. Cutting too slow only costs time.
+
+**The turn-around is what stops the floor trap repeating.** With every path in the new rule pointing
+down, a working keyword would walk to $0.10, which is exactly where 1,750 of them already sit. The
+reversal is the only force pushing back. It needs a baseline to judge "worse", so `kw_bid_history`
+now records what each bid level produced, and it deliberately does not fire on rows written before
+today rather than guessing from a half-known baseline.
+
+**On routing, the numbers decided it.** Resolution is not a constraint anywhere: median 6000x4000,
+and 100% of 338 measured photos clear the A+ crop, 98% clear a full 1080x1920. Shape is the
+constraint. A 3:2 frame forced into 9:16 keeps **38%** of the picture; a tall frame into a 970x600
+A+ module keeps **35%**. We hold 194 tall and 82 landscape, so routing by shape costs nothing and
+throws nothing away.
+
+### Industry source
+
+Amazon A+ module dimensions and the 2 MB Standard cap, and the detail-page video limits (16:9,
+6-45s, audio 96 kbps floor), from the published 2026 seller guidance. Instagram Reels and TikTok
+publish different safe zones; taking the stricter of each gives one 900x1280 box inside 1080x1920
+that serves both. The bid design follows ordinary hill-climbing with a reversal on degradation,
+which is the standard shape for optimising an unknown response curve, and the deliberate gap
+between the 1.923x kill pivot and the 2.0x revival bar is hysteresis, the textbook defence against
+oscillation.
+
+Competitors were read directly rather than from a blog: Pulpo $14.99 / 4.0 / 691 reviews / 7
+videos, ClutchLoop $28.98 / 4.2 / 2K+ a month, Oaridey $11.99 / 4.3 / Overall Pick. We are the
+cheapest and the lowest rated of the set at $9.49 and 3.8.
+
+### Trade-offs accepted
+
+- **The reversal will oscillate a couple of cents around the best bid rather than settling still.**
+  That is the intended behaviour and it is cheap at two cents, but it means the account never looks
+  finished.
+- **Routing by shape means some strong subjects never reach social**, because they exist only in
+  landscape.
+- **Generative outpainting was rejected** even though it would solve the aspect-ratio problem
+  outright. PACR 2 and 6 permit AI to edit our own photography, not to invent scene content on an
+  Amazon surface.
+- **A+ modules now carry no baked copy**, which makes them plainer than competitors' text-heavy
+  panels. The trade is that the words become indexable and readable by a screen reader for the
+  first time.
+
+### Status
+
+Shipped to the PR #2 branch. 329 tests, typecheck clean, every ad rule verified against the live
+account rather than the suite alone. Creative renders are gitignored; nothing has been uploaded to
+Seller Central and nothing has touched a live listing.
+
+**PR #2 remains the single blocker**, now 30+ commits.
+
+### Corrections taken this session
+
+**Three, and the first one reached someone else's desk.**
+
+1. I recorded that the A+ alt text is Hebrew on a US listing and had been for two years, and wrote
+   it into Megan's working document as an action item. **Wrong.** The en-US document carries seven
+   alt texts, all English; the Hebrew and Spanish documents are Amazon's own machine translations,
+   badged `GENERATED`. I found it only because I later called the A+ API instead of reading the
+   page, which is what I should have done before writing into her document. Corrected in the doc,
+   the RBB and memory. The real fault is smaller: our English alt text is stubs — "Phone Tether",
+   "sec", "S".
+2. I reported the 2023 package as 2,453 files. It is 84. The 2,453 figure is the entire Drive
+   library across all folders.
+3. I argued for a five cent shave step on an assertion I had not measured.
+
+**And one the tooling caught on me.** PACR 11, which I wrote yesterday, demanded 2000px on the long
+side for every Amazon surface. That is the main-image zoom rule and it is impossible for a 970x600
+A+ module, so the gate blocked every legitimate A+ asset I tried to build. The gate refusing my own
+work is the system behaving correctly; the rule is now surface-scoped to an exact canvas match.
