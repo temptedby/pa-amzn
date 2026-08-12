@@ -73,7 +73,12 @@ export const REINTRO_PROTECT_DAYS = 14;        // no automatic bid CUT inside th
 // 3-days-per-rung / $0.50-top version from the same conversation.
 export const BID_LADDER_STEP = 0.10;   // added per day of zero spend
 export const BID_LADDER_MAX = 0.85;    // ceiling; never climbs past this on non-spend alone
-export const LADDER_STEP_DAYS = 1;     // one day at a rung earns the next
+// William 2026-08-12: "we need to make sure we're raising the bid on those slowly, 10 cents every
+// six hours". The ladder already stepped $0.10, but only once per WHOLE day, so a keyword needed
+// six days to walk $0.25 -> $0.85. Six hours is one engine run, so a rung now lasts exactly one run.
+// Expressed in days because the whole ladder is: 6h = 0.25 of a day. Callers must pass a FRACTIONAL
+// daysSinceStep (no Math.floor) or this reads as "never waited long enough" and nothing ever climbs.
+export const LADDER_STEP_DAYS = 0.25;  // six hours at a rung earns the next
 
 export interface Perf {
   spend: number;   // month-to-date cost, $

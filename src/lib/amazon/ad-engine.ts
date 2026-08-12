@@ -509,7 +509,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
     }
 
     // ---- Rule 5, the bid ladder (William 2026-08-05, wired 2026-08-06) --------------------
-    // Enter at $0.25. Each whole day a promoted keyword goes without spending a cent, add $0.10,
+    // Enter at $0.25. Each six hours a promoted keyword goes without spending a cent, add $0.10,
     // up to $0.85. A keyword that HAS spent is left alone: it is producing data, so the ACOS rule
     // owns it and the $4 kill bounds it. At $0.85 and still silent, ask William rather than guess.
     try {
@@ -524,7 +524,9 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
         const v = ladderVerdict({
           bid: Number(row.current_bid ?? k.bid ?? 0),
           spendSinceStep: mtd.get(id)?.cost ?? 0,               // any spend at all means hands off
-          daysSinceStep: changedAt ? Math.floor((Date.now() - changedAt) / 864e5) : 0,
+          // FRACTIONAL, not floored: the rung is six hours (LADDER_STEP_DAYS = 0.25) and
+          // Math.floor would round every sub-day wait down to 0 and freeze the ladder.
+          daysSinceStep: changedAt ? (Date.now() - changedAt) / 864e5 : 0,
         });
         if (v.action === "raise") {
           ladderOps.push({ keywordId: id, bid: v.bid });

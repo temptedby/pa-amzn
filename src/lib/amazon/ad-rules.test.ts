@@ -383,6 +383,34 @@ describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
   });
 });
 
+describe("the rung is SIX HOURS, not a day (William 2026-08-12)", () => {
+  // "we need to make sure we're raising the bid on those slowly, 10 cents every six hours".
+  // Before this, LADDER_STEP_DAYS was 1 and the caller floored the elapsed time to whole days,
+  // so $0.25 -> $0.85 took six days. It now takes six engine runs.
+  it("climbs after six hours", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 0.25 })).toBe(0.35);
+  });
+  it("holds at five hours and fifty minutes", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: 5.83 / 24 })).toBeNull();
+  });
+  it("still refuses to climb a keyword that has spent, however long it waits", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0.01, daysSinceStep: 3 })).toBeNull();
+  });
+  it("$0.25 reaches the $0.85 ceiling in six rungs and stops there", () => {
+    let bid = REINTRO_START_BID, rungs = 0;
+    while (rungs < 50) {
+      const next = nextLadderBid({ bid, spendSinceStep: 0, daysSinceStep: 0.25 });
+      if (next === null) break;
+      bid = next; rungs++;
+    }
+    expect(rungs).toBe(6);
+    expect(bid).toBe(BID_LADDER_MAX);
+  });
+  it("a floored whole-day elapsed value would freeze the ladder, which is why the caller passes a fraction", () => {
+    expect(nextLadderBid({ bid: 0.25, spendSinceStep: 0, daysSinceStep: Math.floor(0.25) })).toBeNull();
+  });
+});
+
 describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
   it("raises while below the ceiling", () => {
     expect(ladderVerdict({ bid: 0.45, spendSinceStep: 0, daysSinceStep: 1 }))
