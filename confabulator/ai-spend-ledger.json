@@ -1,0 +1,55 @@
+[
+  {
+    "at": "2026-08-12T11:38:30.667Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_lifestyle/Photos_Mexico_Raw_Photos_Videos_Dec_2020__IMG_20201202_113009.jpg",
+    "out": "build/creative/ai-reenact/kevin-jeans.mp4",
+    "prompt": "Static camera. The woman lowers her hand and the phone settles at her side against her jeans, the thin black cord going slack. Natural daylight, subtle fabric movement, photoreal, no camera move.",
+    "bytes": 14941335,
+    "balanceBefore": 8.298065,
+    "balanceAfter": 8.018065,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN",
+    "note": "cost corrected after fal settled; the immediate read returned the pre-charge balance"
+  },
+  {
+    "at": "2026-08-12T11:47:05.527Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_faces/hone_Assured_Photos_Dec_10__IMG_20201210_153311.jpg",
+    "out": "build/creative/ai-reenact/meda48-purse.mp4",
+    "prompt": "Static camera, no camera move. She takes a few slow steps along the pavement, the yellow shoulder bag swaying gently, phone held in her hand. Warm afternoon light, photoreal, natural walking motion.",
+    "bytes": 9758224,
+    "balanceBefore": 8.018065,
+    "balanceAfter": 7.738065,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN"
+  },
+  {
+    "at": "2026-08-12T11:47:07.157Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_faces/hotos_Megan_Lindsay_Oaxaca__A7_08242.jpg",
+    "out": "build/creative/ai-reenact/ca-in-ca-pocket.mp4",
+    "prompt": "Static camera, no camera move. The woman shifts her weight and her hand moves toward her back pocket; the small black clip on her waistband catches the sunlight. Bright natural daylight, photoreal, subtle denim fabric movement.",
+    "bytes": 8599519,
+    "balanceBefore": 8.018065,
+    "balanceAfter": 7.738065,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN"
+  },
+  {
+    "at": "2026-08-12T11:47:36.874Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_lifestyle/_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131507.jpg",
+    "out": "build/creative/ai-reenact/adam3914-water.mp4",
+    "prompt": "Static camera, no camera move. The hand holding the phone out over the sea steadies and tilts a fraction; small waves move across the turquoise water below. Bright tropical daylight, photoreal.",
+    "bytes": 8343296,
+    "balanceBefore": 8.018065,
+    "balanceAfter": 7.458065,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN"
+  }
+]

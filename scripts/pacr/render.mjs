@@ -59,7 +59,8 @@ export async function panel(path, { left, top, width, height }) {
  * Render HTML at an exact canvas and write it out.
  * @returns {Promise<{file:string,bytes:number,manifest:object}>}
  */
-export async function render({ html, canvas, out, format = 'jpeg', quality = 88, manifest = {} }) {
+export async function render({ html, canvas, out, format = 'jpeg', quality = 88, transparent = false, manifest = {} }) {
+  if (transparent && format !== 'png') throw new Error('transparent output must be PNG; JPEG has no alpha');
   const abs = resolve(out);
   if (abs.startsWith('/tmp/') || abs.startsWith('/private/tmp/'))
     throw new Error(`REFUSED: deliverable would land in a temp dir (${abs}). See the SSC lesson.`);
@@ -169,7 +170,13 @@ export async function render({ html, canvas, out, format = 'jpeg', quality = 88,
       return { text: grab('[data-fit]'), face: grab('[data-face]'), media: grab('[data-media]') };
     });
 
-    const shot = await page.screenshot({ type: 'png' });
+    /* ---- Transparency is OPT-IN and then PROVEN.
+       Playwright paints a white backdrop unless omitBackground is set, so a "transparent" overlay
+       comes out fully opaque. That is not a cosmetic slip: composited over video it HIDES the clip
+       entirely and puts white type on a white ground. It has now cost two builds, Paul's frames on
+       2026-08-11 and the AI reels on 2026-08-12, and neither was catchable by any assert that
+       existed. So the flag is honoured here and the result is checked below. ---- */
+    const shot = await page.screenshot({ type: 'png', omitBackground: transparent });
     let img = sharp(shot).resize(canvas.w, canvas.h, { fit: 'fill' });
     let buf = format === 'png' ? await img.png().toBuffer() : await img.jpeg({ quality }).toBuffer();
 
@@ -180,6 +187,15 @@ export async function render({ html, canvas, out, format = 'jpeg', quality = 88,
       buf = await sharp(shot).resize(canvas.w, canvas.h, { fit: 'fill' }).jpeg({ quality: q }).toBuffer();
     }
     if (buf.length > APLUS_MAX_BYTES) throw new Error(`still ${(buf.length/1048576).toFixed(2)} MB over the 2 MB A+ cap`);
+
+    /* ---- ASSERT: a transparent render actually has transparent pixels. ---- */
+    if (transparent) {
+      const st = await sharp(buf).ensureAlpha().stats();
+      const alpha = st.channels[3];
+      if (!alpha || alpha.min === 255)
+        throw new Error('TRANSPARENT RENDER IS OPAQUE, refused: every pixel has alpha 255. ' +
+          'Composited over video this hides the footage completely.');
+    }
 
     writeFileSync(abs, buf);
     const man = { ...manifest, canvas, file: abs, bytes: buf.length, quality: q, boxes, deadSpace: dead, built: 'render.mjs' };

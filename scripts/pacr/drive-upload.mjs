@@ -26,7 +26,10 @@ const TARGETS = [
     files: [...fs.readdirSync('build/creative/video').filter(f=>/\.(mp4|jpg)$/.test(f))
               .map(f=>`build/creative/video/${f}`),
             ...fs.readdirSync('build/creative/testimonial-video').filter(f=>/\.mp4$/.test(f))
-              .map(f=>`build/creative/testimonial-video/${f}`)] },
+              .map(f=>`build/creative/testimonial-video/${f}`),
+            ...(fs.existsSync('build/creative/ai-reels')
+              ? fs.readdirSync('build/creative/ai-reels').filter(f=>/\.mp4$/.test(f))
+                  .map(f=>`build/creative/ai-reels/${f}`) : [])] },
 ];
 
 const b64u = b => Buffer.from(b).toString('base64').replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/g,'');
