@@ -51,5 +51,31 @@
     "costUSD": 0.28,
     "payer": "Social Scene fal.ai account",
     "rebillTo": "PA-AMZN"
+  },
+  {
+    "at": "2026-08-12T15:40:19.825Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_faces/os_Megan_William_Barcelona__Mabel_Llevat_57.jpg",
+    "out": "build/creative/ai-reenact/kevin-cord-length.mp4",
+    "prompt": "Static camera, no camera move. The seated man extends his arm further away from his body and the thin black cord plays out from his hip to the phone, showing how far it reaches. Bright daylight, photoreal, natural arm movement.",
+    "bytes": 9132821,
+    "balanceBefore": 7.125565,
+    "balanceAfter": 6.845565,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN"
+  },
+  {
+    "at": "2026-08-12T15:40:47.274Z",
+    "model": "fal-ai/kling-video/v1.6/standard/image-to-video",
+    "source": "assets/source/_faces/os_Megan_William_Barcelona__Mabel_Llevat_66.jpg",
+    "out": "build/creative/ai-reenact/david-phone-hands.mp4",
+    "prompt": "Static camera, close on the hands. His thumb moves across the screen as he scrolls, the phone held steady, the small black tether tab clearly attached at the base of the phone. Warm daylight, photoreal, no camera move.",
+    "bytes": 5503257,
+    "balanceBefore": 7.125565,
+    "balanceAfter": 6.845565,
+    "costUSD": 0.28,
+    "payer": "Social Scene fal.ai account",
+    "rebillTo": "PA-AMZN"
   }
 ]
