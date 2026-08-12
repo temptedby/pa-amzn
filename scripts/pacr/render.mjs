@@ -86,10 +86,26 @@ export async function render({ html, canvas, out, format = 'jpeg', quality = 88,
         const t = el.textContent.trim().slice(0, 48);
         if (el.scrollWidth > el.clientWidth + 1)
           bad.push({ t, why: 'width', a: el.scrollWidth, b: el.clientWidth });
-        let clipped = cs.overflow !== 'visible' || el.style.height;
-        for (let p = el.parentElement; p && !clipped; p = p.parentElement)
-          if (getComputedStyle(p).overflow !== 'visible') clipped = true;
-        if (clipped && el.scrollHeight > el.clientHeight + 1)
+        /* Vertical is a failure only when the text is ACTUALLY cut off. Two ways that happens:
+           the element clips itself (own overflow, or a height we set), or an ancestor with
+           overflow:hidden has a box this element genuinely runs past.
+
+           The ancestor test has to compare RECTS. Testing only "some ancestor hides overflow"
+           refused three good cards on 2026-08-12: every full-bleed template wraps the photo in an
+           overflow:hidden hero, so every caption inside one counted as clipped, and a 2px
+           line-height rounding (scrollHeight 172 vs clientHeight 170) then read as a cut word.
+           Nothing was cut. The rounding is what the comment above already describes. */
+        const selfClips = cs.overflow !== 'visible' || !!el.style.height;
+        let cutBy = null;
+        if (!selfClips) {
+          const r = el.getBoundingClientRect();
+          for (let p = el.parentElement; p && !cutBy; p = p.parentElement) {
+            if (getComputedStyle(p).overflow === 'visible') continue;
+            const pr = p.getBoundingClientRect();
+            if (r.bottom > pr.bottom + 1 || r.top < pr.top - 1) cutBy = p.tagName;
+          }
+        }
+        if ((selfClips || cutBy) && el.scrollHeight > el.clientHeight + 1)
           bad.push({ t, why: 'height', a: el.scrollHeight, b: el.clientHeight });
       }
       return bad;

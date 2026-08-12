@@ -18,8 +18,8 @@ const TARGETS = [
   { id: '1k_E69J8gN_urwVUa19BlxL1wczf6RJic', label: 'Graphics',
     files: [...fs.readdirSync('build/creative/aplus-evergreen').filter(f => f.endsWith('.jpg'))
               .map(f => `build/creative/aplus-evergreen/${f}`),
-            ...fs.readdirSync('build/creative/testimonials').filter(f => f.endsWith('.jpg'))
-              .map(f => `build/creative/testimonials/${f}`),
+            ...fs.readdirSync('build/creative/testimonials-v2').filter(f => f.endsWith('.jpg'))
+              .map(f => `build/creative/testimonials-v2/${f}`),
             'build/creative/DELIVER-2026-08-11/REVIEW - open me in a browser.html',
             'build/creative/DELIVER-2026-08-11/READ ME.txt'] },
   { id: '1sFvK2imyu69RU6oBoLLY2vRKSZ3isXSR', label: 'Video',
