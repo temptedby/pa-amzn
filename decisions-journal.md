@@ -1267,3 +1267,70 @@ off a contact sheet, fixed by transcribing with whisper-cli and cutting on real 
 Two more worth recording because they argue the same point: the build gate **passed** a render that
 was entirely in 16px Times, and **passed** a module with a quarter of its content off the canvas.
 Neither is catchable by an assert that does not exist yet. Both were found by opening the image.
+
+## 2026-08-12 — Two bank statements disagreed, and one man was four different customers
+
+**Context.** Two clocks were running. Amazon had rejected seller verification twice and re-sent both
+the INFORM deactivation warning and the identity rejection on 11 August, each with a fresh ten days,
+so both expire 21 August. Separately William had asked for creative volume, 40 videos and 100
+graphics, and had spent two days correcting the output: khaki trousers where the review said jeans,
+a dingy AI-generated cord, women on men's names, and finally *"you can't use two different guys'
+names and then the same person is in the photos."*
+
+**Options considered.** For the verification: (1) tell William what to type, (2) read Amazon's side
+off the public seller page and diff it against the bank statement myself, (3) log in and change it.
+For the creative identity problem: (a) keep reusing the few models we own, (b) shoot or buy more
+people, (c) generate people with AI, (d) cut the set to what the library can honestly support and
+show the product instead of a person for the rest.
+
+**Decision.** Option 2 then 3 for Amazon, with William supplying both statements. Option (d) for the
+creative, with the rules written as asserts that refuse a build rather than as notes.
+
+**Reasoning.** The INFORM Act forces Amazon to publish a seller's business address, so the value they
+hold was readable without logging in: `730 W. Lake Street Unit 162`. The Douglas Dean Holdings
+statement prints `STE 162 / 730 W LAKE ST`. That was enough to diagnose it, and Seller Central then
+confirmed it by flagging that exact field in red.
+
+The part worth recording is what nearly went wrong. I had typed `STE 162` into the **residential**
+field too, and stopped before saving because the proof document attached to it was a different
+account, `PNC 4042`, which I had never read. William sent it: it prints **UNIT 162**. Same building,
+same suite, two PNC accounts, two different designator words. Amazon checks each address against its
+own document, so copying the business format across would have produced a third rejection.
+
+On the creative, the one-face-one-name rule is not a style preference. A reader who sees the same man
+called Kevin and then Jarret has been shown something false, and it is instantly noticeable. Encoding
+it as an import-time throw immediately produced the evidence: one man was standing in for four
+customers and one woman for four more. The honest response was to let the rule cut the set from
+fourteen cards to six and treat the number as the finding, because it says plainly that the library
+holds two distinguishable men and three women. Product-led cards then cover the rest without
+depicting anyone, so there is no identity to reuse.
+
+**Industry source.** Uber's 10th Lost & Found Index puts the phone first among forgotten items with
+over a million reported, peaking on Saturdays and between 9pm and midnight, worst on St Patrick's
+Day, Halloween and New Year's Eve. Insurance2go's 2025 report puts 35% of UK phone losses on public
+transport, and Dubai RTA lost-property figures make phones the top transit item at 16,607 of 68,929.
+2025 A+ guidance is consistent that a lifestyle context image belongs in slot 2 and that the page
+should answer "why this product" rather than "what is this product". All of it went into
+`confabulator/RBB-scene-creative-2026-08-12.md`, which William asked for before any build.
+
+**Trade-offs accepted.** Six photographed testimonial cards instead of fourteen, because the
+alternative is lying about who a customer is. Five location contexts instead of the eight William
+named, because we own no subway, transit, festival or snow photography and a composited transit shot
+would read as stock. Animation stays five seconds and silent, and Kling honours mood but not a
+direction, so the useful motion has to be what the subject would be doing anyway. AI spend runs on
+Social Scene's account and is rebilled: $1.73 across six clips, four usable, every row a real balance
+delta rather than a rate card.
+
+**Status.** Both addresses saved and submitted; Amazon is validating. PR #3 open, making a bid-ladder
+rung six hours instead of a day, 193 tests green. Fourteen honest testimonial cards and four AI
+reenactments in Drive. Nothing written to the live listing or the ad account.
+
+**Corrections.** Five, four of them William's. Kevin still had a woman because I fixed the graphic and
+left the AI reel carrying the old clip. One man was four names. The product-led cards first showed
+the hardware floating on paper with no context, which he read correctly as random. And two silent
+bugs surfaced only by opening the files: every "transparent" PNG this renderer has ever produced was
+opaque, because Playwright paints a white backdrop unless told otherwise, which hid an entire video
+behind white type on white; and the vertical-overflow gate had been refusing good cards by treating
+"an ancestor hides overflow" as proof of clipping. Both are now asserts that test the actual pixels
+rather than the intent. The pattern across all of them is the same: the build log said fine, and the
+file said otherwise.
