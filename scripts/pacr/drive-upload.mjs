@@ -20,6 +20,9 @@ const TARGETS = [
               .map(f => `build/creative/aplus-evergreen/${f}`),
             ...fs.readdirSync('build/creative/testimonials-v2').filter(f => f.endsWith('.jpg'))
               .map(f => `build/creative/testimonials-v2/${f}`),
+            ...(fs.existsSync('build/creative/testimonials-product')
+              ? fs.readdirSync('build/creative/testimonials-product').filter(f => f.endsWith('.jpg'))
+                  .map(f => `build/creative/testimonials-product/${f}`) : []),
             'build/creative/DELIVER-2026-08-11/REVIEW - open me in a browser.html',
             'build/creative/DELIVER-2026-08-11/READ ME.txt'] },
   { id: '1sFvK2imyu69RU6oBoLLY2vRKSZ3isXSR', label: 'Video',

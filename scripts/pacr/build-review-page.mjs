@@ -17,6 +17,7 @@ const cost = existsSync('confabulator/ai-spend-ledger.json')
 const spent = cost.reduce((s, r) => s + (r.costUSD || 0), 0);
 
 const why = f => (CARDABLE.find(r => `${r.id}.jpg` === f) || {});
+const allRev = REVIEWS;
 const rev = id => REVIEWS.find(r => r.id === id) || {};
 
 const card = (src, title, sub, note) => `
@@ -86,6 +87,17 @@ ${ls('ai-reels', /\.mp4$/).map(f => {
 ${ls('testimonials-v2', /\.jpg$/).map(f => {
   const r = why(f);
   return card(`testimonials-v2/${f}`, r.name || f, `${r.stars || ''}★ · ${r.date || ''}`, r.why ? `Photo: ${r.why}` : '');
+}).join('')}
+</div>
+
+<h2>Testimonial cards with nobody in them</h2>
+<p class="sect">The one-face-one-name rule caps photographed cards at six, because we own two
+distinguishable men and three women. These show the PRODUCT instead of a person, so there is no
+identity to reuse and every remaining review can have a card today. Real verbatim words either way.</p>
+<div class="grid">
+${ls('testimonials-product', /\.jpg$/).map(f => {
+  const r = rev(f.replace('.jpg',''));
+  return card(`testimonials-product/${f}`, r.name || f, `${r.stars || ''}★ · ${r.date || ''}`, 'No person depicted');
 }).join('')}
 </div>
 
