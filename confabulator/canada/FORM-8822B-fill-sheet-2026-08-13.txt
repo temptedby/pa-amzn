@@ -1,0 +1,75 @@
+FORM 8822-B — CHANGE OF ADDRESS, DOUGLAS DEAN HOLDINGS LLC
+Prepared 13 August 2026. Purpose: make the IRS record say STE 162 so a future
+147C letter matches the Amazon business address and the PNC business statement.
+
+Get the blank form: https://www.irs.gov/pub/irs-pdf/f8822b.pdf
+Paper only. There is no e-file for this form. 4 to 6 weeks to process.
+
+The EIN is deliberately left blank below rather than written into a file that
+gets committed. Fill it in by hand from the 2019 147C letter.
+
+----------------------------------------------------------------------------
+TICK THESE BOXES
+
+  [X] 1   Employment, excise, income, and other business returns
+  [ ] 2   Employee plan returns            <- leave blank, no plan
+  [X] 3   Business location
+
+----------------------------------------------------------------------------
+FILL THESE LINES
+
+  4a  Business name
+      DOUGLAS DEAN HOLDINGS LLC
+
+  4b  Employer identification number
+      ______________     <- from the 2019 147C
+
+  5   OLD mailing address   (exactly as the IRS holds it today)
+      730 W LAKE ST UNIT 162
+      CHICAGO, IL 60661
+
+  6   NEW mailing address
+      730 W LAKE ST STE 162
+      CHICAGO, IL 60661-1010
+
+  7   NEW business location
+      730 W LAKE ST STE 162
+      CHICAGO, IL 60661-1010
+
+  8   New responsible party's name        LEAVE BLANK
+  9   New responsible party's SSN/EIN     LEAVE BLANK
+      The responsible party is not changing. Only the address is.
+
+  10  Signature
+      Sign as owner. Title: SOLE MEMBER
+      Date it. Daytime phone is optional but include it.
+
+----------------------------------------------------------------------------
+WHERE TO POST IT
+
+Your old business address is in Illinois, so per the table on the form:
+
+      Internal Revenue Service
+      Kansas City, MO 64999
+
+----------------------------------------------------------------------------
+TWO THINGS THAT DECIDE WHETHER THIS WORKS
+
+1. STE, not UNIT, on lines 6 and 7. That is the whole point of the exercise.
+
+2. ZIP 60661-1010 with the plus-four, not plain 60661. Amazon holds the
+   plus-four and that exact field was flagged in red. A new 147C that still
+   reads 60661 would waste the entire four to six weeks.
+
+----------------------------------------------------------------------------
+THIS IS A HEDGE, NOT THE PLAN
+
+The faster route is still: call 1-800-829-4933 at 6:00 AM Central (7:00 EST)
+on Friday 14 August, menu 1 then 1 then 3, change the address on the call and
+ask them to fax a fresh 147C to a FaxBurner number while you are still on the
+line. Post this form as well, so the clock is running either way.
+
+And the fastest route of all remains not needing it: submit the existing 147C
+as proof of NAME and EIN only, and let the PNC business statement carry the
+address. The two documents prove different fields and neither has to match
+the other.

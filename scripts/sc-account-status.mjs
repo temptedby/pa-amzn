@@ -50,6 +50,32 @@ if (!loggedIn) { console.log('never reached a logged-in Seller Central page; sto
 
 const clean = t => t.replace(/\s{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
 const report = [];
+// THE ACCOUNT SWITCHER, added 2026-08-13 after a run returned "Not Found" on all four pages.
+// Amazon parks a multi-marketplace seller on /account-switcher after login, and every Seller
+// Central deep link 404s until a marketplace is chosen. The script used to navigate straight past
+// it and report four Not Founds, which reads like a broken URL and is really an unchosen account.
+async function chooseUS() {
+  for (let i = 0; i < 3; i++) {
+    const u = page.url();
+    if (!/account-switcher|merchantMarketplace/i.test(u)) return true;
+    // The marketplace list is a set of clickable rows; "United States" is the one we want.
+    const target = page.getByText('United States', { exact: true }).first();
+    if (await target.count().catch(() => 0)) {
+      await target.click({ timeout: 15000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded').catch(() => {});
+      const btn = page.getByRole('button', { name: /select account|continue|confirm/i }).first();
+      if (await btn.count().catch(() => 0)) {
+        await btn.click({ timeout: 10000 }).catch(() => {});
+        await page.waitForLoadState('domcontentloaded').catch(() => {});
+      }
+    }
+    await page.waitForTimeout(2500);
+  }
+  return !/account-switcher/i.test(page.url());
+}
+const onUS = await chooseUS();
+console.log(onUS ? 'marketplace: United States selected' : 'WARNING: still on the account switcher — pages will 404');
+
 for (const [slug, url, what] of PAGES) {
   console.log(`\n=== ${slug} — ${what} ===`);
   try {

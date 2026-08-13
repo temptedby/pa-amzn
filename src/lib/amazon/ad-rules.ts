@@ -771,6 +771,38 @@ export const TARGET_ROAS = 2.0;
 //
 // ROLLBACK: BLEND_K = 0 collapses this to the pure current window (today's behaviour). Passing a
 // fixed `weight` collapses it to his literal 70/30. Both are one line, no data migration.
+// ---------------------------------------------------------------------------
+// SPONSORED DISPLAY MOVES DIFFERENTLY (William 2026-08-13)
+// ---------------------------------------------------------------------------
+//
+//   "Maybe we work with this in increments of five cents since it looks like retargeting is a
+//    smaller click system than search words or anything else. So maybe start at 10 and move it to
+//    15 and then maybe 20 and see where we're playing around in the 15 to 20 and maybe not change
+//    it ... except for once a day. And see if we can get some spend and some ROI at ten cents."
+//
+// He is reading a real pattern in the lifetime data, not guessing. The SAME audience at different
+// bids swings enormously, and always in the same direction:
+//
+//   views 14d  $0.10 bid ->   122 clicks, 2.41x        views 30d  $0.10 -> 1,664 clicks, 1.16x
+//   views 14d  $0.48 bid ->   411 clicks, 0.67x        views 30d  $0.34 ->   721 clicks, 0.47x
+//
+// Three times the clicks for a quarter of the return. Amazon's own suggested bids on these sit at
+// $3.52 to $5.56, and every move toward that suggestion destroyed the economics. So Display is not
+// mis-targeted so much as it was bid up, the same disease that killed the keywords.
+//
+// TWO DIFFERENCES FROM SPONSORED PRODUCTS, both his:
+//
+// A FIVE CENT STEP, not ten. The whole usable range here is roughly $0.10 to $0.48, and a dime
+// crosses a third of it in one move. Five cents gives the search somewhere to land between the bid
+// that converts and the bid that only buys clicks.
+//
+// ONCE A DAY, not every six hours. Retargeting audiences produce far fewer clicks than search, so a
+// six-hour window holds almost no evidence. Moving four times a day would be moving on noise, which
+// is the same argument that produced the blended-window rule for keywords.
+export const SD_BID_STEP = 0.05;
+export const SD_BID_COOLDOWN_HOURS = 24;
+export const SD_START_BID = 0.10;
+
 export const BLEND_K = 3;
 
 // WILLIAM'S DECISION, 2026-08-13: "ok so 30% for 7 days and 70% for now".
@@ -1192,7 +1224,11 @@ export interface BidPlan {
  */
 export function planBids(
   candidates: BidCandidate[],
-  opts: { defaultBid?: number; killSpend?: number; killMinRoas?: number } = {},
+  opts: {
+    defaultBid?: number; killSpend?: number; killMinRoas?: number;
+    /** step size per move. Sponsored Display uses SD_BID_STEP (5c); the others use a flat dime. */
+    step?: number;
+  } = {},
 ): BidPlan {
   const defaultBid = opts.defaultBid ?? BID_FLOOR;
   const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0 };
@@ -1207,7 +1243,7 @@ export function planBids(
       clicks: c.clicks, impressions: c.impressions ?? 0,
     };
     const ceiling = activeCeiling(c.approvedCeiling);
-    const step = searchStep(base, since, undefined, { ceiling });
+    const step = searchStep(base, since, undefined, { ceiling, step: opts.step, shave: opts.step });
 
     if (step.bid === null) {
       if (step.escalate) {

@@ -1041,7 +1041,7 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
 // ---------------------------------------------------------------------------
 // planBids — one bid planner for Products, Brands and Display (William 2026-08-13)
 // ---------------------------------------------------------------------------
-import { planBids, type BidCandidate } from "./ad-rules";
+import { planBids, SD_BID_STEP, SD_BID_COOLDOWN_HOURS, SD_START_BID, type BidCandidate } from "./ad-rules";
 
 const bidCand = (o: Partial<BidCandidate>): BidCandidate =>
   ({ id: "1", label: "w", bid: 0.5, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
@@ -1103,5 +1103,62 @@ describe("planBids", () => {
     const sd = planBids([bidCand({ ...shape, id: "sd", label: "sd target" })]);
     expect(sp.moves[0].toBid).toBe(sb.moves[0].toBid);
     expect(sb.moves[0].toBid).toBe(sd.moves[0].toBid);
+  });
+});
+
+describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () => {
+  const c = (o: Partial<BidCandidate>): BidCandidate =>
+    ({ id: "1", label: "views 7d", bid: 0.10, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
+
+  it("the constants are the ones he specified", () => {
+    expect(SD_BID_STEP).toBe(0.05);
+    expect(SD_BID_COOLDOWN_HOURS).toBe(24);
+    expect(SD_START_BID).toBe(0.10);
+  });
+
+  it("a silent Display audience climbs a NICKEL, not a dime", () => {
+    const p = planBids([c({ bid: 0.10 })], { step: SD_BID_STEP });
+    expect(p.moves[0]).toMatchObject({ fromBid: 0.10, toBid: 0.15, direction: "up" });
+  });
+
+  it("walks his ladder: 10 -> 15 -> 20", () => {
+    let bid = 0.10; const seen = [bid];
+    for (let i = 0; i < 2; i++) {
+      const p = planBids([c({ bid })], { step: SD_BID_STEP });
+      bid = p.moves[0].toBid; seen.push(bid);
+    }
+    expect(seen).toEqual([0.10, 0.15, 0.20]);
+  });
+
+  it("a spending Display audience is still never raised", () => {
+    const p = planBids([c({ bid: 0.10, spend: 2, sales: 5, orders: 1, clicks: 8, impressions: 400 })],
+      { step: SD_BID_STEP });
+    expect(p.moves.every((m) => m.direction === "down")).toBe(true);
+  });
+
+  it("cuts in nickels too, so the search can settle between 15c and 20c", () => {
+    // 1.5x: above the 1x kill line so it survives, below 2x so it is cut at pace.
+    const p = planBids([c({ bid: 0.20, spend: 4, sales: 6, orders: 1, clicks: 9, impressions: 500 })],
+      { step: SD_BID_STEP });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.15, direction: "down" });
+  });
+
+  it("and a Display audience under 1x is killed, not nudged", () => {
+    // The case that caught my own test out: $4 back $2 is 0.50x, which is a kill, not a bid move.
+    const p = planBids([c({ bid: 0.20, spend: 4, sales: 2, orders: 1, clicks: 9, impressions: 500 })],
+      { step: SD_BID_STEP });
+    expect(p.moves).toHaveLength(0);
+    expect(p.killing).toBe(1);
+  });
+
+  it("Products is untouched and still moves a dime", () => {
+    const p = planBids([c({ bid: 0.10 })]);          // no step override
+    expect(p.moves[0]).toMatchObject({ toBid: 0.20 });
+  });
+
+  it("still stops at the $0.85 gate, and Display will never get near it at a nickel a day", () => {
+    const p = planBids([c({ bid: 0.85 })], { step: SD_BID_STEP });
+    expect(p.moves).toHaveLength(0);
+    expect(p.escalated[0]).toMatchObject({ bid: 0.85, wouldBe: 1.85 });
   });
 });

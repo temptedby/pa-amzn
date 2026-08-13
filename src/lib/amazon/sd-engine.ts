@@ -49,6 +49,7 @@ import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
 import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
   planBids, KILL_MIN_ROAS, type BidCandidate, type BidPlan,
+  SD_BID_STEP, SD_START_BID, SD_BID_COOLDOWN_HOURS,
 } from "./ad-rules";
 
 const BASE = "https://advertising-api.amazon.com";
@@ -255,7 +256,10 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   }
   const ceilings = await approvedCeilings("SPONSORED_DISPLAY");
   for (const c of candidates) c.approvedCeiling = ceilings.get(c.id) ?? null;
-  const bidPlan = planBids(candidates);
+  // Display moves in NICKELS and at most ONCE A DAY (William 2026-08-13). Retargeting produces far
+  // fewer clicks than search, so a six-hour window holds almost no evidence, and a dime crosses a
+  // third of the usable $0.10-$0.48 range in a single move.
+  const bidPlan = planBids(candidates, { step: SD_BID_STEP, defaultBid: SD_START_BID });
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
     entityId: c.id, label: c.label, bid: c.bid ?? 0,
@@ -281,6 +285,26 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
     try { await recordBidRun("SPONSORED_DISPLAY", ledgerMonth, obs, new Map()); }
     catch (e) { out.errors.push(`sd ledger: ${e instanceof Error ? e.message : String(e)}`); }
   }
+  // ONCE A DAY. The ledger already records when each bid level started, so the cadence guard reads
+  // that rather than keeping a second clock. An entity whose current bid is younger than 24h is
+  // left alone however tempting the numbers look this run.
+  if (bidPlan.moves.length) {
+    try {
+      const { epochsFor } = await import("./bid-ledger");
+      const tooYoung: string[] = [];
+      for (const mv of bidPlan.moves) {
+        const eps = await epochsFor(mv.id, "SPONSORED_DISPLAY");
+        const cur = eps[eps.length - 1];
+        if (cur && (Date.now() - Date.parse(cur.openedAt)) < SD_BID_COOLDOWN_HOURS * 3.6e6) tooYoung.push(mv.id);
+      }
+      if (tooYoung.length) {
+        const held = new Set(tooYoung);
+        bidPlan.moves = bidPlan.moves.filter((mv) => !held.has(mv.id));
+        out.notes.push(`${tooYoung.length} Display bid change(s) held: current bid younger than ${SD_BID_COOLDOWN_HOURS}h`);
+      }
+    } catch (e) { out.errors.push(`sd cadence: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+
   if (!dryRun && bidPlan.moves.length) {
     try {
       const rb = await sd(cfg, token, "/sd/targets", "PUT",
