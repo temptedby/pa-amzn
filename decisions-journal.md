@@ -1334,3 +1334,76 @@ behind white type on white; and the vertical-overflow gate had been refusing goo
 "an ancestor hides overflow" as proof of clipping. Both are now asserts that test the actual pixels
 rather than the intent. The pattern across all of them is the same: the build log said fine, and the
 file said otherwise.
+
+## 2026-08-13 — A word that still returns cash gets its bid cut, and Display was never a targeting problem
+
+**Context.** The morning review found the account upside down: every keyword that had made money was
+switched off and everything still running had made nothing. `retractable phone tether` PHRASE, the
+single biggest earner at $41.96 of August's $96.41, had been paused on 11 August at 1.63x. Correct by
+the rule, and the rule was leaving only 0.00x words running. Separately, every number I had reported
+all morning was Sponsored Products only, which William caught: we had spent over $200 across three ad
+products and I had shown him $114.
+
+**Options considered.** For the kill: (1) leave the 52% ACOS pivot and accept that winners get
+retired, (2) raise the ACOS target so fewer words die, (3) move the kill line down to 1x and let the
+bid rules own everything above it. For Display, once it emerged that it had never spent: (a) leave it
+off, (b) fix what was pointed at out-of-stock products and enable broadly, (c) narrow to entities
+proven over the account's lifetime, (d) treat bid rather than audience as the variable.
+
+**Decision.** Option 3 for the kill, on William's instruction. Option (b) then reversed to (d) for
+Display, over the course of the day.
+
+**Reasoning.** The kill line is the clearer of the two. A word at 1.63x is too expensive, not
+worthless, and too expensive is a bid problem. `shouldKill` was overruling the bid rules with a pause.
+Below 1x the ads cost more than the sales they produced and no cheaper bid rescues that, so that is
+where it stops. The dead band between kill (1.0x) and revival (2.0x) is now wider than the
+1.923x-2.0x band it replaced, so the no-flapping guarantee is stronger, not weaker.
+
+Display is the part worth recording properly, because I got it wrong twice. I first enabled 42 ads on
+a **stock** decision — pause what points at out-of-stock ASINs, put the four sellable ones everywhere.
+William asked how I had decided which should go live, and the honest answer was that no performance
+data was involved at all. Reversing that exposed the second error: my reversal logic recomputed the
+create list from current state and would have paused 52 ads, 18 of which pre-dated me. The extended
+product-ads endpoint carries `creationDate` and named exactly 42. Precise beats inferred.
+
+Then the real finding, and it was William's. I recommended pausing `views 30d` at a blended 0.71x.
+He asked to look at the bid. The same audience at different bids swings enormously and always the
+same way: views 14d returns 2.41x at a $0.10 bid and 0.67x at $0.48; views 30d returns 1.16x at
+$0.10 on 1,664 clicks, the largest sample in the account, and 0.47x at $0.34. Amazon suggests
+$3.52-$5.56 on these. Sponsored Display was not mis-targeted, it was bid up — the same disease that
+killed the keywords, in a channel with no engine watching it.
+
+**Industry source.** Published retargeting benchmarks are 4:1 to 8:1 ROAS; ours is 0.70x, a gap too
+large to be a tuning problem. Optimisation guidance lists *"excluding shoppers who have already
+converted"* as a core step, and we ran three separate purchases-remarketing audiences. Guidance also
+holds that visitors within 7 days show materially higher intent, which the account's own curve
+confirms. Blending a noisy recent estimate with a stabler long-run one is empirical Bayes shrinkage,
+standard for sparse advertising data (Dynamic Hierarchical Empirical Bayes, arXiv:1809.02213), whose
+central result is that the weight must scale with evidence. Written up in
+`confabulator/RBB-bid-signal-window-2026-08-13.md` and
+`confabulator/RBB-display-retarget-restructure-2026-08-13.md`.
+
+**Trade-offs accepted.** Sponsored Products moves a flat dime every six hours; Sponsored Display moves
+a nickel once a day, because retargeting produces far fewer clicks and a dime crosses a third of the
+usable $0.10-$0.48 range in one move. William chose a fixed 70/30 blend over the evidence-weighted
+version after being shown both. `purchases 365d` stays live at ten cents as his test, despite
+returning 0.69x at that bid, because it is the only buyers window trending the right way. And every
+Display change was applied while `sd-engine.ts` is still absent from production, so the channel has
+no kill rule and no bid rules behind it until PR #2 merges.
+
+**Status.** Four commits pushed, none merged. 406 tests green, typecheck clean. On the live account:
+40 of 42 Display ads reversed, 15 non-performing audiences paused, 16 survivors re-bid to $0.10, and
+zero ads now point at out-of-stock products. Nothing written to Sponsored Products or Brands.
+
+**Corrections.** Eight, six of them William's. He never asked for a percentage bid step and the file
+header wrongly credited one to his spec. My proposed 3-click minimum on raising would have blocked
+every raise in the system, since a word eligible for a raise has zero clicks by definition. I argued
+against Canada from a 90-day window that measured a suspension rather than demand. I reported
+Sponsored Products figures as though they were the account. And two instrument faults surfaced that
+had been producing confident wrong answers for weeks: `kw_bid_history` has silently rejected every
+write since it was created, because the engine INSERTs `roas_before` into a column named
+`acos_before`, which is why the turn-around rule has never once fired; and the SP-API all-orders
+report ignores its `marketplaceIds` parameter entirely, returning identical US data whatever is
+requested, which nearly produced a report that Canada was trading while it sits deactivated. The
+pattern across all of them is the same one as yesterday: the log said fine, and the data said
+otherwise.
