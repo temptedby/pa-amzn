@@ -43,6 +43,7 @@
 // something that will claw back the 0.87x lifetime loss on its own.
 
 import { db } from "@/lib/db/client";
+import { recordBidRun, type LedgerObservation } from "./bid-ledger";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
 import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
@@ -253,9 +254,18 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   }
   const bidPlan = planBids(candidates);
   out.bidPlan = bidPlan;
+  const obs: LedgerObservation[] = candidates.map((c) => ({
+    entityId: c.id, label: c.label, bid: c.bid ?? 0,
+    counters: { spend: c.spend, sales: c.sales, orders: c.orders, clicks: c.clicks, impressions: c.impressions ?? 0 },
+  }));
+  const ledgerMonth = monthStart.slice(0, 7);
   if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
   if (bidPlan.escalated.length) {
     out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Display target(s) are at their approved ceiling and still not spending`);
+  }
+  if (!dryRun && !bidPlan.moves.length) {
+    try { await recordBidRun("SPONSORED_DISPLAY", ledgerMonth, obs, new Map()); }
+    catch (e) { out.errors.push(`sd ledger: ${e instanceof Error ? e.message : String(e)}`); }
   }
   if (!dryRun && bidPlan.moves.length) {
     try {
@@ -264,6 +274,11 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
       const itemsB = Array.isArray(rb.json) ? rb.json as { targetId?: number; code?: string }[] : [];
       const okIds = new Set(itemsB.filter((i) => String(i.code ?? "").toUpperCase() === "SUCCESS").map((i) => String(i.targetId)));
       out.bidsApplied = okIds.size;
+      // only bids Amazon ACCEPTED enter the history
+      const acceptedSd = new Map(bidPlan.moves.filter((mv) => okIds.has(mv.id))
+        .map((mv) => [mv.id, { fromBid: mv.fromBid, toBid: mv.toBid, direction: mv.direction, reason: mv.reason }]));
+      try { await recordBidRun("SPONSORED_DISPLAY", ledgerMonth, obs, acceptedSd); }
+      catch (e) { out.errors.push(`sd ledger: ${e instanceof Error ? e.message : String(e)}`); }
       if (!rb.ok) out.errors.push(`sd bids: HTTP ${rb.status} ${rb.text.slice(0, 160)}`);
       const refusedB = bidPlan.moves.length - okIds.size;
       if (refusedB) out.errors.push(`sd bids: ${refusedB}/${bidPlan.moves.length} refused`);

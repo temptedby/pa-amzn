@@ -1,5 +1,6 @@
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
+import { recordBidRun, type LedgerObservation } from "./bid-ledger";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
@@ -654,8 +655,21 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   // never cuts at or below one of these. See ensureBidMemory() for why this table exists.
   const floors = await foundFloors(month);
   const restoredFloors: { keywordId: string; bid: number }[] = [];
+  // Every ENABLED keyword we have numbers for, whether or not its bid moves this run. The ledger
+  // needs the ones that did NOT move as much as the ones that did — a bid level only reveals what
+  // it produced by being observed while it sits there.
+  const ledgerObs: LedgerObservation[] = [];
   for (const r of kt) {
     const k = byId.get(String(r.keywordId)); if (!k || k.state !== "ENABLED") continue;
+    ledgerObs.push({
+      entityId: String(k.keywordId), label: k.keywordText, matchType: k.matchType,
+      bid: k.bid || NEW_KW_BID,
+      counters: {
+        spend: r.cost ?? 0, sales: r.sales14d ?? 0, orders: r.purchases14d ?? 0,
+        clicks: (r as { clicks?: number }).clicks ?? 0,
+        impressions: (r as { impressions?: number }).impressions ?? 0,
+      },
+    });
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
     if (killIds.has(String(k.keywordId))) continue;   // paused this run; no bid decision on a dead word
     {
@@ -699,6 +713,13 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         impressionsBefore: ev?.impressions ?? 0, clicksBefore: ev?.clicks ?? 0, salesBefore: ev?.sales ?? 0,
       });
     }
+  }
+  // Observe every bid level even when nothing moved this run. A level only reveals what it
+  // produced by being watched while it sits there, so the runs that change nothing are the ones
+  // that fill the history in.
+  if (!dryRun && !bidOps.length && ledgerObs.length) {
+    try { await recordBidRun("SPONSORED_PRODUCTS", month, ledgerObs, new Map()); }
+    catch (e) { out.errors.push("bid ledger: " + (e instanceof Error ? e.message : String(e))); }
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
   if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_HOURS}h`);
@@ -787,6 +808,18 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         const o = parseBulkOutcome(r.json, bidOps.length);
         applied.bid = o.succeededIdx.size === bidOps.length;
         note("bid", o, bidOps.length);
+        // The epoch ledger: only the bids Amazon ACCEPTED become history.
+        try {
+          const acceptedSp = new Map<string, { fromBid: number; toBid: number; direction: "up" | "down"; reason: string }>();
+          for (const i of o.succeededIdx) {
+            const b = out.bids[i]; if (!b || !b.keywordId) continue;
+            acceptedSp.set(b.keywordId, {
+              fromBid: b.from ?? 0, toBid: b.to,
+              direction: b.to > (b.from ?? 0) ? "up" : "down", reason: b.reason ?? "",
+            });
+          }
+          await recordBidRun("SPONSORED_PRODUCTS", month, ledgerObs, acceptedSp);
+        } catch (e) { out.errors.push("bid ledger: " + (e instanceof Error ? e.message : String(e))); }
         // Record ONLY the changes Amazon accepted. A refused write that entered the history would
         // start a cooldown on a bid that never moved, and would later be judged as if it had.
         const at = new Date().toISOString();

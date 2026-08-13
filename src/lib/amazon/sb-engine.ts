@@ -23,6 +23,7 @@
 //     while never existing. Only ids Amazon returned SUCCESS for are logged as killed.
 
 import { db } from "@/lib/db/client";
+import { recordBidRun, type LedgerObservation } from "./bid-ledger";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import {
   accountDay, fetchSbKeywordDay, fetchSbKeywords, fetchSbCampaigns, writeSbKeywords,
@@ -208,9 +209,17 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
   }
   const bidPlan = planBids(candidates);
   out.bidPlan = bidPlan;
+  const obs: LedgerObservation[] = candidates.map((c) => ({
+    entityId: c.id, label: c.label, bid: c.bid ?? 0,
+    counters: { spend: c.spend, sales: c.sales, orders: c.orders, clicks: c.clicks, impressions: c.impressions ?? 0 },
+  }));
   if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
   if (bidPlan.escalated.length) {
     out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Brands keyword(s) are at their approved ceiling and still not spending`);
+  }
+  if (!dryRun && !bidPlan.moves.length) {
+    try { await recordBidRun("SPONSORED_BRANDS", out.month, obs, new Map()); }
+    catch (e) { out.errors.push(`sb ledger: ${e instanceof Error ? e.message : String(e)}`); }
   }
   if (!dryRun && bidPlan.moves.length) {
     try {
@@ -219,6 +228,11 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
       })));
       out.bidsApplied = w.succeeded.length;
       if (w.failed.length) out.errors.push(`sb bids: ${w.failed.length}/${bidPlan.moves.length} refused (${w.status})`);
+      // history records only the bids Amazon ACCEPTED — a refused write never happened
+      const acceptedSb = new Map(bidPlan.moves.filter((mv) => w.succeeded.includes(mv.id))
+        .map((mv) => [mv.id, { fromBid: mv.fromBid, toBid: mv.toBid, direction: mv.direction, reason: mv.reason }]));
+      try { await recordBidRun("SPONSORED_BRANDS", out.month, obs, acceptedSb); }
+      catch (e) { out.errors.push(`sb ledger: ${e instanceof Error ? e.message : String(e)}`); }
       const runAtB = new Date().toISOString();
       for (const mv of bidPlan.moves) {
         // applied reflects Amazon's own per-item verdict, never the fact that we asked.
