@@ -863,13 +863,21 @@ export function roasTrend(
 export function trendVerdict(
   now: number | null,
   before: number | null | undefined,
-  clicksInCurrentWindow: number,
-  minClicks = SEARCH_MIN_CLICKS,
+  _clicksInCurrentWindow?: number,
+  _minClicks = SEARCH_MIN_CLICKS,
 ): "raise" | "cut" | "hold" {
   const t = roasTrend(now, before);
   if (t === "unknown") return "hold";
   if (t === "falling") return "cut";                              // cutting never needs permission
-  return clicksInCurrentWindow >= minClicks ? "raise" : "hold";   // raising must be earned
+  // NO MINIMUM-CLICK GATE. William 2026-08-13: "no 3 click min".
+  //
+  // I had proposed one, and his other rule the same day makes it not merely redundant but WRONG.
+  // "only raise bid if word is not spending" means every word eligible for a raise has zero clicks
+  // by definition, so a 3-click minimum on raising would block every raise there is and freeze the
+  // ladder at the floor — the exact trap 1,660 keywords are already sitting in. The guard against
+  // buying on a lucky click is now the spending rule in searchStep, which is a better one because
+  // it needs no threshold at all.
+  return "raise";
 }
 
 export interface BidChange {
@@ -980,7 +988,23 @@ export function searchStep(
   // the $0.59 market CPC. A flat dime gets there in five. Arithmetic is in whole cents throughout,
   // because comparing dollars as floats made $0.10 -> $0.11 read as "no change" and pinned every
   // floored keyword at exactly the floor this rule exists to escape.
+  // WILLIAM 2026-08-13, and it is absolute: "do not raise bid if the word is spending", "only
+  // raise bid if word is not spending".
+  //
+  // Enforced HERE, inside move(), rather than at each call site, so it covers every path that
+  // exists now and every one added later — including the turn-around, which reverses direction and
+  // could otherwise raise a spending word without any branch above looking like a "raise".
+  //
+  // The logic is his and it is sound: a bid only buys ENTRY to the auction. Once a word is spending
+  // it is already in, so raising cannot buy anything the word does not already have — it can only
+  // pay more for the same click. Raising is therefore a tool for exactly one job, getting a silent
+  // word into the auction, and this is the line that keeps it to that job.
+  const isSpending = (since?.spend ?? 0) > 0 || (since?.clicks ?? 0) > 0;
+
   const move = (dir: "up" | "down", reason: string, thisStep: number = step): SearchStep => {
+    if (dir === "up" && isSpending) {
+      return { bid: null, reason: `${reason} — but it IS spending, and a spending word is never raised` };
+    }
     const stepC = Math.round(thisStep * 100), baseC = Math.round(base * 100);
     const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);
     const ceilC = Math.round(ceiling * 100);

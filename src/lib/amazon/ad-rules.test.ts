@@ -673,17 +673,29 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
       impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
     };
 
-    it("turns round and climbs two cents when a cut cost impressions", () => {
+    // SUPERSEDED 2026-08-13. These two used to assert the turn-around climbing back up while the
+    // word was still spending. William: "do not raise bid if the word is spending", "only raise
+    // bid if word is not spending". His newer rule wins, and it is deliberately absolute — the
+    // guard sits inside move() precisely so the turn-around cannot route around it. What the
+    // turn-around still does is reverse a cut on a word that has gone SILENT, which is the case it
+    // was written for on 08-10 ("less impressions less sales then we start to go the other way").
+    it("will NOT climb back while the word is still spending", () => {
       const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut);
+      expect(v.bid).toBeNull();
+      expect(v.reason).toMatch(/never raised/);
+    });
+
+    it("will NOT climb back on lost sales either, while it is still spending", () => {
+      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut);
+      expect(v.bid).toBeNull();
+      expect(v.reason).toMatch(/never raised/);
+    });
+
+    it("DOES turn round once the cut has silenced the word — the case it was built for", () => {
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, cut);
       expect(v.bid).toBe(0.50);
       if (v.bid !== null) expect(v.direction).toBe("up");
       expect(v.reason).toMatch(/turning round little by little/);
-    });
-
-    it("turns round when a cut cost sales, even with impressions holding up", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut);
-      expect(v.bid).toBe(0.50);
-      if (v.bid !== null) expect(v.direction).toBe("up");
     });
 
     it("keeps cutting while the cut is NOT hurting — better on both counts", () => {
@@ -914,8 +926,9 @@ describe("blendedRoas", () => {
     const b = blendedRoas(W(0.9, 9.49, 1), W(25.81, 41.96, 60), { k: BLEND_K })!;
     expect(b).toBeGreaterThan(3);
     expect(roasTrend(b, 1.63)).toBe("rising");
-    // ...and this is the rule that actually refuses the raise:
-    expect(trendVerdict(b, 1.63, 1)).toBe("hold");
+    // ...and this is the rule that actually refuses the raise — it is spending:
+    const rr = searchStep(0.89, { spend: 0.9, sales: 9.49, orders: 1, clicks: 1, impressions: 40 });
+    if (rr.bid !== null) expect(rr.direction).not.toBe("up");
   });
 });
 
@@ -929,15 +942,14 @@ describe("roasTrend", () => {
 });
 
 
-describe("trendVerdict — raising is earned, cutting never needs permission", () => {
-  it("refuses to raise on a window too thin to read", () => {
-    expect(trendVerdict(5, 2, 0)).toBe("hold");
-    expect(trendVerdict(5, 2, 1)).toBe("hold");
-    expect(trendVerdict(5, 2, 2)).toBe("hold");
+describe("trendVerdict — no click minimum (William 2026-08-13: \"no 3 click min\")", () => {
+  it("reads a rising signal as rising however thin the window", () => {
+    for (const clicks of [0, 1, 2, 3, 50]) expect(trendVerdict(5, 2, clicks)).toBe("raise");
   });
-  it("raises once the current window has earned it", () => {
-    expect(trendVerdict(5, 2, 3)).toBe("raise");
-    expect(trendVerdict(2.1, 2, 20)).toBe("raise");
+  it("the guard against a lucky click is the spending rule, not a click count", () => {
+    // searchStep is where that raise is actually refused, if the word is spending.
+    const r = searchStep(0.5, { spend: 0.9, sales: 9.49, orders: 1, clicks: 1, impressions: 40 });
+    if (r.bid !== null) expect(r.direction).not.toBe("up");
   });
   it("cuts on a falling signal however thin the window, because cutting spends less", () => {
     for (const clicks of [0, 1, 2, 3, 50]) expect(trendVerdict(1.2, 2, clicks)).toBe("cut");
@@ -969,16 +981,59 @@ describe("the shipped split — William 2026-08-13: 30% for 7 days, 70% for now"
     expect(shrunk).toBeLessThan(fixed);                   // 25% weight vs 70%
   });
 
-  it("the minimum-clicks guard on RAISING still stands under the fixed split", () => {
-    // 70/30 on one click reads high; trendVerdict is what refuses to buy on it.
+  it("one lucky click still reads high — and the SPENDING rule is what refuses it", () => {
     const b = blendedRoas(W(0.9, 9.49, 1), W(25.81, 41.96, 60))!;
-    expect(b).toBeGreaterThan(1.63);          // the number says "rising"
-    expect(trendVerdict(b, 1.63, 1)).toBe("hold");   // the rule still says "do not raise"
-    expect(trendVerdict(b, 1.63, 3)).toBe("raise");  // ...until the window earns it
+    expect(b).toBeGreaterThan(1.63);                 // the number says "rising"
+    expect(trendVerdict(b, 1.63, 1)).toBe("raise");  // and the trend agrees
+    // ...but the word is spending, so no raise reaches the account:
+    const r = searchStep(0.89, { spend: 0.9, sales: 9.49, orders: 1, clicks: 1, impressions: 40 });
+    if (r.bid !== null) expect(r.direction).not.toBe("up");
   });
 
   it("cutting still needs no permission, which is what stops overspend", () => {
     const b = blendedRoas(W(10, 5, 2), W(100, 120, 200))!;  // current 0.5x drags the blend down
     expect(trendVerdict(b, 1.20, 2)).toBe("cut");
+  });
+});
+
+describe("a spending word is NEVER raised (William 2026-08-13)", () => {
+  const since = (o: Partial<SinceChange>): SinceChange =>
+    ({ spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
+
+  it("a word with clicks was never on a raise path anyway — it is cut", () => {
+    const r = searchStep(0.40, since({ spend: 0.55, clicks: 2, impressions: 90 }));
+    expect(r.bid).not.toBeNull();
+    if (r.bid !== null) expect(r.direction).toBe("down");
+  });
+
+  it("still raises a genuinely silent word — that is the one job raising has", () => {
+    const r = searchStep(0.40, since({ spend: 0, clicks: 0, impressions: 0 }));
+    expect(r).toMatchObject({ bid: 0.5, direction: "up" });
+  });
+
+  it("a word shown but never clicked is not spending, so it may still climb", () => {
+    const r = searchStep(0.40, since({ spend: 0, clicks: 0, impressions: 900 }));
+    expect(r).toMatchObject({ direction: "up" });
+  });
+
+  it("the TURN-AROUND cannot sneak a raise past the rule on a spending word", () => {
+    // A cut that made things worse would normally reverse upward. It may not, if the word spends.
+    const last = { changedAt: "2026-08-12T00:00:00Z", fromBid: 0.6, toBid: 0.5, roasBefore: 2,
+                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19 };
+    const r = searchStep(0.5, since({ spend: 1.2, clicks: 3, impressions: 200, sales: 0 }), last);
+    expect(r.bid).toBeNull();
+    expect(r.reason).toMatch(/never raised/);
+  });
+
+  it("but the turn-around still reverses upward when the word HAS gone silent", () => {
+    const last = { changedAt: "2026-08-12T00:00:00Z", fromBid: 0.6, toBid: 0.5, roasBefore: 2,
+                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19 };
+    const r = searchStep(0.5, since({ spend: 0, clicks: 0, impressions: 0, sales: 0 }), last);
+    expect(r).toMatchObject({ direction: "up" });
+  });
+
+  it("cutting a spending word is untouched — only the up direction is barred", () => {
+    const r = searchStep(0.60, since({ spend: 4, sales: 2, clicks: 6, impressions: 300 }));
+    expect(r).toMatchObject({ direction: "down" });
   });
 });
