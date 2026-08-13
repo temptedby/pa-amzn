@@ -7,9 +7,14 @@
 //         brings back any that recovered. A profitable term (ACOS < 52%) is never killed on spend
 //         alone, so winners are protected.
 //
-//   BID:  step ±10% per run around the 52% pivot. Below the pivot -> raise to buy share; at/above
-//         -> lower. Bounded to [FLOOR, CAP], whole cents. No ACOS signal yet and below the kill
-//         bar -> hold the bid unchanged.
+//   BID:  step ±$0.10 FLAT per run around the 52% pivot. Below the pivot -> raise to buy share;
+//         at/above -> lower. Bounded to [FLOOR, CAP], whole cents. No ACOS signal yet and below
+//         the kill bar -> hold the bid unchanged.
+//
+//         CORRECTION 2026-08-13: this line used to read "±10%" and to sit under a header
+//         attributing the whole file to William's 2026-08-02 spec. He never asked for a
+//         percentage — "i never said percentage" (2026-08-13). The percentage was mine. Both his
+//         actual instructions on step size say a flat dime, on 2026-08-07 and again on 08-13.
 //
 //   HARVEST: a search term that CONVERTS is added as PHRASE + EXACT into the ad group it converted
 //         in, then lives under the kill rule. Amazon caps keyword text at 80 chars / 10 words, so
@@ -27,7 +32,26 @@ export const KILL_SPEND = 4;      // $ month-to-date before the kill bar applies
 // - $1.42 referral - $2.52 FBA = $4.93 contribution; 4.93/9.49 = 0.519. At or above it we lose money.
 // William 2026-08-02 chose the true break-even over a rounded 50%/55%.
 export const ACOS_PIVOT = 0.52;
-export const BID_STEP = 0.10;     // ±10% per run (replaces the old ±25% convergence)
+// The line a CONVERTING word is switched off at (William 2026-08-13: "once they're below 1x, we got
+// to turn them off"). Deliberately NOT the 1.923x break-even: between 1x and break-even the word is
+// losing money but still returning cash, and William's instruction is to cut its bid and try to
+// recover it rather than pause it. Below 1x the ads cost more than the sales they produced and no
+// bid fixes that. Kept separate from ACOS_PIVOT, which still steers the direction of the bid step.
+export const KILL_MIN_ROAS = 1.0;
+// A FLAT TEN CENTS per run, in BOTH directions. William asked for this on 2026-08-07 ("i asked
+// raising by .10 not 10%") and again on 2026-08-13 for the cut: "dont lower 10% just .10 because
+// 10% will drop quick and the word might not have that much search in that time".
+//
+// His reasoning is about evidence, not arithmetic, and it is right. A percentage step is
+// proportional to the bid but the EVIDENCE is not: this account takes about 12 clicks a day in
+// total, so every bid level needs roughly the same amount of time to prove itself whatever the bid
+// happens to be. A 10% cut off $2.50 is 25 cents and blows through two and a half rungs before the
+// word has had the searches to show what the last rung did. A flat dime moves at one speed, so
+// every level gets the same look.
+//
+// This matches BID_SEARCH_STEP, which the newer searchStep() has always used. The two paths now
+// agree instead of quietly disagreeing.
+export const BID_STEP = 0.10;     // FLAT DOLLARS per run, not a percentage
 export const BID_FLOOR = 0.10;
 export const BID_CAP = 2.50;
 
@@ -97,6 +121,40 @@ export const LADDER_STEP_DAYS = 0;     // 0 = every run earns the next rung (6-h
 export const BID_CONFIRM_CEILING = 0.85;
 export const BID_LADDER_MAX = BID_CONFIRM_CEILING;   // same line, under the name the ladder reads
 
+/**
+ * THE APPROVAL GATES (William 2026-08-13).
+ *
+ * $0.85 was never meant to be where a keyword stops for good, only where the engine stops deciding
+ * alone. William set out the full staircase:
+ *
+ *   "all the way up to 85 cents ... then you ping me ... you say, hey, these words are at 85 cents,
+ *    they have this many impressions, they have this many clicks. Do you want to raise the bid past
+ *    85 cents and continue to do another 10 cents every six hours to $1[.85] ... then you'll ping me
+ *    after the bids are at $1.85 ... Do you want to raise them to 285"
+ *
+ * So a silent keyword climbs a dime per run to the next gate, stops, and the engine reports what
+ * that money bought — impressions, clicks, spend — so the decision is made on evidence rather than
+ * on a bid number. Each gate is $1.00 above the last, which is ten runs, about two and a half days.
+ *
+ * A gate is only ever crossed by a human. Nothing here raises a keyword past its approved ceiling.
+ */
+export const LADDER_GATES = [0.85, 1.85, 2.85] as const;
+
+/** The gate a keyword is climbing towards, given the highest one already approved for it. */
+export function nextGate(approvedCeiling: number, gates: readonly number[] = LADDER_GATES): number | null {
+  const c = Math.round(approvedCeiling * 100);
+  for (const g of gates) if (Math.round(g * 100) > c) return g;
+  return null;   // past the last gate — the staircase has no more rungs to offer
+}
+
+/** The ceiling a keyword may climb to right now. Defaults to the first gate for a keyword nobody
+ *  has ruled on yet, which is the $0.85 line that has been in force since 2026-08-08. */
+export function activeCeiling(approvedCeiling?: number | null, gates: readonly number[] = LADDER_GATES): number {
+  const first = gates[0];
+  if (approvedCeiling == null || !Number.isFinite(approvedCeiling)) return first;
+  return Math.max(first, approvedCeiling);
+}
+
 export interface Perf {
   spend: number;   // month-to-date cost, $
   orders: number;  // attributed units/orders
@@ -111,15 +169,57 @@ export function acosOf(p: Perf): number | null {
   return p.orders > 0 && p.sales > 0 ? p.spend / p.sales : null;
 }
 
-/** KILL verdict: $4+ month-to-date AND not profitable (no sale, or ACOS >= pivot). */
-export function shouldKill(p: Perf, killSpend = KILL_SPEND, pivot = ACOS_PIVOT): boolean {
+/**
+ * KILL verdict: $4+ month-to-date AND either it never converted, or it converted so badly that the
+ * ads cost more than the sales they produced.
+ *
+ * REVISED 2026-08-13 on William's instruction, and it NARROWS what gets switched off. Recording the
+ * change rather than editing the old comment away, because the previous line was also his.
+ *
+ * The old rule paused anything at or above the 52% break-even ACOS, i.e. below 1.923x ROAS. That is
+ * what took `retractable phone tether` PHRASE off the account on 11 August at 1.63x, holding $41.96
+ * of the month's $96.41 in sales — the biggest earner in the account, switched off for being
+ * unprofitable rather than being made cheaper.
+ *
+ * William 2026-08-13, in his words:
+ *
+ *   "once they're below 1x, we got to turn them off"
+ *   "if the word stops converting need to lower the bid but yeah a 1.63 we need to attempt to lower
+ *    the keyword bid before turning off please"
+ *
+ * So a word converting at 1.0x or better is NOT killed on spend. It is too expensive, not
+ * worthless, and too expensive is a bid problem. The bid rules already own it and already cut it:
+ * nextBid() steps it down $0.10 a run above the pivot, searchStep() steps it down $0.10 a run
+ * below 2x. This function simply stops overruling them with a pause.
+ *
+ * The exit still exists, it just runs through the bid now. A word being cut every 6 hours either
+ * recovers as the cheaper clicks lift its ROAS, or keeps failing and falls under 1.0x, where this
+ * rule takes it off. Below 1x we get back less cash than the ads cost, before a penny of product
+ * cost, so there is nothing left for a cheaper bid to rescue.
+ *
+ * `orders === 0` is untouched and still an immediate kill: a word with no conversion at all has
+ * never proved it can work, so there is no bid at which it is known to be worth buying.
+ *
+ * NO FLAPPING, still by arithmetic rather than a timer. This kills below 1.0x; REVIVE_MIN_ROAS
+ * brings a word back at 2.0x. The 1.0x-2.0x band is dead space owned by the bid rules, and it is
+ * WIDER than the 1.923x-2.0x band it replaces, so that guarantee is stronger than before.
+ */
+export function shouldKill(
+  p: Perf,
+  killSpend = KILL_SPEND,
+  _pivot = ACOS_PIVOT,
+  killMinRoas = KILL_MIN_ROAS,
+): boolean {
   if (p.spend < killSpend) return false;
-  const acos = acosOf(p);
-  return acos === null || acos >= pivot;
+  if (p.orders <= 0 || p.sales <= 0) return true;   // never converted — no bid rescues that
+  return p.sales / p.spend < killMinRoas;           // converted, but below 1x — off
 }
 
-/** ±step bid at the pivot. Below pivot raise, at/above lower; hold if no ACOS signal.
- *  Always returns a whole-cent bid within [floor, cap]. */
+/** ±$0.10 flat at the pivot. Below pivot raise, at/above lower; hold if no ACOS signal.
+ *  Always returns a whole-cent bid within [floor, cap].
+ *
+ *  Arithmetic is done in whole CENTS. Comparing dollars as floats is what made $0.10 -> $0.11 read
+ *  as "no change" and pinned floored keywords at exactly the floor the rule exists to escape. */
 export function nextBid(
   currentBid: number,
   p: Perf,
@@ -132,8 +232,10 @@ export function nextBid(
   const base = currentBid > 0 ? currentBid : floor;
   const acos = acosOf(p);
   if (acos === null) return round2(clamp(base, floor, cap)); // no signal -> hold
-  const raw = acos < pivot ? base * (1 + step) : base * (1 - step);
-  return round2(clamp(raw, floor, cap));
+  const stepC = Math.round(step * 100), baseC = Math.round(base * 100);
+  const wantC = acos < pivot ? baseC + stepC : baseC - stepC;
+  const bidC = Math.max(Math.round(floor * 100), Math.min(Math.round(cap * 100), wantC));
+  return bidC / 100;
 }
 
 export type Verdict =
@@ -141,7 +243,7 @@ export type Verdict =
   | { action: "bid"; bid: number }
   | { action: "hold" };
 
-/** Single decision for one ENABLED entity: kill first, else a ±10% bid step, else hold. */
+/** Single decision for one ENABLED entity: kill first, else a flat ±$0.10 bid step, else hold. */
 export function decide(
   currentBid: number,
   p: Perf,
@@ -396,7 +498,7 @@ export function selectReintroductions(
  * Is a reintroduced keyword still inside its protection window?
  *
  * Sales are attributed over 14 days, so a word promoted on Monday cannot be fairly judged until the
- * Monday after next. The ±10% cut at the 52% pivot judges month-to-date, sees zero orders because
+ * Monday after next. The cut at the 52% pivot judges month-to-date, sees zero orders because
  * the orders have not been attributed yet, and cuts. Repeat that four times a day and the word is
  * back at the floor inside a week — which is exactly the history in ad_engine_log for
  * `phone tethered`: 0.49 -> 0.94 -> 0.35 over six days.
@@ -454,19 +556,37 @@ export function nextLadderBid(
  */
 export type LadderVerdict =
   | { action: "raise"; bid: number }
-  | { action: "escalate"; bid: number }   // at the ceiling, still not spending: ask William
+  /** At the ceiling and still not spending: ask William. `wouldBe` is the gate it would climb to
+   *  next if he says yes, and `evidence` is what the money has bought so far — he asked to be told
+   *  impressions and clicks at each gate, not just the bid. */
+  | { action: "escalate"; bid: number; wouldBe?: number | null; evidence?: LadderEvidence }
   | { action: "hold" };
+
+/** What a keyword sitting at a gate has to show for itself. */
+export interface LadderEvidence { impressions: number; clicks: number; spend: number }
 
 export function ladderVerdict(
   s: LadderState,
-  opts: { stepDays?: number; step?: number; max?: number } = {},
+  opts: {
+    stepDays?: number; step?: number; max?: number;
+    /** The highest gate a human has approved for THIS keyword. Absent = nobody has ruled, so the
+     *  $0.85 gate applies, exactly as it has since 2026-08-08. */
+    approvedCeiling?: number | null;
+    gates?: readonly number[];
+    /** What this keyword has bought so far, reported to William when it stops at a gate. */
+    evidence?: LadderEvidence;
+  } = {},
 ): LadderVerdict {
   const stepDays = opts.stepDays ?? LADDER_STEP_DAYS;
-  const max = opts.max ?? BID_LADDER_MAX;
+  const gates = opts.gates ?? LADDER_GATES;
+  // An explicit `max` still wins, so every existing caller and test behaves exactly as before.
+  const max = opts.max ?? activeCeiling(opts.approvedCeiling, gates);
   if (s.spendSinceStep > 0) return { action: "hold" };        // spending, the ACOS rule owns it
-  if (s.daysSinceStep < stepDays) return { action: "hold" };  // still waiting out the day
-  if (s.bid >= max - 0.005) return { action: "escalate", bid: s.bid };
-  const next = nextLadderBid(s, opts);
+  if (s.daysSinceStep < stepDays) return { action: "hold" };  // still waiting out the rung
+  if (s.bid >= max - 0.005) {
+    return { action: "escalate", bid: s.bid, wouldBe: nextGate(max, gates), evidence: opts.evidence };
+  }
+  const next = nextLadderBid(s, { ...opts, max });
   return next === null ? { action: "hold" } : { action: "raise", bid: next };
 }
 
@@ -552,7 +672,7 @@ export function isNextMonth(a: string, b: string): boolean {
 //  keywords that are not, but that are doing worse than they were doing before when we increased
 //  the bids."
 //
-// Until now the engine had NO memory. It read current ACOS, moved 10%, and forgot. Running every 6
+// Until now the engine had NO memory. It read current ACOS, moved the bid, and forgot. Every 6
 // hours that is four compounding moves a day with nothing ever checking whether a move worked:
 // `retractable phone holder belt clip` climbed $0.82 -> $1.45 in four days, and `phone tethered`
 // went 0.49 -> 0.94 -> 0.35 in six. Neither climb was ever evaluated.
@@ -614,6 +734,143 @@ export const SEARCH_MIN_CLICKS = 3;
 // Break-even is 1.92x on real fees ($9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA), so 2x is
 // break-even plus a thin margin — deliberately not a target that only a floored bid could hit.
 export const TARGET_ROAS = 2.0;
+
+// ---------------------------------------------------------------------------
+// THE BLENDED ROAS SIGNAL (William 2026-08-13)
+// ---------------------------------------------------------------------------
+//
+// William: "have a combination of a trailing window and a current window. And that way we don't
+// overspend too much. So maybe give a weight to the current window of like 70% and then the
+// trailing attribution at 30%."
+//
+// The shape is his and it is right. The one amendment, from the research in
+// confabulator/RBB-bid-signal-window-2026-08-13.md, is that the 70% has to be EARNED.
+//
+// Blending a noisy recent estimate with a stabler long-run one is empirical Bayes shrinkage, which
+// is standard for sparse advertising data (Dynamic Hierarchical Empirical Bayes, arXiv:1809.02213).
+// Its central result is that the weight on the recent window should scale with how much evidence
+// that window holds, because noisier estimates must be shrunk harder. A FIXED 70% does the opposite:
+// it puts 70% of the decision on a single click.
+//
+// That matters here more than almost anywhere. Live pull 2026-08-01..08-13: 152 clicks in 13 days
+// across 2,279 enabled keywords, about 11.7 a day for the whole account. Published practice is that
+// a keyword needs 20-30 clicks a DAY to be judged inside two weeks. A 6-hour window on one of our
+// keywords holds 0 to 3 clicks, and one $9.49 order takes it from 0.00x to 10x.
+//
+// So the weight is a function of clicks, tuned so that William's 70/30 is exactly what comes out at
+// the volume where a ROAS reading stops being one order wide:
+//
+//     clicks   weight on the current window
+//        0        0%     no evidence — do not move on it
+//        1       25%
+//        3       50%
+//        7       70%     <- his number, at the volume that earns it
+//       20       87%
+//
+// His CADENCE is untouched. The engine still decides every 6 hours. Only the ruler changes.
+//
+// ROLLBACK: BLEND_K = 0 collapses this to the pure current window (today's behaviour). Passing a
+// fixed `weight` collapses it to his literal 70/30. Both are one line, no data migration.
+export const BLEND_K = 3;
+
+// WILLIAM'S DECISION, 2026-08-13: "ok so 30% for 7 days and 70% for now".
+//
+// He was shown the evidence-weighted alternative above and chose the fixed split. That is his call
+// and it is what ships. The evidence weighting stays in the file as `currentWeight`, reachable by
+// passing `{ k }` instead of a weight, so switching to it later is one argument.
+//
+// What the fixed split does NOT do, said plainly because it was measured rather than argued: at one
+// click it still puts 70% of the decision on a single order, and a 1-click window showing one
+// $9.49 sale reads 10.5x. See the test "the blend ALONE does not save the real keyword". The guard
+// that actually stops that is trendVerdict()'s minimum-clicks rule on RAISING, further down. The
+// two are independent: this constant sets how the number is computed, that one sets when we are
+// allowed to act on it.
+export const BLEND_WEIGHT_CURRENT = 0.70;
+
+// The trailing window, in days. William 2026-08-13 set it to 7, matching Amazon's Sponsored
+// Products click-attribution window for a 3P Seller Central account — which ours is, confirmed by
+// a live /v2/profiles read returning `accountType: seller`. Most of this repo still reads
+// `sales14d`, which is the Vendor Central figure; that mismatch is tracked separately.
+export const TRAILING_WINDOW_DAYS = 7;
+
+/** How much of the decision the current window has earned, 0..1. */
+export function currentWeight(clicksInCurrentWindow: number, k = BLEND_K): number {
+  const c = Math.max(0, clicksInCurrentWindow || 0);
+  if (k <= 0) return 1;                       // rollback path: trust the current window entirely
+  return c / (c + k);
+}
+
+/** One ROAS reading over some window. `clicks` is what earns it weight. */
+export interface RoasWindow { spend: number; sales: number; clicks: number }
+
+const roasOf = (w: RoasWindow): number | null =>
+  w && w.spend > 0 ? w.sales / w.spend : null;
+
+/**
+ * The number the direction rule steers by: the current window and the trailing window blended,
+ * weighted by the evidence the current window actually holds.
+ *
+ * Returns null when NEITHER window has spend to measure — there is no signal, and the caller must
+ * hold rather than invent one. When only one window has spend, that window is the answer, which is
+ * what makes a brand-new keyword behave exactly as the engine does today.
+ */
+export function blendedRoas(
+  current: RoasWindow | null | undefined,
+  trailing: RoasWindow | null | undefined,
+  opts: { k?: number; weight?: number } = {},
+): number | null {
+  const rc = current ? roasOf(current) : null;
+  const rt = trailing ? roasOf(trailing) : null;
+  if (rc === null && rt === null) return null;
+  if (rt === null) return rc;                 // nothing to blend with — new keyword
+  if (rc === null) return rt;                 // current window bought nothing at all
+  // Fixed split by default (William 2026-08-13). Pass `{ k }` to get the evidence-weighted form.
+  const w = opts.weight ?? (opts.k !== undefined ? currentWeight(current!.clicks, opts.k) : BLEND_WEIGHT_CURRENT);
+  return w * rc + (1 - w) * rt;
+}
+
+/** Is the blended signal rising or falling against the last blended reading? "unknown" when we
+ *  cannot tell, which the caller must treat as "hold", never as "falling". */
+export function roasTrend(
+  now: number | null,
+  before: number | null | undefined,
+): "rising" | "falling" | "unknown" {
+  if (now === null || before === null || before === undefined) return "unknown";
+  if (Math.abs(now - before) < 1e-9) return "unknown";   // dead flat is not a trend
+  return now > before ? "rising" : "falling";
+}
+
+/**
+ * THE ASYMMETRY, and it was forced by a test that failed rather than by an opinion.
+ *
+ * Shrinking the weight is not enough on its own. Work the real case: `retractable phone tether`
+ * with one click and one $9.49 order in a 6-hour window reads 10.5x, against a trailing 1.63x. Even
+ * at 25% weight the blend comes out at 3.86x and still reports "rising" — so a pure weighted blend
+ * would STILL have raised the bid on one click, which is the exact move that walked it to $0.89 and
+ * got it killed. Raising k does not fix it either: the ratio is too extreme for any positive weight
+ * to tame.
+ *
+ * The fix is not a bigger shrink, it is recognising that the two directions carry different risk:
+ *
+ *   RAISING  spends more money. It must be EARNED — the current window needs enough clicks to have
+ *            a real reading (SEARCH_MIN_CLICKS), otherwise we are buying on a coin flip.
+ *   CUTTING  spends less money. It needs no such permission, and trailing evidence alone is enough.
+ *
+ * That mirrors the asymmetry William already reasoned to himself on 2026-08-10 about step size:
+ * moving too fast on a working word loses market share that is expensive to re-buy, moving too slow
+ * only costs time. Same logic, applied to whether we may act at all.
+ */
+export function trendVerdict(
+  now: number | null,
+  before: number | null | undefined,
+  clicksInCurrentWindow: number,
+  minClicks = SEARCH_MIN_CLICKS,
+): "raise" | "cut" | "hold" {
+  const t = roasTrend(now, before);
+  if (t === "unknown") return "hold";
+  if (t === "falling") return "cut";                              // cutting never needs permission
+  return clicksInCurrentWindow >= minClicks ? "raise" : "hold";   // raising must be earned
+}
 
 export interface BidChange {
   changedAt: string;

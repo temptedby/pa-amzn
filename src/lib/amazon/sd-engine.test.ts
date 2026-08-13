@@ -17,11 +17,19 @@ describe("Sponsored Display $4 kill — the rule Products and Brands already use
     expect(p.kill[0].acos).toBeNull();
   });
 
-  it("pauses a target past $4 that sells at a LOSS", () => {
-    // $8 spent, $10 back = 80% ACOS, well past the 52% break-even. It converts and still loses.
-    const p = selectSdKills([perf("t1", { spend: 8, orders: 2, sales: 10 })], LIVE, CAMPS);
+  it("pauses a target past $4 that returns less than 1x", () => {
+    // $8 spent, $4 back = 0.5x. The ads cost more than the sales they produced, and no cheaper
+    // bid rescues that. William 2026-08-13 moved this line down from the 1.923x break-even.
+    const p = selectSdKills([perf("t1", { spend: 8, orders: 2, sales: 4 })], LIVE, CAMPS);
     expect(p.kill).toHaveLength(1);
-    expect(p.kill[0].acos).toBe(0.8);
+    expect(p.kill[0].acos).toBe(2);
+  });
+
+  it("SPARES a target between 1x and break-even — it gets its bid cut, not a pause", () => {
+    // $8 -> $10 is 1.25x: losing money against the 1.923x break-even, but still returning cash.
+    // "at a 1.63 we need to attempt to lower the keyword bid before turning off" (William 08-13).
+    const p = selectSdKills([perf("t1", { spend: 8, orders: 2, sales: 10 })], LIVE, CAMPS);
+    expect(p.kill).toHaveLength(0);
   });
 
   it("leaves a PROFITABLE target alone however much it spends, and names it", () => {

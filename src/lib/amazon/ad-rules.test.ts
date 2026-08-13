@@ -5,6 +5,7 @@ import {
   selectReintroductions, REINTRO_PER_DAY, REINTRO_PER_RUN, REINTRO_COHORT_DAILY_CAP,
   isProtected, KILL_SPEND,
   nextLadderBid, ladderVerdict, REINTRO_START_BID, BID_LADDER_MAX, BID_LADDER_STEP,
+  LADDER_GATES, nextGate, activeCeiling,
   isPermanentlyDead, deadKey, shouldRetirePermanently, isNextMonth, type MonthPerf,
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
@@ -22,23 +23,55 @@ describe("shouldKill — $4 MTD + not profitable", () => {
   it("kills at $4 with 0 orders", () => {
     expect(shouldKill({ spend: 4, orders: 0, sales: 0 })).toBe(true);
   });
-  it("kills at $4+ when ACOS is at/above the 52% pivot even WITH orders", () => {
-    expect(shouldKill({ spend: 5, orders: 2, sales: 8 })).toBe(true);    // 62.5% ACOS
-    expect(shouldKill({ spend: 5.2, orders: 2, sales: 10 })).toBe(true); // exactly 52%
+  // William 2026-08-13 moved this line from the 1.923x break-even down to 1.0x: "once they're
+  // below 1x, we got to turn them off", and "at a 1.63 we need to attempt to lower the keyword
+  // bid before turning off". Between 1x and break-even the word is now the bid rules' problem.
+  it("kills at $4+ when a CONVERTING keyword returns less than 1x", () => {
+    expect(shouldKill({ spend: 5, orders: 2, sales: 4.99 })).toBe(true);  // 1.00x on 4.99/5 -> under
+    expect(shouldKill({ spend: 10, orders: 1, sales: 9.49 })).toBe(true); // 0.95x, the real
+                                                                         // `anti theft phone strap`
   });
-  it("PROTECTS a profitable keyword past $4 (ACOS < 52% keeps running)", () => {
-    expect(shouldKill({ spend: 4.5, orders: 3, sales: 20 })).toBe(false); // 22.5% ACOS
-    expect(shouldKill({ spend: 5.1, orders: 2, sales: 10 })).toBe(false); // 51% — just profitable
+  it("does NOT kill a keyword between 1x and break-even — it gets its bid cut instead", () => {
+    // The three words the old rule took off the account on 11 August. All are above 1x.
+    expect(shouldKill({ spend: 25.81, orders: 4, sales: 41.96 })).toBe(false); // 1.63x
+    expect(shouldKill({ spend: 7.55, orders: 1, sales: 9.49 })).toBe(false);   // 1.26x
+    expect(shouldKill({ spend: 9.02, orders: 1, sales: 9.49 })).toBe(false);   // 1.05x
+  });
+  it("kills exactly at the 1x line, not a cent below it", () => {
+    expect(shouldKill({ spend: 10, orders: 1, sales: 10 })).toBe(false);  // exactly 1.00x survives
+    expect(shouldKill({ spend: 10, orders: 1, sales: 9.99 })).toBe(true); // a cent under dies
+  });
+  it("still kills at $4 with 0 orders however the sales field reads", () => {
+    expect(shouldKill({ spend: 4, orders: 0, sales: 0 })).toBe(true);
+    expect(shouldKill({ spend: 4, orders: 0, sales: 50 })).toBe(true); // no order = never proved
+  });
+  it("PROTECTS a profitable keyword past $4", () => {
+    expect(shouldKill({ spend: 4.5, orders: 3, sales: 20 })).toBe(false); // 4.4x
+    expect(shouldKill({ spend: 5.1, orders: 2, sales: 10 })).toBe(false); // 1.96x
+  });
+  // The no-flapping guarantee, restated for the new line. Killing needs < 1.0x, reviving needs
+  // 2.0x, so nothing can be killed and revived by the same numbers. The band is now WIDER.
+  it("cannot flap: nothing is both killable and revivable", () => {
+    for (const roas of [1.0, 1.25, 1.5, 1.63, 1.75, 1.92, 1.99]) {
+      expect(shouldKill({ spend: 10, orders: 1, sales: 10 * roas })).toBe(false);
+      expect(roas >= 2.0).toBe(false);
+    }
   });
 });
 
-describe("nextBid — ±10% at the 52% pivot", () => {
+describe("nextBid — a flat ±$0.10 at the 52% pivot", () => {
   it("raises +10% when ACOS is below 52%", () => {
-    expect(nextBid(1.0, { spend: 2, orders: 2, sales: 10 })).toBe(1.1);  // 20% ACOS
+    expect(nextBid(1.0, { spend: 2, orders: 2, sales: 10 })).toBe(1.1);  // 20% ACOS, +$0.10
     expect(nextBid(1.0, { spend: 5.1, orders: 1, sales: 10 })).toBe(1.1); // 51% — still profitable
   });
-  it("lowers -10% when ACOS is at/above 52%", () => {
-    expect(nextBid(1.0, { spend: 6, orders: 1, sales: 10 })).toBe(0.9);   // 60% ACOS
+  it("cuts a HIGH bid by a dime, not by a proportion (William 2026-08-13)", () => {
+    // The whole point of his correction: 10% off $2.50 is 25 cents and skips three rungs before
+    // the word has had the searches to show what the last rung did.
+    expect(nextBid(2.5, { spend: 6, orders: 1, sales: 10 })).toBe(2.4);
+    expect(nextBid(0.89, { spend: 6, orders: 1, sales: 10 })).toBe(0.79);
+  });
+  it("lowers -$0.10 when ACOS is at/above 52%", () => {
+    expect(nextBid(1.0, { spend: 6, orders: 1, sales: 10 })).toBe(0.9);   // 60% ACOS, -$0.10
     expect(nextBid(1.0, { spend: 5.2, orders: 1, sales: 10 })).toBe(0.9); // exactly 52% -> lower
   });
   it("holds when there is no ACOS signal (0 sales)", () => {
@@ -47,10 +80,10 @@ describe("nextBid — ±10% at the 52% pivot", () => {
   it("clamps to the [0.10, 2.50] band and returns whole cents", () => {
     expect(nextBid(2.5, { spend: 1, orders: 1, sales: 10 })).toBe(2.5);
     expect(nextBid(0.1, { spend: 6, orders: 1, sales: 10 })).toBe(0.1);
-    expect(nextBid(0.37, { spend: 1, orders: 1, sales: 10 })).toBe(0.41);
+    expect(nextBid(0.37, { spend: 1, orders: 1, sales: 10 })).toBe(0.47); // flat dime, not 10%
   });
   it("treats a zero/absent current bid as the floor", () => {
-    expect(nextBid(0, { spend: 1, orders: 1, sales: 10 })).toBe(0.11);
+    expect(nextBid(0, { spend: 1, orders: 1, sales: 10 })).toBe(0.2); // floor $0.10 + a dime
   });
 });
 
@@ -417,6 +450,49 @@ describe("nextLadderBid — climb $0.10/day until it spends, cap $0.85", () => {
   });
 });
 
+describe("LADDER_GATES — the $0.85 / $1.85 / $2.85 staircase (William 2026-08-13)", () => {
+  it("offers the next gate up, and nothing past the last one", () => {
+    expect(nextGate(0.85)).toBe(1.85);
+    expect(nextGate(1.85)).toBe(2.85);
+    expect(nextGate(2.85)).toBeNull();
+  });
+  it("a keyword nobody has ruled on climbs to $0.85 and no further", () => {
+    expect(activeCeiling(null)).toBe(0.85);
+    expect(activeCeiling(undefined)).toBe(0.85);
+    const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 });
+    expect(v).toMatchObject({ action: "escalate", bid: 0.85, wouldBe: 1.85 });
+  });
+  it("once $1.85 is approved it keeps climbing a dime a run, then stops there", () => {
+    // mid-climb: still below the approved ceiling, so it raises
+    expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 }, { approvedCeiling: 1.85 }))
+      .toEqual({ action: "raise", bid: 0.95 });
+    expect(ladderVerdict({ bid: 1.75, spendSinceStep: 0, daysSinceStep: 1 }, { approvedCeiling: 1.85 }))
+      .toEqual({ action: "raise", bid: 1.85 });
+    // at the new gate: stops and asks again, naming $2.85
+    expect(ladderVerdict({ bid: 1.85, spendSinceStep: 0, daysSinceStep: 1 }, { approvedCeiling: 1.85 }))
+      .toMatchObject({ action: "escalate", bid: 1.85, wouldBe: 2.85 });
+  });
+  it("ten runs between gates, which is the two and a half days William costed", () => {
+    let bid = 0.85, runs = 0;
+    while (runs < 50) {
+      const v = ladderVerdict({ bid, spendSinceStep: 0, daysSinceStep: 1 }, { approvedCeiling: 1.85 });
+      if (v.action !== "raise") break;
+      bid = v.bid; runs++;
+    }
+    expect(bid).toBe(1.85);
+    expect(runs).toBe(10);           // 10 runs x 6h = 60h = 2.5 days
+  });
+  it("carries the impressions and clicks William asked to see at the gate", () => {
+    const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 },
+      { evidence: { impressions: 412, clicks: 0, spend: 0 } });
+    expect(v).toMatchObject({ action: "escalate", evidence: { impressions: 412, clicks: 0 } });
+  });
+  it("a keyword that IS spending is never escalated, whatever its bid", () => {
+    expect(ladderVerdict({ bid: 2.85, spendSinceStep: 0.4, daysSinceStep: 9 }, { approvedCeiling: 2.85 }))
+      .toEqual({ action: "hold" });
+  });
+});
+
 describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
   it("raises while below the ceiling", () => {
     expect(ladderVerdict({ bid: 0.45, spendSinceStep: 0, daysSinceStep: 1 }))
@@ -424,7 +500,7 @@ describe("ladderVerdict — $0.85 is an approval gate, not a dead end", () => {
   });
   it("escalates at the ceiling when it still will not spend", () => {
     expect(ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 1 }))
-      .toEqual({ action: "escalate", bid: 0.85 });
+      .toMatchObject({ action: "escalate", bid: 0.85 });
   });
   it("NEVER raises past the ceiling on its own", () => {
     const v = ladderVerdict({ bid: 0.85, spendSinceStep: 0, daysSinceStep: 99 });
@@ -765,5 +841,144 @@ describe("bidWithMemory — cooldown then search", () => {
   });
   it("never blocks a keyword with no history", () => {
     expect(inCooldown(null)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The blended ROAS signal (William 2026-08-13), per RBB-bid-signal-window-2026-08-13.md
+// ---------------------------------------------------------------------------
+import { blendedRoas, currentWeight, roasTrend, trendVerdict, BLEND_K,
+  BLEND_WEIGHT_CURRENT, TRAILING_WINDOW_DAYS } from "./ad-rules";
+
+describe("currentWeight — William's 70/30, earned rather than assumed", () => {
+  it("gives the current window nothing when it holds no clicks", () => {
+    expect(currentWeight(0)).toBe(0);
+  });
+  it("lands on his 70% at 7 clicks, the volume that earns it", () => {
+    expect(currentWeight(7)).toBeCloseTo(0.7, 10);
+  });
+  it("shrinks a one-click window hard, which is the whole point", () => {
+    expect(currentWeight(1)).toBeCloseTo(0.25, 10);
+    expect(currentWeight(3)).toBeCloseTo(0.5, 10);
+    expect(currentWeight(20)).toBeCloseTo(0.87, 2);
+  });
+  it("rises monotonically with evidence and never reaches certainty", () => {
+    let prev = -1;
+    for (const c of [0, 1, 2, 3, 7, 20, 100, 1000]) {
+      const w = currentWeight(c);
+      expect(w).toBeGreaterThan(prev);
+      expect(w).toBeLessThan(1);
+      prev = w;
+    }
+  });
+  it("ROLLBACK: k=0 collapses to today's pure current-window behaviour", () => {
+    expect(currentWeight(0, 0)).toBe(1);
+    expect(currentWeight(99, 0)).toBe(1);
+  });
+});
+
+describe("blendedRoas", () => {
+  const W = (spend: number, sales: number, clicks: number) => ({ spend, sales, clicks });
+
+  it("a single lucky order in a 1-click window barely moves the blend", () => {
+    // current says 10x off one click; trailing 13 days says 1.2x. The old engine would have
+    // raised the bid on the 10x. The blend reads close to the trailing truth.
+    const b = blendedRoas(W(0.95, 9.49, 1), W(25.81, 30.97, 60), { k: BLEND_K })!;
+    expect(b).toBeGreaterThan(1.2);
+    expect(b).toBeLessThan(4.0);
+  });
+
+  it("a busy current window is trusted, which is what William asked for", () => {
+    const b = blendedRoas(W(10, 30, 20), W(100, 100, 200), { k: BLEND_K })!;
+    expect(b).toBeGreaterThan(2.5);   // 87% of the way to 3.0x
+  });
+
+  it("a new keyword with no trailing history behaves exactly as the engine does today", () => {
+    expect(blendedRoas(W(5, 15, 4), null)).toBe(3);
+  });
+
+  it("no spend anywhere is no signal, never a falling one", () => {
+    expect(blendedRoas(W(0, 0, 0), W(0, 0, 0))).toBeNull();
+    expect(roasTrend(null, 2)).toBe("unknown");
+  });
+
+  it("literal 70/30 is still available as a one-field override", () => {
+    const b = blendedRoas(W(10, 40, 1), W(10, 10, 1), { weight: 0.7 })!;
+    expect(b).toBeCloseTo(0.7 * 4 + 0.3 * 1, 10);
+  });
+
+  it("the blend ALONE does not save the real keyword — measured, not assumed", () => {
+    // retractable phone tether PHRASE. One click, one $9.49 order in a 6h window reads 10.5x
+    // against a trailing 1.63x. Even shrunk to 25% weight the blend is 3.86x and still "rising".
+    // This is why trendVerdict exists: weighting is necessary and NOT sufficient.
+    const b = blendedRoas(W(0.9, 9.49, 1), W(25.81, 41.96, 60), { k: BLEND_K })!;
+    expect(b).toBeGreaterThan(3);
+    expect(roasTrend(b, 1.63)).toBe("rising");
+    // ...and this is the rule that actually refuses the raise:
+    expect(trendVerdict(b, 1.63, 1)).toBe("hold");
+  });
+});
+
+describe("roasTrend", () => {
+  it("dead flat is not a trend", () => expect(roasTrend(2, 2)).toBe("unknown"));
+  it("reads direction when there is one", () => {
+    expect(roasTrend(2.5, 2)).toBe("rising");
+    expect(roasTrend(1.5, 2)).toBe("falling");
+  });
+  it("BLEND_K is the documented 3", () => expect(BLEND_K).toBe(3));
+});
+
+
+describe("trendVerdict — raising is earned, cutting never needs permission", () => {
+  it("refuses to raise on a window too thin to read", () => {
+    expect(trendVerdict(5, 2, 0)).toBe("hold");
+    expect(trendVerdict(5, 2, 1)).toBe("hold");
+    expect(trendVerdict(5, 2, 2)).toBe("hold");
+  });
+  it("raises once the current window has earned it", () => {
+    expect(trendVerdict(5, 2, 3)).toBe("raise");
+    expect(trendVerdict(2.1, 2, 20)).toBe("raise");
+  });
+  it("cuts on a falling signal however thin the window, because cutting spends less", () => {
+    for (const clicks of [0, 1, 2, 3, 50]) expect(trendVerdict(1.2, 2, clicks)).toBe("cut");
+  });
+  it("holds when there is no signal at all", () => {
+    expect(trendVerdict(null, 2, 99)).toBe("hold");
+    expect(trendVerdict(2, null, 99)).toBe("hold");
+    expect(trendVerdict(2, 2, 99)).toBe("hold");
+  });
+});
+
+
+describe("the shipped split — William 2026-08-13: 30% for 7 days, 70% for now", () => {
+  const W = (spend: number, sales: number, clicks: number) => ({ spend, sales, clicks });
+
+  it("is a fixed 70/30 by default, not evidence-weighted", () => {
+    expect(BLEND_WEIGHT_CURRENT).toBe(0.70);
+    const b = blendedRoas(W(10, 40, 1), W(10, 10, 1))!;   // 4.0x current, 1.0x trailing
+    expect(b).toBeCloseTo(0.7 * 4 + 0.3 * 1, 10);         // = 3.1, regardless of the 1 click
+  });
+
+  it("the trailing window is the 7 days he set", () => {
+    expect(TRAILING_WINDOW_DAYS).toBe(7);
+  });
+
+  it("evidence weighting is still one argument away", () => {
+    const fixed = blendedRoas(W(10, 40, 1), W(10, 10, 1))!;
+    const shrunk = blendedRoas(W(10, 40, 1), W(10, 10, 1), { k: BLEND_K })!;
+    expect(shrunk).toBeLessThan(fixed);                   // 25% weight vs 70%
+  });
+
+  it("the minimum-clicks guard on RAISING still stands under the fixed split", () => {
+    // 70/30 on one click reads high; trendVerdict is what refuses to buy on it.
+    const b = blendedRoas(W(0.9, 9.49, 1), W(25.81, 41.96, 60))!;
+    expect(b).toBeGreaterThan(1.63);          // the number says "rising"
+    expect(trendVerdict(b, 1.63, 1)).toBe("hold");   // the rule still says "do not raise"
+    expect(trendVerdict(b, 1.63, 3)).toBe("raise");  // ...until the window earns it
+  });
+
+  it("cutting still needs no permission, which is what stops overspend", () => {
+    const b = blendedRoas(W(10, 5, 2), W(100, 120, 200))!;  // current 0.5x drags the blend down
+    expect(trendVerdict(b, 1.20, 2)).toBe("cut");
   });
 });

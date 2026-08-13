@@ -492,11 +492,14 @@ describe("killPlan — the $4 kill judges a keyword id, never a word", () => {
     expect(killPlan([row("GONE", 99)], live())).toHaveLength(0);
   });
 
-  it("spares a copy that spent $4 but is converting well", () => {
-    // $4 alone is not the rule. $4 AND failing the 52% ACOS pivot is.
+  it("spares a copy that spent $4 but is still returning 1x or better", () => {
+    // $4 alone is not the rule, and since 2026-08-13 nor is the 52% pivot. $4 AND under 1x is.
+    // A copy between 1x and break-even gets its BID cut by the bid rules, not a pause.
     const byId = live(kw("A", "phone tether", "PHRASE"));
-    expect(killPlan([row("A", 5, 20, 2)], byId)).toHaveLength(0);
-    expect(killPlan([row("A", 5, 6, 1)], byId)).toHaveLength(1);
+    expect(killPlan([row("A", 5, 20, 2)], byId)).toHaveLength(0);  // 4.0x
+    expect(killPlan([row("A", 5, 6, 1)], byId)).toHaveLength(0);   // 1.2x — cut the bid, do not pause
+    expect(killPlan([row("A", 5, 4.99, 1)], byId)).toHaveLength(1); // 0.998x — off
+    expect(killPlan([row("A", 5, 0, 0)], byId)).toHaveLength(1);   // never converted — off
   });
 
   it("returns one verdict per id even if the report repeats a row", () => {
