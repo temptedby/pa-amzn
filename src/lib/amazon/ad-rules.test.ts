@@ -1037,3 +1037,71 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
     expect(r).toMatchObject({ direction: "down" });
   });
 });
+
+// ---------------------------------------------------------------------------
+// planBids — one bid planner for Products, Brands and Display (William 2026-08-13)
+// ---------------------------------------------------------------------------
+import { planBids, type BidCandidate } from "./ad-rules";
+
+const bidCand = (o: Partial<BidCandidate>): BidCandidate =>
+  ({ id: "1", label: "w", bid: 0.5, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
+
+describe("planBids", () => {
+  it("raises a silent entity — the one job raising has", () => {
+    const p = planBids([bidCand({ bid: 0.4, spend: 0, clicks: 0, impressions: 0 })]);
+    expect(p.moves).toHaveLength(1);
+    expect(p.moves[0]).toMatchObject({ toBid: 0.5, direction: "up" });
+  });
+
+  it("never raises a spending entity, on any product", () => {
+    const p = planBids([bidCand({ bid: 0.4, spend: 2, sales: 8, orders: 1, clicks: 5, impressions: 300 })]);
+    expect(p.moves.every((m) => m.direction === "down")).toBe(true);
+  });
+
+  it("cuts a dime under 2x and shaves two cents at or above it", () => {
+    const under = planBids([bidCand({ bid: 0.6, spend: 4, sales: 4, orders: 1, clicks: 6, impressions: 300 })]);
+    expect(under.moves[0]).toMatchObject({ toBid: 0.5, direction: "down" });
+    const over = planBids([bidCand({ bid: 0.6, spend: 4, sales: 12, orders: 2, clicks: 6, impressions: 300 })]);
+    expect(over.moves[0]).toMatchObject({ toBid: 0.58, direction: "down" });
+  });
+
+  it("never bids on something the $4 rule is switching off — no double write", () => {
+    // $5 spent, nothing back: shouldKill takes it. The planner must not also move its bid.
+    const p = planBids([bidCand({ bid: 0.6, spend: 5, sales: 0, orders: 0, clicks: 9, impressions: 400 })]);
+    expect(p.moves).toHaveLength(0);
+    expect(p.killing).toBe(1);
+  });
+
+  it("still bids on a word above 1x that the kill now spares", () => {
+    // 1.26x — killed under the old rule, kept and CUT under William's 08-13 line.
+    const p = planBids([bidCand({ bid: 0.6, spend: 7.55, sales: 9.49, orders: 1, clicks: 9, impressions: 400 })]);
+    expect(p.killing).toBe(0);
+    expect(p.moves[0]).toMatchObject({ direction: "down" });
+  });
+
+  it("reports an unwritable entity instead of attempting it", () => {
+    const p = planBids([bidCand({ bid: 0.4, spend: 0, clicks: 0, writable: false })]);
+    expect(p.moves).toHaveLength(0);
+    expect(p.blocked).toBe(1);
+  });
+
+  it("escalates at the approved gate with the evidence William asked for", () => {
+    const p = planBids([bidCand({ bid: 0.85, spend: 0, clicks: 0, impressions: 1200 })]);
+    expect(p.moves).toHaveLength(0);
+    expect(p.escalated[0]).toMatchObject({ bid: 0.85, wouldBe: 1.85, impressions: 1200, clicks: 0 });
+  });
+
+  it("keeps climbing past $0.85 once that entity has an approved ceiling", () => {
+    const p = planBids([bidCand({ bid: 0.85, spend: 0, clicks: 0, approvedCeiling: 1.85 })]);
+    expect(p.moves[0]).toMatchObject({ toBid: 0.95, direction: "up" });
+  });
+
+  it("ONE SYSTEM: identical numbers give an identical verdict whatever product they came from", () => {
+    const shape = { bid: 0.6, spend: 4, sales: 4, orders: 1, clicks: 6, impressions: 300 };
+    const sp = planBids([bidCand({ ...shape, id: "sp", label: "keyword" })]);
+    const sb = planBids([bidCand({ ...shape, id: "sb", label: "sb keyword" })]);
+    const sd = planBids([bidCand({ ...shape, id: "sd", label: "sd target" })]);
+    expect(sp.moves[0].toBid).toBe(sb.moves[0].toBid);
+    expect(sb.moves[0].toBid).toBe(sd.moves[0].toBid);
+  });
+});

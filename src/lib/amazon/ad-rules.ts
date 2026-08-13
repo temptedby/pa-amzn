@@ -1127,3 +1127,103 @@ export function bidWithMemory(
     restored: v.bid !== null ? v.restored : undefined,
   };
 }
+
+
+// ---------------------------------------------------------------------------
+// ONE BID PLANNER FOR ALL THREE AD PRODUCTS (William 2026-08-13)
+// ---------------------------------------------------------------------------
+//
+// "We need the rules to apply to all three different types of campaigns, please."
+//
+// Until now only Sponsored Products had bid rules. Brands and Display had the $4 kill and nothing
+// else, which is why `retractable phone holder belt clip` could walk to $2.50 on one side of the
+// account while the other two sides were never touched at all. The kill has been shared since
+// 2026-08-08; this is the other half.
+//
+// The rules themselves were always ad-product-agnostic — searchStep() takes numbers, not keywords.
+// What was missing was a planner that any engine can hand its entities to. SP calls it with
+// keywords, SB with keywords, SD with targets, and all three get identical arithmetic.
+//
+// WHAT IT DELIBERATELY DOES NOT DO: invent history. `kw_bid_history` has zero rows, so there is no
+// "what did the last bid level produce" to compare against and the turn-around cannot fire. Rather
+// than fake a baseline, the planner passes `last: undefined` and searchStep skips that branch by
+// design. Every other rule — never raise a spending word, cut $0.10 under 2x, shave $0.02 at or
+// above it, stop at the approved gate — works on month-to-date figures alone.
+
+export interface BidCandidate {
+  id: string;
+  /** display name for logs and Telegram; never used in a decision */
+  label: string;
+  bid: number | null;
+  spend: number; sales: number; orders: number; clicks: number; impressions?: number;
+  /** false when the entity, or the campaign holding it, is not ENABLED. Amazon answers 207 and
+   *  changes nothing, so these are reported rather than silently attempted. */
+  writable?: boolean;
+  /** highest gate a human has approved for this entity; absent means the $0.85 gate applies */
+  approvedCeiling?: number | null;
+}
+
+export interface BidMove {
+  id: string; label: string; fromBid: number; toBid: number;
+  direction: "up" | "down"; reason: string;
+}
+export interface BidEscalation {
+  id: string; label: string; bid: number; wouldBe: number | null;
+  impressions: number; clicks: number; spend: number; reason: string;
+}
+export interface BidPlan {
+  moves: BidMove[];
+  /** at the approved gate and still not spending — William is asked, nothing is raised */
+  escalated: BidEscalation[];
+  /** decided to change nothing */
+  held: number;
+  /** wanted a change but the entity or its campaign is not ENABLED */
+  blocked: number;
+  /** the $4 rule owns these; the planner never bids on something being switched off */
+  killing: number;
+}
+
+/**
+ * The whole bid decision for a set of entities, whatever product they belong to.
+ *
+ * Order matters and is deliberate: the kill is checked FIRST, so a word on its way off the account
+ * never also gets a bid write. Two writes on one entity in one run is how a log ends up claiming
+ * things that contradict each other.
+ */
+export function planBids(
+  candidates: BidCandidate[],
+  opts: { defaultBid?: number; killSpend?: number; killMinRoas?: number } = {},
+): BidPlan {
+  const defaultBid = opts.defaultBid ?? BID_FLOOR;
+  const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0 };
+
+  for (const c of candidates) {
+    const perf: Perf = { spend: c.spend, orders: c.orders, sales: c.sales };
+    if (shouldKill(perf, opts.killSpend, undefined, opts.killMinRoas)) { out.killing++; continue; }
+
+    const base = c.bid && c.bid > 0 ? c.bid : defaultBid;
+    const since: SinceChange = {
+      spend: c.spend, sales: c.sales, orders: c.orders,
+      clicks: c.clicks, impressions: c.impressions ?? 0,
+    };
+    const ceiling = activeCeiling(c.approvedCeiling);
+    const step = searchStep(base, since, undefined, { ceiling });
+
+    if (step.bid === null) {
+      if (step.escalate) {
+        out.escalated.push({
+          id: c.id, label: c.label, bid: base, wouldBe: nextGate(ceiling),
+          impressions: c.impressions ?? 0, clicks: c.clicks, spend: c.spend,
+          reason: step.reason,
+        });
+      } else out.held++;
+      continue;
+    }
+    if (c.writable === false) { out.blocked++; continue; }
+    out.moves.push({
+      id: c.id, label: c.label, fromBid: base, toBid: step.bid,
+      direction: step.direction, reason: step.reason,
+    });
+  }
+  return out;
+}

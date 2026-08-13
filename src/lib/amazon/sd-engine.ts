@@ -45,7 +45,9 @@
 import { db } from "@/lib/db/client";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
-import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf } from "./ad-rules";
+import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
+  planBids, KILL_MIN_ROAS, type BidCandidate, type BidPlan,
+} from "./ad-rules";
 
 const BASE = "https://advertising-api.amazon.com";
 
@@ -116,6 +118,9 @@ export function selectSdKills(
 }
 
 export interface SdEngineResult {
+  /** bid moves this run — the same rules Products and Brands use (William 2026-08-13) */
+  bidPlan?: BidPlan;
+  bidsApplied?: number;
   ok: boolean; dryRun: boolean;
   month: string;
   scanned: number;            // targets with a report row
@@ -233,8 +238,48 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   out.survived = plan.survived;
   out.alreadyOff = plan.alreadyOff;
 
+  // (3b) BIDS — the same planner Products and Brands use (William 2026-08-13: "we need the rules
+  //      to apply to all three different types of campaigns"). Display had the $4 kill and nothing
+  //      else until now. Targets the kill is about to take are skipped inside planBids.
+  const candidates: BidCandidate[] = [];
+  for (const p of perf) {
+    const t = byId.get(p.targetId);
+    if (!t || String(t.state).toUpperCase() !== "ENABLED") continue;
+    candidates.push({
+      id: p.targetId, label: p.text || p.targetId, bid: t.bid ?? null,
+      spend: p.spend, sales: p.sales, orders: p.orders, clicks: p.clicks,
+      writable: enabledCampaigns.has(t.campaignId),
+    });
+  }
+  const bidPlan = planBids(candidates);
+  out.bidPlan = bidPlan;
+  if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
+  if (bidPlan.escalated.length) {
+    out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Display target(s) are at their approved ceiling and still not spending`);
+  }
+  if (!dryRun && bidPlan.moves.length) {
+    try {
+      const rb = await sd(cfg, token, "/sd/targets", "PUT",
+        bidPlan.moves.map((mv) => ({ targetId: Number(mv.id), bid: mv.toBid })));
+      const itemsB = Array.isArray(rb.json) ? rb.json as { targetId?: number; code?: string }[] : [];
+      const okIds = new Set(itemsB.filter((i) => String(i.code ?? "").toUpperCase() === "SUCCESS").map((i) => String(i.targetId)));
+      out.bidsApplied = okIds.size;
+      if (!rb.ok) out.errors.push(`sd bids: HTTP ${rb.status} ${rb.text.slice(0, 160)}`);
+      const refusedB = bidPlan.moves.length - okIds.size;
+      if (refusedB) out.errors.push(`sd bids: ${refusedB}/${bidPlan.moves.length} refused`);
+      const runAtB = new Date().toISOString();
+      for (const mv of bidPlan.moves) {
+        await db().execute({
+          sql: `INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend,applied,ad_product)
+                VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          args: [runAtB, "rebid", mv.label, null, mv.fromBid, mv.toBid, null, null, okIds.has(mv.id) ? 1 : 0, "SPONSORED_DISPLAY"],
+        });
+      }
+    } catch (e) { out.errors.push(`sd bids: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+
   if (!plan.kill.length) {
-    out.notes.push(`nothing past $${KILL_SPEND} unprofitably (pivot ${Math.round(ACOS_PIVOT * 100)}% ACOS)`);
+    out.notes.push(`nothing past $${KILL_SPEND} unprofitably (kill line ${KILL_MIN_ROAS.toFixed(1)}x)`);
     out.ok = true; out.durationMs = Date.now() - start; return out;
   }
   if (dryRun) {

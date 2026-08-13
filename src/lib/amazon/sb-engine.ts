@@ -28,7 +28,10 @@ import {
   accountDay, fetchSbKeywordDay, fetchSbKeywords, fetchSbCampaigns, writeSbKeywords,
   type SbKeyword,
 } from "./sb-v2";
-import { shouldKill, KILL_SPEND, ACOS_PIVOT, type Perf } from "./ad-rules";
+import {
+  shouldKill, KILL_SPEND, ACOS_PIVOT, KILL_MIN_ROAS, planBids,
+  type Perf, type BidCandidate, type BidPlan,
+} from "./ad-rules";
 
 export interface SbKillRow {
   keywordId: string;
@@ -40,6 +43,9 @@ export interface SbKillRow {
 }
 
 export interface SbEngineResult {
+  /** bid moves this run — the same rules Sponsored Products uses (William 2026-08-13) */
+  bidPlan?: BidPlan;
+  bidsApplied?: number;
   ok: boolean; dryRun: boolean;
   month: string;
   ingested: { day: string; rows: number; spend: number }[];
@@ -187,8 +193,47 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
     });
   }
 
+  // (4b) BIDS — the same planner Sponsored Products and Display use (William 2026-08-13: "we need
+  //      the rules to apply to all three different types of campaigns"). Entities the $4 rule is
+  //      about to switch off are skipped inside planBids, so nothing gets two writes in one run.
+  const candidates: BidCandidate[] = [];
+  for (const [keywordId, p] of perf) {
+    const k = byId.get(keywordId);
+    if (!k || k.state !== "ENABLED") continue;
+    candidates.push({
+      id: keywordId, label: `${p.text} (${p.match})`, bid: k.bid ?? null,
+      spend: p.spend, sales: p.sales, orders: p.orders, clicks: p.clicks,
+      writable: camps.get(k.campaignId)?.state === "ENABLED",
+    });
+  }
+  const bidPlan = planBids(candidates);
+  out.bidPlan = bidPlan;
+  if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
+  if (bidPlan.escalated.length) {
+    out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Brands keyword(s) are at their approved ceiling and still not spending`);
+  }
+  if (!dryRun && bidPlan.moves.length) {
+    try {
+      const w = await writeSbKeywords(cfg, token, bidPlan.moves.map((mv) => ({
+        keywordId: mv.id, adGroupId: byId.get(mv.id)!.adGroupId, bid: mv.toBid,
+      })));
+      out.bidsApplied = w.succeeded.length;
+      if (w.failed.length) out.errors.push(`sb bids: ${w.failed.length}/${bidPlan.moves.length} refused (${w.status})`);
+      const runAtB = new Date().toISOString();
+      for (const mv of bidPlan.moves) {
+        // applied reflects Amazon's own per-item verdict, never the fact that we asked.
+        const okItem = w.succeeded.includes(mv.id);
+        await db().execute({
+          sql: `INSERT INTO ad_engine_log (run_at,action,keyword,match_type,from_bid,to_bid,acos,spend,applied,ad_product)
+                VALUES (?,?,?,?,?,?,?,?,?,?)`,
+          args: [runAtB, "rebid", mv.label, null, mv.fromBid, mv.toBid, null, null, okItem ? 1 : 0, "SPONSORED_BRANDS"],
+        });
+      }
+    } catch (e) { out.errors.push(`sb bids: ${e instanceof Error ? e.message : String(e)}`); }
+  }
+
   if (!pending.length) {
-    out.notes.push(`nothing past $${KILL_SPEND} unprofitably (pivot ${Math.round(ACOS_PIVOT * 100)}% ACOS)`);
+    out.notes.push(`nothing past $${KILL_SPEND} unprofitably (kill line ${KILL_MIN_ROAS.toFixed(1)}x)`);
     out.ok = true; out.durationMs = Date.now() - start; return out;
   }
   if (dryRun) {
