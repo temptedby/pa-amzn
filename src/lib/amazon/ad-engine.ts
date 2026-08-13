@@ -1,10 +1,12 @@
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
 import { recordBidRun, type LedgerObservation } from "./bid-ledger";
+import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
-  bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, type BidChange, type SinceChange,
+  bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, activeCeiling, nextGate,
+  type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   REINTRO_LIFETIME_ROAS_MIN, REINTRO_LIFETIME_MIN_ORDERS,
@@ -654,6 +656,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   // The bids this month's search has already proven a keyword needs. Read once; the loop below
   // never cuts at or below one of these. See ensureBidMemory() for why this table exists.
   const floors = await foundFloors(month);
+  const spCeilings = await approvedCeilings("SPONSORED_PRODUCTS");
   const restoredFloors: { keywordId: string; bid: number }[] = [];
   // Every ENABLED keyword we have numbers for, whether or not its bid moves this run. The ledger
   // needs the ones that did NOT move as much as the ones that did — a bid level only reveals what
@@ -677,7 +680,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
       const id = String(k.keywordId);
       const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs,
-        { floorFound: floors.get(id) ?? null });
+        { floorFound: floors.get(id) ?? null, ceiling: activeCeiling(spCeilings.get(id) ?? null) });
       if (m.bid === null) {
         if (m.reason.startsWith("held:")) heldByCooldown++;
         // The $0.85 line. The engine has run out of authority here, so it surfaces the word rather
@@ -720,6 +723,25 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   if (!dryRun && !bidOps.length && ledgerObs.length) {
     try { await recordBidRun("SPONSORED_PRODUCTS", month, ledgerObs, new Map()); }
     catch (e) { out.errors.push("bid ledger: " + (e instanceof Error ? e.message : String(e))); }
+  }
+  if (out.needsConfirm.length && !dryRun) {
+    try {
+      const escs = out.needsConfirm.map((n) => {
+        const ev = since.get(n.keywordId);
+        return { id: n.keywordId, label: `${n.text} (${n.matchType})`, bid: n.bid,
+                 wouldBe: nextGate(n.bid), impressions: ev?.impressions ?? 0,
+                 clicks: ev?.clicks ?? 0, spend: ev?.spend ?? 0, reason: "" };
+      });
+      const fresh = await unaskedGates("SPONSORED_PRODUCTS", escs);
+      if (fresh.length) {
+        const { sendTelegram, telegramConfigured } = await import("@/lib/notify/telegram");
+        if (telegramConfigured()) {
+          await sendTelegram(formatGateAsk("SPONSORED_PRODUCTS", fresh));
+          await markAsked("SPONSORED_PRODUCTS", fresh);
+          out.notes.push(`asked William about ${fresh.length} keyword(s) at their ceiling`);
+        } else out.notes.push(`${fresh.length} at their ceiling, but Telegram is not configured — nothing sent`);
+      }
+    } catch (e) { out.errors.push("gate ask: " + (e instanceof Error ? e.message : String(e))); }
   }
   if (shielded) out.notes.push(`${shielded} bid cuts suppressed: cohort inside the 14-day attribution window`);
   if (heldByCooldown) out.notes.push(`${heldByCooldown} bids held: last change younger than ${BID_COOLDOWN_HOURS}h`);

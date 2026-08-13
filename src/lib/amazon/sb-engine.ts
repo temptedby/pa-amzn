@@ -24,6 +24,7 @@
 
 import { db } from "@/lib/db/client";
 import { recordBidRun, type LedgerObservation } from "./bid-ledger";
+import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import {
   accountDay, fetchSbKeywordDay, fetchSbKeywords, fetchSbCampaigns, writeSbKeywords,
@@ -207,6 +208,8 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
       writable: camps.get(k.campaignId)?.state === "ENABLED",
     });
   }
+  const ceilings = await approvedCeilings("SPONSORED_BRANDS");
+  for (const c of candidates) c.approvedCeiling = ceilings.get(c.id) ?? null;
   const bidPlan = planBids(candidates);
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
@@ -214,6 +217,17 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
     counters: { spend: c.spend, sales: c.sales, orders: c.orders, clicks: c.clicks, impressions: c.impressions ?? 0 },
   }));
   if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
+  if (bidPlan.escalated.length && !dryRun) {
+    try {
+      const fresh = await unaskedGates("SPONSORED_BRANDS", bidPlan.escalated);
+      if (fresh.length) {
+        const { sendTelegram, telegramConfigured } = await import("@/lib/notify/telegram");
+        const text = formatGateAsk("SPONSORED_BRANDS", fresh);
+        if (telegramConfigured()) { await sendTelegram(text); await markAsked("SPONSORED_BRANDS", fresh); out.notes.push(`asked William about ${fresh.length} keyword(s) at their ceiling`); }
+        else out.notes.push(`${fresh.length} at their ceiling, but Telegram is not configured — nothing sent`);
+      }
+    } catch (e) { out.errors.push(`gate ask: ${e instanceof Error ? e.message : String(e)}`); }
+  }
   if (bidPlan.escalated.length) {
     out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Brands keyword(s) are at their approved ceiling and still not spending`);
   }

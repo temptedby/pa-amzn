@@ -44,6 +44,7 @@
 
 import { db } from "@/lib/db/client";
 import { recordBidRun, type LedgerObservation } from "./bid-ledger";
+import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
 import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
@@ -252,6 +253,8 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
       writable: enabledCampaigns.has(t.campaignId),
     });
   }
+  const ceilings = await approvedCeilings("SPONSORED_DISPLAY");
+  for (const c of candidates) c.approvedCeiling = ceilings.get(c.id) ?? null;
   const bidPlan = planBids(candidates);
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
@@ -260,6 +263,17 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   }));
   const ledgerMonth = monthStart.slice(0, 7);
   if (bidPlan.blocked) out.notes.push(`${bidPlan.blocked} bid change(s) sit in a campaign that is not ENABLED — Amazon will not take them`);
+  if (bidPlan.escalated.length && !dryRun) {
+    try {
+      const fresh = await unaskedGates("SPONSORED_DISPLAY", bidPlan.escalated);
+      if (fresh.length) {
+        const { sendTelegram, telegramConfigured } = await import("@/lib/notify/telegram");
+        const text = formatGateAsk("SPONSORED_DISPLAY", fresh);
+        if (telegramConfigured()) { await sendTelegram(text); await markAsked("SPONSORED_DISPLAY", fresh); out.notes.push(`asked William about ${fresh.length} keyword(s) at their ceiling`); }
+        else out.notes.push(`${fresh.length} at their ceiling, but Telegram is not configured — nothing sent`);
+      }
+    } catch (e) { out.errors.push(`gate ask: ${e instanceof Error ? e.message : String(e)}`); }
+  }
   if (bidPlan.escalated.length) {
     out.notes.push(`NEEDS YOU: ${bidPlan.escalated.length} Sponsored Display target(s) are at their approved ceiling and still not spending`);
   }
