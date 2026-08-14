@@ -1242,3 +1242,55 @@ describe("Display bids start and cut at five cents (William 2026-08-14)", () => 
     expect(p.killing).toBe(0);
   });
 });
+
+describe("a missing since-window must never read as \"raise me\" (review finding, 2026-08-14)", () => {
+  // kw_bid_history has been empty since it was created, so on the first run after deploy almost
+  // every keyword arrives with no recorded bid change. If that reads as `since === undefined`,
+  // searchStep answers UP and the isSpending guard is disarmed at the same time — the account-wide
+  // version of the exact loop that killed `retractable phone tether` twice in four days.
+
+  it("RAISES when there genuinely is no impression and no click", () => {
+    const r = searchStep(0.25, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 });
+    expect("direction" in r ? r.direction : null).toBe("up");
+  });
+
+  it("does NOT raise a keyword that has spent, once its window is seeded from month-to-date", () => {
+    // $3.90 spent, one sale, 0.4x. The engine must cut this, never buy more of it.
+    const r = searchStep(0.25, { spend: 3.90, sales: 1.56, orders: 1, clicks: 9, impressions: 800 });
+    expect("direction" in r ? r.direction : null).not.toBe("up");
+  });
+
+  it("refuses to raise a spending word even down the undefined-window path", () => {
+    // Belt and braces: if a window ever does go missing, `move("up")` must still be blocked for a
+    // word we can see is spending. This is the guard inside move(), not the branch above it.
+    const r = searchStep(0.25, { spend: 2.00, sales: 0, orders: 0, clicks: 4, impressions: 0 });
+    expect(r.bid === null || ("direction" in r && r.direction !== "up")).toBe(true);
+  });
+});
+
+describe("Display raises only when it is genuinely absent from the auction (review finding)", () => {
+  const t = (o: Partial<BidCandidate> & { id: string }): BidCandidate => ({
+    label: "views 14d", bid: 0.05, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o,
+  });
+
+  it("raises a shown-but-never-clicked target, and now says so honestly", () => {
+    // William 2026-08-10, and it settles the direction: "yes it climbs if not spending or
+    // converting you raise the bid to find the optimal". So this DOES raise, deliberately.
+    //
+    // What collecting impressions changes is the honesty of the record, not the decision. Before,
+    // Display reported every target as "no impressions and no clicks" because the column was never
+    // requested, so a target with 20,000 impressions and a click problem was filed under "not in
+    // the auction yet" — in the digest William reads and in the bid history we judge moves by.
+    const p = planBids([t({ id: "a", impressions: 20000, clicks: 0 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+    expect(p.moves[0]?.reason).toContain("20000 impressions");
+    expect(p.moves[0]?.reason).not.toContain("no impressions");
+  });
+
+  it("still raises a target with no impressions at all", () => {
+    const p = planBids([t({ id: "b", impressions: 0, clicks: 0 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+  });
+});

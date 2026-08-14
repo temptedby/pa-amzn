@@ -5,7 +5,7 @@ const target = (id: string, o: Partial<SdTargetState> = {}): [string, SdTargetSt
   [id, { targetId: id, state: "enabled", campaignId: "C1", adGroupId: "G1", bid: 0.5, ...o }];
 
 const perf = (id: string, o: Partial<SdTargetPerf> = {}): SdTargetPerf =>
-  ({ targetId: id, text: `target ${id}`, spend: 0, sales: 0, orders: 0, clicks: 0, ...o });
+  ({ targetId: id, text: `target ${id}`, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
 
 const LIVE = new Map<string, SdTargetState>([target("t1"), target("t2"), target("t3")]);
 const CAMPS = new Set(["C1"]);

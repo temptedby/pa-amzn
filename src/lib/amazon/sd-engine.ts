@@ -58,7 +58,7 @@ const BASE = "https://advertising-api.amazon.com";
 export interface SdTargetPerf {
   targetId: string;
   text: string;          // resolved targeting expression, for the log and the email
-  spend: number; sales: number; orders: number; clicks: number;
+  spend: number; sales: number; orders: number; clicks: number; impressions: number;
 }
 /** Current live state of one Display target. Display returns states lowercase. */
 export interface SdTargetState {
@@ -147,7 +147,11 @@ export function sdReportSpec(nowMs = Date.now()): ReportSpec {
   return {
     purpose: "sd-engine-mtd", adProduct: "SPONSORED_DISPLAY", reportTypeId: "sdTargeting",
     groupBy: ["targeting"],
-    columns: ["targetingId", "targetingText", "clicks", "cost", "sales", "purchases"],
+    // impressions is NOT optional. planBids treats "no impressions and no clicks" as "not in the
+    // auction yet" and answers by RAISING. Without this column every target reads as zero
+    // impressions forever, so a target with 20,000 impressions and no clicks — a creative problem,
+    // not a bid problem — gets a nickel added every day until it hits the $0.85 gate.
+    columns: ["targetingId", "targetingText", "impressions", "clicks", "cost", "sales", "purchases"],
     startDate: iso(new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1))),
     endDate: iso(now),
   };
@@ -215,7 +219,7 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
       targetId,
       text: String(r.targetingText ?? ""),
       spend: Number(r.cost ?? 0), sales: Number(r.sales ?? 0),
-      orders: Number(r.purchases ?? 0), clicks: Number(r.clicks ?? 0),
+      orders: Number(r.purchases ?? 0), clicks: Number(r.clicks ?? 0), impressions: Number(r.impressions ?? 0),
     };
     out.monthSpend += p.spend; out.monthSales += p.sales;
     perf.push(p);
@@ -250,7 +254,7 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
     if (!t || String(t.state).toUpperCase() !== "ENABLED") continue;
     candidates.push({
       id: p.targetId, label: p.text || p.targetId, bid: t.bid ?? null,
-      spend: p.spend, sales: p.sales, orders: p.orders, clicks: p.clicks,
+      spend: p.spend, sales: p.sales, orders: p.orders, clicks: p.clicks, impressions: p.impressions,
       writable: enabledCampaigns.has(t.campaignId),
     });
   }

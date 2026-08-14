@@ -564,6 +564,25 @@ async function perfSinceChange(
   month: string,
 ): Promise<Map<string, SinceChange>> {
   const out = new Map<string, SinceChange>();
+
+  // A KEYWORD WITH NO RECORDED BID CHANGE STILL HAS A WINDOW: the whole month.
+  //
+  // This map is the ONLY evidence searchStep() gets. A keyword missing from it reads as
+  // `since === undefined`, which that function treats as "no impressions and no clicks" and answers
+  // by RAISING, while `isSpending` reads `since?.spend ?? 0` and computes false — so the one guard
+  // that stops a spending word being raised is also disarmed.
+  //
+  // `changes` only holds keywords that have a `kw_bid_history` row, and that table has been empty
+  // since it was created (the INSERT named a column the table does not have; see bid-ledger.ts).
+  // So without this, the first run after deploy raises EVERY enabled keyword by a dime, including
+  // ones sitting at $3.90 month-to-date and 0.4x. That is precisely the "raised into
+  // unprofitability, then killed for being unprofitable" loop this whole PR exists to end.
+  //
+  // Seeding from month-to-date is both correct and the conservative direction: no bid change means
+  // nothing has happened to reset the window, so month-to-date IS the performance since the last
+  // move. `planBids()` already does exactly this for Brands and Display.
+  for (const [kwId, now] of nowMtd) out.set(kwId, now);
+
   for (const [kwId, ch] of changes) {
     const now = nowMtd.get(kwId);
     if (!now) continue;
@@ -758,11 +777,18 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       if (!dryRun && picks.length) {
         const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: picks.map((p) => ({ keywordId: p.keywordId, state: "ENABLED" })) }, KW_CT);
         // Amazon answers 207 with a per-item body, so res.ok alone would call a refusal a success.
-        const okIds = new Set(((r.json?.success ?? []) as { keywordId?: string | number }[]).map((x) => String(x.keywordId)));
-        const perItem = Array.isArray(r.json?.success) || Array.isArray(r.json?.error);
+        //
+        // Read through parseBulkOutcome rather than reaching into the body here. The success and
+        // error arrays are nested under `keywords`, not at the top level, so a hand-rolled
+        // `r.json?.success` finds undefined, decides there is no per-item detail, and falls back to
+        // `r.ok` — which is TRUE for a 207 in which every single item failed. That would mark the
+        // keyword revived, stamp `revived_at`, and exclude it from openKills() for the rest of the
+        // month while it sits PAUSED on the account. Same "applied=1 for a write Amazon refused"
+        // failure this engine was rewritten to stop claiming.
+        const outcome = parseBulkOutcome(r.json, picks.length);
         const at = new Date().toISOString();
-        for (const p of out.revived) {
-          const applied = r.ok && (!perItem || okIds.has(p.keywordId));
+        for (const [i, p] of out.revived.entries()) {
+          const applied = r.ok && outcome.succeededIdx.has(i);
           p.applied = applied;
           if (!applied) continue;
           await db().execute({

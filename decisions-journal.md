@@ -1604,3 +1604,77 @@ bounds the downside either way.
 **Status.** 417 tests, tsc clean. Fourteen targets at $0.05 verified by read-back. The search that
 moves them up and down only runs in production once PR #2 merges; until then the bids sit where they
 were set.
+
+## 2026-08-14 (part C) — The review found a bug that would have raised every keyword on the account
+
+**Context.** William: *"yes commit and launch please review and make sure code is good."* Before
+merging six days of rule changes into a live ad account, I ran a high-effort review of the whole
+branch against `origin/main` and checked its findings against the code and the live account rather
+than taking them at face value.
+
+**Options.** (A) Merge on green tests, since 417 passed and tsc was clean. (B) Review, fix only what
+would cause live harm, then merge. (C) Review and fix everything found, including the latency and
+performance items, before merging.
+
+**Decision.** (B). Three findings were confirmed as live-money bugs and are fixed; the rest are
+recorded and deliberately not fixed in this pass, because each one is a behaviour change of its own
+and William wanted the rules he has been specifying all week to go live today.
+
+**The blocker, and it was a real one.** `perfSinceChange()` built its map by iterating `changes`,
+which only holds keywords carrying a `kw_bid_history` row. Every other keyword arrived at
+`searchStep()` as `since === undefined`, and that function reads undefined as "no impressions and no
+clicks" and answers by RAISING. Worse, `isSpending` computes from the same missing object, so the
+one guard that stops a spending word being raised was disarmed at the same moment.
+
+`kw_bid_history` has held **zero rows since it was created** — the INSERT names `roas_before` while
+the table declares `acos_before`, and the error is swallowed into `out.errors` where nothing reads
+it. So on the first production run after deploy, **every enabled keyword on the account would have
+been raised a dime**, including words sitting at $3.90 month-to-date and 0.4x. That is the
+account-wide version of the exact loop that took `retractable phone tether` twice in four days, and
+it would have shipped inside the PR written to end that loop.
+
+Fixed by seeding the window from month-to-date for every keyword before the per-change adjustments
+run. No change means nothing has reset the window, so month-to-date IS the performance since the
+last move. `planBids()` already did this for Brands and Display; Products was the outlier.
+
+**Two more, both confirmed.** The in-month revival read `r.json?.success` at the top level, but
+Amazon nests those arrays under `keywords`, so `perItem` was always false, `applied` collapsed to
+`r.ok`, and a 207 in which every item failed would still stamp `revived_at` and drop the keyword out
+of `openKills()` for the month while it sat PAUSED. Now routed through `parseBulkOutcome`, which is
+the parser the rest of the engine already uses. Separately, the Display report never requested an
+`impressions` column, so every target reported as "no impressions and no clicks" whatever it had
+actually been shown.
+
+**A finding I rejected, and why.** The review argued that a shown-but-never-clicked target should
+not be raised, on the reasoning that a click problem is a creative problem. That reasoning is sound
+and it is not what William decided: *"yes it climbs if not spending or converting you raise the bid
+to find the optimal"* (2026-08-10). The code matches his instruction, so the code stays. What the
+missing column actually cost was honesty, not direction — the digest he reads said "no impressions"
+about a target with 53 of them. My first test asserted the review's version and failed, correctly,
+against his rule. The test was wrong, not the engine.
+
+**Reasoning.** Green tests proved the code does what its tests say. None of these three had a test,
+which is the whole point: the dangerous defect was in the gap between two functions that were each
+individually correct. A live dry run after the fixes is what settled it, not the suite.
+
+**Live dry run against the real account, after the fixes:**
+
+```
+141 bid moves — 128 up, 13 down, 0 kills
+raises on a word that was already spending    0   <- the bug, gone
+raises still mislabelled as "no impressions"  0   <- the Display fix, visible
+moves above the $0.85 ceiling                 1   <- a CUT, $2.49 -> $2.47, never needs permission
+escalated for William instead of raised       2
+```
+
+**Trade-offs.** Nine further findings are recorded and not fixed: the warm-up cron fires after the
+engines rather than 20 minutes before, `recordBidRun` does thousands of serial round-trips inside a
+300-second function, `planBids` passes no `last` so the turn-around cannot fire for Brands and
+Display, the `restored`/`kw_bid_floor` mechanism is inert dead code, `rolledBack` never increments
+on a string mismatch, `sb-v2.ts` pairs campaign ids positionally against a regex sweep,
+`attribution.ts` has an uncapped cursor loop, `recordKills` ledgers a kill whose write threw, and
+`scripts/sd-set-entry-bid.mjs` silently rejects any bid at or above $1. None of them raise a bid
+that should be cut, which is the line I used to decide what blocks a launch.
+
+**Status.** 422 tests, tsc clean, production build compiles. Three fixes committed with tests
+pinning each.
