@@ -20,7 +20,7 @@
  *  RUN: node scripts/pacr/build-social-platforms.mjs
  */
 import sharp from 'sharp';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { SEA, TYPE, esc } from './design-system.mjs';
@@ -28,6 +28,7 @@ import { SEA, TYPE, esc } from './design-system.mjs';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT = join(ROOT, 'build/creative/social-platforms');
 const L = `${ROOT}/assets/source/_lifestyle/`;
+const FA = `${ROOT}/assets/source/_faces/`;
 
 // The five canvases, and the surfaces each one actually serves. Deduplicated on purpose: one
 // vertical file serves four platforms, so building "one per platform" would be four copies of the
@@ -74,6 +75,37 @@ const CONCEPTS = [
 
   { id: '06-reel',   src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131548.jpg`,
     head: 'One little reel. Zero worry.', sub: 'Backed for a year, and we mean it.', focus: 'centre' },
+
+  // ---- WAVE TWO, William 2026-08-14: "lets continue to build" ----------------------------------
+  // The four Barcelona frames were already vouched for in build-set-v2.mjs on the test that matters
+  // here: every one has a hand, a phone and the cord doing something, rather than a person posing
+  // beside a product.
+  // 142 was dropped after the contact sheet: a tight crop of two hands and a phone against a black
+  // and yellow field, unreadable at thumbnail size. Replaced with a full-body frame where the clip
+  // is on the person and the setting does some work.
+  { id: '07-lean',   src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08260.jpg`,
+    head: 'Long calls. Zero babysitting.', sub: 'It waits on your hip until you need it.', focus: 'centre' },
+
+  // 125 dropped at the sheet stage. It is a landscape frame the man fills edge to edge, so every
+  // vertical crop that keeps the phone loses his head, and the blurred-fill alternative leaves the
+  // photo as a thin strip. Neither is worth a slot when eleven others are clean.
+
+  // 126 was dropped on a PRODUCT-TRUTH read, not a composition one. It shows the phone in one hand
+  // and the reel in the other with the cord taut between them, which at a glance reads as the phone
+  // hanging from the cord. That is the exact misreading Stevo's one-star review is about — "they
+  // show a phone hanging from this lanyard... but actually he must be holding the line" — and PACR
+  // forbids it. Replaced with a frame that carries the same freedom idea and no ambiguity.
+  { id: '09-wander', src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08389.jpg`,
+    head: 'Wander further.', sub: 'Everything that matters is coming with you.', focus: 'centre' },
+
+  { id: '10-street', src: `${FA}os_Megan_William_Barcelona__Mabel_Llevat_111.jpg`,
+    head: 'Busy street, easy mind.', sub: 'It goes where you go, quietly.', focus: 'north' },
+
+  { id: '11-dog',    src: `${L}_Phone_Assured_Photos_March_6__DSC_0544_00137.jpg`,
+    head: 'Some of us guard it better.', sub: 'Good thing it is clipped on.', focus: 'centre' },
+
+  { id: '12-denim2', src: `${L}_Phone_Assured_Photos_Dec_10__IMG_20201210_151810.jpg`,
+    head: 'Out all day. Still on you.', sub: 'Worry-free is the whole point.', focus: 'north' },
 ];
 
 /** Fit a photograph to a canvas WITHOUT cropping into the subject.
@@ -169,6 +201,12 @@ function caption(w, h, head, sub, big) {
 }
 
 mkdirSync(OUT, { recursive: true });
+
+// CLEAN FIRST. Renaming a concept leaves its old files behind, and they are indistinguishable from
+// current work in a folder listing, a contact sheet, or a Drive upload. Two dropped concepts made
+// it into the review sheet this way before this line existed.
+for (const f of readdirSync(OUT)) if (f.endsWith('.jpg')) rmSync(join(OUT, f));
+
 const built = [];
 for (const c of CONCEPTS) {
   for (const [name, cv] of Object.entries(CANVAS)) {
