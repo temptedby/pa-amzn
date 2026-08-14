@@ -389,6 +389,35 @@ export interface ReintroPlan {
 }
 
 /**
+ * The candidate pool for a run whose Amazon report is still queued (William 2026-08-08, "we need 40
+ * a day not 20"; restated 2026-08-14, "it should be launching 40 a day ... it's every six hours,
+ * four times a day").
+ *
+ * A run that REQUESTS a report window cannot also collect it, and the window is keyed by UTC date,
+ * so the run just after midnight always finds a fresh, empty one. That is why production promoted at
+ * 06:30, 12:30 and 18:30 but never at 00:30 — thirty a day against the forty the schedule buys.
+ *
+ * Blocking the launch was the wrong answer, but the safety concern behind it was real: with no
+ * window, a keyword that recently spent badly reads as "never spent" and would be promoted as
+ * untested. So a missing window NARROWS the pool to the two groups William named rather than
+ * stopping it — proven 2x+ winners, and words with no spending record at all. A word holding a
+ * lifetime record that FAILS the 2x bar is a known non-winner, not an untested one, so it waits for
+ * the next run rather than being laundered into the untested tier.
+ */
+export function lifetimeOnlyPool(
+  candidates: ReintroCandidate[],
+  minRoas = REINTRO_LIFETIME_ROAS_MIN,
+  minOrders = REINTRO_LIFETIME_MIN_ORDERS,
+): ReintroCandidate[] {
+  return candidates.filter((c) => {
+    const proven = (c.lifetimeRoas ?? null) !== null
+      && (c.lifetimeRoas as number) >= minRoas
+      && (c.lifetimeOrders ?? 0) >= minOrders;
+    return proven || (c.lifetimeSpend ?? 0) === 0;   // 2x+ winner, or no spending record at all
+  });
+}
+
+/**
  * Pure selector for Rule 4. Picks which floored keywords to switch on THIS run.
  *
  * Eligibility (William 2026-08-02): the keyword never spent, OR it spent at ACOS < 50%, OR its

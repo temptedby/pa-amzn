@@ -1469,3 +1469,85 @@ $2,903 between them. A rejection date is still not obtainable, because Amazon pu
 moderation timestamp and v3 reporting only retains to 2026-06-10. The lesson is the one from
 yesterday in a new costume: a current status field is not a history, and inferring a date from a
 creation timestamp is exactly the kind of confident wrong answer these instruments keep producing.
+
+## 2026-08-14 — The morning kill took two words that were paying for themselves
+
+**Context.** The morning review found production repeating the 11 August failure on the same
+keyword. Over 13 August the live engine raised `retractable phone tether` EXACT four times
+(0.55 → 0.61 → 0.67 → 0.74, a compounding 10% per run), and at 06:00Z on the 14th the $4 rule paused
+it at $6.12. A live per-keyword-id report showed what it was actually worth: $7.60 spent, $9.49
+back, **1.25x**. The same run also took `cell phone retractable` PHRASE at 1.34x. Only the third
+kill, `iphone leash` at 0.00x, was right. Production still kills at the 1.923x break-even because PR
+#2 has been CONFLICTING since main moved under it on 07 August, so every rule William set between
+the 7th and the 13th is inert. William: *"lower the bids every six hours by ten cents to see if we
+can get the ROAS above two. And if we can't, then once the ROAS goes below one, then we turn it
+off."* He also caught the launch rate himself: *"It should be launching 40 a day. It's every six
+hours, four times a day."*
+
+**Options.** (A) Hand-fix the account each morning and leave the PR alone — cheap today, identical
+work tomorrow, and the engine keeps manufacturing the kills. (B) Resolve the conflicts and ship,
+leaving this month's damage in place. (C) Both, in that order: unblock the merge, then repair what
+the old rules did. Also considered and rejected: reverting the branch and re-cutting it from main,
+which would have thrown away six days of rule work to avoid 26 conflict hunks.
+
+**Decision.** (C). Merged `origin/main` into the PR #2 branch and resolved all 26 hunks, then made
+the account match the rules that are about to ship.
+
+Every conflict resolved to the branch side, because in each case main's version was the older rule
+the branch had already superseded: `LADDER_STEP_DAYS` 1 vs 0, `BID_LADDER_MAX` 0.85 vs the
+`BID_CONFIRM_CEILING` gate staircase, tier-0 ranking by lifetime sales vs by lowest lifetime spend,
+and `ladderVerdict` without the evidence payload. The one judgement call worth recording is that I
+checked each hunk rather than taking `--ours` wholesale, because main carried PR #1 and a rule that
+existed only there would have been silently deleted. None did.
+
+Then, on the live account, verified by reading state back from Amazon rather than trusting the
+write response:
+
+```
+ENABLED  $0.79  retractable phone tether PHRASE   1.63x   (was $0.89, killed 08-11)
+ENABLED  $0.64  retractable phone tether EXACT    1.25x   (was $0.74, killed today)
+ENABLED  $0.65  cell phone retractable  PHRASE    1.34x   (was $0.75, killed today)
+PAUSED   $0.45  iphone leash tether     BROAD     $5.60 -> $0.00
+PAUSED   $0.45  cell phone anti theft strap PHRASE $4.51 -> $0.00
+```
+
+The three revivals come back one dime below the bid they were killed at, which is the first step of
+the rule they will now be governed by. The two pauses are the standing $4-with-no-sale rule that
+production had not applied to them.
+
+Also added the four **views-7d** retarget targets William asked for, one per enabled retarget
+campaign at $0.10, in the ad group that already holds views-14d. One per campaign, not one per ad
+group: each retarget campaign splits its audiences across three ad groups, so the obvious loop would
+have created three copies of the same audience inside one campaign. The create shape had to be
+probed live — `/sd/targets` takes a **bare array** with `expressionType`, and the `{targets:[...]}`
+envelope the keyword endpoints use returns 422.
+
+**Reasoning.** The kill was never the problem; the raise before it was. `nextBid` on main computes
+`base * (1 + step)` and fires whenever ACOS is under 52%, so a word that is converting gets bought
+up until it stops converting, and then the same engine pauses it for not converting. That is a loop,
+not a rule, and it has now consumed the account's best keyword twice in four days. Fixing the kill
+line alone would leave the loop intact.
+
+On the launch rate: the report window is keyed by UTC date, so the 00:30 run always finds a fresh,
+empty one and promotes nothing. That is exactly 30 a day instead of 40, and the promotion log shows
+it — 06:30, 12:30 and 18:30 every day since the 6th, never 00:30. The branch already fixes it by
+falling back to lifetime evidence, so the fix was to make that guarantee testable rather than to
+write new logic: the filter is now `lifetimeOnlyPool()` in `ad-rules.ts` with five tests, the
+sharpest being that a word which spent $900 at 1.1x is dropped rather than laundered into the
+"never spent" tier by a missing window.
+
+**Industry source.** Amazon's own Sponsored Display targeting reference for the accepted lookback
+values, confirmed against the live account on 13 August: views takes 7/14/30 and rejects 3;
+purchases takes 90/180/365 and rejects 270. William asked for "buyers over 270 days", and 365 is the
+nearest window that exists.
+
+**Trade-offs.** Re-enabling three words that are genuinely under 2x spends money on the bet that a
+lower bid lifts them. If the dime cuts do not work, the same $4 rule takes them off again at 1.0x,
+which is a bounded downside of a few dollars. Taking the branch side on every conflict means main's
+history is preserved only in git, not in the file. The views-7d targets on Pro and Black Combo
+cannot serve until the rejected creative is replaced, so two of the four are structure without
+traffic for now.
+
+**Status.** Merged, 411 tests passing, tsc clean, five live keyword changes and four new Display
+targets verified by read-back. PR #2 is now mergeable and still needs William's merge. The nine
+eslint errors in `scripts/live-killrule.spec.mts` pre-date this work.

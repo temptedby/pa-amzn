@@ -9,7 +9,7 @@ import {
   type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
-  REINTRO_LIFETIME_ROAS_MIN, REINTRO_LIFETIME_MIN_ORDERS,
+  lifetimeOnlyPool,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
 } from "./ad-rules";
 
@@ -1135,12 +1135,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
     // With no window to judge on, a word carrying a lifetime record that does not clear the 2x bar
     // is a known non-winner, not an untested one. Skip it this run rather than let a missing report
     // launder it into the "never spent" tier.
-    const pool = reportsReady ? candidates : candidates.filter((c) => {
-      const proven = (c.lifetimeRoas ?? null) !== null
-        && (c.lifetimeRoas as number) >= REINTRO_LIFETIME_ROAS_MIN
-        && (c.lifetimeOrders ?? 0) >= REINTRO_LIFETIME_MIN_ORDERS;
-      return proven || (c.lifetimeSpend ?? 0) === 0;   // 2x+ winner, or no spending record at all
-    });
+    const pool = reportsReady ? candidates : lifetimeOnlyPool(candidates);
     if (!reportsReady) out.notes.push(`lifetime-only pool: ${pool.length} of ${candidates.length} candidates`);
     const plan = selectReintroductions(pool, out.state, { deadKeys });
     out.promoted = plan.promote;

@@ -10,6 +10,7 @@ import {
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
+  lifetimeOnlyPool,
 } from "./ad-rules";
 
 // William's spec (2026-08-02), written up in .agent/ad-engine-rules-2026-08-02.md:
@@ -1160,5 +1161,38 @@ describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () =>
     const p = planBids([c({ bid: 0.85 })], { step: SD_BID_STEP });
     expect(p.moves).toHaveLength(0);
     expect(p.escalated[0]).toMatchObject({ bid: 0.85, wouldBe: 1.85 });
+  });
+});
+
+describe("lifetimeOnlyPool — the run whose report has not arrived (William 2026-08-14, 40 a day)", () => {
+  it("keeps a proven 2x+ winner", () => {
+    const c = cand({ keywordId: "001", lifetimeRoas: 2.4, lifetimeSpend: 900, lifetimeOrders: 60 });
+    expect(lifetimeOnlyPool([c])).toHaveLength(1);
+  });
+
+  it("keeps a word with no spending record at all", () => {
+    const c = cand({ keywordId: "002", lifetimeSpend: 0 });
+    expect(lifetimeOnlyPool([c])).toHaveLength(1);
+  });
+
+  it("drops a word whose lifetime record FAILS the 2x bar rather than calling it untested", () => {
+    // The whole reason the old code refused to run without a window: this word has spent $900 badly,
+    // and with no window to see it, a naive pool reads histSpend 0 and promotes it as never-tested.
+    const c = cand({ keywordId: "003", lifetimeRoas: 1.1, lifetimeSpend: 900, lifetimeOrders: 60 });
+    expect(lifetimeOnlyPool([c])).toHaveLength(0);
+  });
+
+  it("drops a high ratio built on too few orders", () => {
+    const c = cand({ keywordId: "004", lifetimeRoas: 79.8, lifetimeSpend: 0.25, lifetimeOrders: 1 });
+    // lifetimeSpend is non-zero, so it is not untested, and one order is not a ROAS.
+    expect(lifetimeOnlyPool([c])).toHaveLength(0);
+  });
+
+  it("still fills a full 10-keyword run, which is what turns 30 a day into 40", () => {
+    // The 00:30 run never had a window and so promoted nothing. On lifetime evidence it promotes a
+    // full batch like every other run.
+    const pool = lifetimeOnlyPool(Array.from({ length: 25 }, (_, i) =>
+      cand({ keywordId: String(i).padStart(3, "0"), lifetimeSpend: 0 })));
+    expect(selectReintroductions(pool, fresh).promote).toHaveLength(10);
   });
 });
