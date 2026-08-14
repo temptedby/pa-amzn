@@ -830,7 +830,20 @@ export const TARGET_ROAS = 2.0;
 // is the same argument that produced the blended-window rule for keywords.
 export const SD_BID_STEP = 0.05;
 export const SD_BID_COOLDOWN_HOURS = 24;
-export const SD_START_BID = 0.10;
+
+// WILLIAM 2026-08-14: "start at .05 and see if bids go up and down based on roas, once we spend $4
+// turn it off."
+//
+// Entry drops from $0.10 to $0.05, and Display gets its own FLOOR. The shared BID_FLOOR is $0.10,
+// which silently clamped every Display cut and made a five-cent bid unreachable — the search could
+// only ever move up. $0.02 is Amazon's own limit, quoted from a live write:
+//   "Bid is out of range (must be in [0.02, 1000.0])"
+// Probed on a target inside a PAUSED campaign and restored, so nothing serving was disturbed.
+//
+// Search DIRECTION is unchanged and is the point of the exercise: not spending -> up a nickel,
+// spending under 2x -> down a nickel, at or above 2x -> shave. $4 unprofitably -> off for the month.
+export const SD_START_BID = 0.05;
+export const SD_BID_FLOOR = 0.02;
 
 export const BLEND_K = 3;
 
@@ -1257,9 +1270,14 @@ export function planBids(
     defaultBid?: number; killSpend?: number; killMinRoas?: number;
     /** step size per move. Sponsored Display uses SD_BID_STEP (5c); the others use a flat dime. */
     step?: number;
+    /** lowest bid a cut may reach. Display goes to SD_BID_FLOOR ($0.02, Amazon's own limit);
+     *  everything else stays on the shared $0.10. Without this the shared floor clamped every
+     *  Display cut and a five-cent bid was unreachable. */
+    floor?: number;
   } = {},
 ): BidPlan {
   const defaultBid = opts.defaultBid ?? BID_FLOOR;
+  const floor = opts.floor ?? BID_FLOOR;
   const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0 };
 
   for (const c of candidates) {
@@ -1272,7 +1290,7 @@ export function planBids(
       clicks: c.clicks, impressions: c.impressions ?? 0,
     };
     const ceiling = activeCeiling(c.approvedCeiling);
-    const step = searchStep(base, since, undefined, { ceiling, step: opts.step, shave: opts.step });
+    const step = searchStep(base, since, undefined, { ceiling, floor, step: opts.step, shave: opts.step });
 
     if (step.bid === null) {
       if (step.escalate) {

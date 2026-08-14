@@ -10,7 +10,7 @@ import {
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
-  lifetimeOnlyPool,
+  lifetimeOnlyPool, SD_BID_FLOOR,
 } from "./ad-rules";
 
 // William's spec (2026-08-02), written up in .agent/ad-engine-rules-2026-08-02.md:
@@ -1114,7 +1114,9 @@ describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () =>
   it("the constants are the ones he specified", () => {
     expect(SD_BID_STEP).toBe(0.05);
     expect(SD_BID_COOLDOWN_HOURS).toBe(24);
-    expect(SD_START_BID).toBe(0.10);
+    // SUPERSEDED 2026-08-14. He set entry to $0.10 on the 13th, then to $0.05 the next day once
+    // Amazon confirmed a $0.02 minimum: "start at .05 and see if bids go up and down based on roas".
+    expect(SD_START_BID).toBe(0.05);
   });
 
   it("a silent Display audience climbs a NICKEL, not a dime", () => {
@@ -1194,5 +1196,49 @@ describe("lifetimeOnlyPool — the run whose report has not arrived (William 202
     const pool = lifetimeOnlyPool(Array.from({ length: 25 }, (_, i) =>
       cand({ keywordId: String(i).padStart(3, "0"), lifetimeSpend: 0 })));
     expect(selectReintroductions(pool, fresh).promote).toHaveLength(10);
+  });
+});
+
+describe("Display bids start and cut at five cents (William 2026-08-14)", () => {
+  const t = (o: Partial<BidCandidate> & { id: string }): BidCandidate => ({
+    label: "views 14d", bid: 0.05, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o,
+  });
+
+  it("enters at $0.05, not the shared $0.10 floor", () => {
+    expect(SD_START_BID).toBe(0.05);
+  });
+
+  it("cuts BELOW the shared $0.10 floor, which the old wiring made impossible", () => {
+    // Spending, one click, well under 2x -> down a nickel. With the shared floor this clamped at
+    // $0.10 and the search could only ever move up.
+    const p = planBids([t({ id: "a", bid: 0.10, spend: 1.2, sales: 0, orders: 0, clicks: 3 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.moves[0]?.toBid).toBe(0.05);
+  });
+
+  it("stops at Amazon's real minimum of $0.02 and never goes under", () => {
+    const p = planBids([t({ id: "b", bid: 0.05, spend: 1.2, sales: 0, orders: 0, clicks: 3 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.moves[0]?.toBid).toBeGreaterThanOrEqual(SD_BID_FLOOR);
+    // Amazon: "Bid is out of range (must be in [0.02, 1000.0])"
+    expect(SD_BID_FLOOR).toBe(0.02);
+  });
+
+  it("still climbs a nickel when it is not spending at all", () => {
+    const p = planBids([t({ id: "c", bid: 0.05 })], { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.10, direction: "up" });
+  });
+
+  it("turns off at $4 spent unprofitably rather than cutting again", () => {
+    const p = planBids([t({ id: "d", bid: 0.05, spend: 4.10, sales: 0, orders: 0, clicks: 9 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.killing).toBe(1);
+    expect(p.moves).toHaveLength(0);
+  });
+
+  it("leaves a $4 spender alone while it is still returning over 1x", () => {
+    const p = planBids([t({ id: "e", bid: 0.05, spend: 4.10, sales: 9.49, orders: 1, clicks: 9 })],
+      { step: SD_BID_STEP, floor: SD_BID_FLOOR });
+    expect(p.killing).toBe(0);
   });
 });

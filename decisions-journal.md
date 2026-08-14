@@ -1551,3 +1551,56 @@ traffic for now.
 **Status.** Merged, 411 tests passing, tsc clean, five live keyword changes and four new Display
 targets verified by read-back. PR #2 is now mergeable and still needs William's merge. The nine
 eslint errors in `scripts/live-killrule.spec.mts` pre-date this work.
+
+## 2026-08-14 (part B) — Display starts at a nickel, and the floor that made that impossible
+
+**Context.** After the retarget structure was cut back to views 7d/14d and purchases 365d, William
+asked *"can we go down to .05 or .07 a click on these whats min?"* and then decided: *"start at .05
+and see if bids go up and down based on roas, once we spend $4 turn it off."*
+
+**Options.** (A) Guess the minimum from Amazon's published help pages. (B) Probe a live write on a
+target that is currently serving. (C) Probe on a target inside a PAUSED campaign and restore it.
+Also considered: leaving entry at $0.10 and arguing that Display's $0.00 month means the bid should
+go UP, not down.
+
+**Decision.** (C) to find the limit, then William's number. Amazon answered in its own words on the
+fifth attempt:
+
+```
+$0.07 ACCEPTED   $0.05 ACCEPTED   $0.03 ACCEPTED   $0.02 ACCEPTED
+$0.01 REFUSED — "Bid is out of range (must be in [0.02, 1000.0])"
+```
+
+The probe ran on a target in the paused `2 Pack Retarget` campaign and was restored to $0.10, so
+nothing serving was disturbed.
+
+Then the finding that made the instruction impossible as written: **`planBids` clamped every bid to
+the shared `BID_FLOOR` of $0.10.** Display could be told to enter at five cents and the search would
+have shoved it straight back to ten, and a cut on a Display target could never move at all. So the
+change is not one constant but three: `SD_START_BID` 0.10 -> 0.05, a new `SD_BID_FLOOR` at Amazon's
+own $0.02, and a `floor` option threaded through `planBids` into `searchStep`. Sponsored Products
+and Brands keep the $0.10 floor untouched.
+
+Six tests pin it, the sharpest being that a cut from $0.10 now lands on $0.05 where it previously
+clamped, and that $4 spent unprofitably kills rather than cutting a seventh time.
+
+All fourteen enabled audience targets are now at $0.05, read back from Amazon.
+
+**Reasoning.** A constant that is silently overridden by a shared clamp is worse than no constant,
+because the code reads as though the instruction was implemented. This one would have looked correct
+in review and done nothing.
+
+**Industry source.** Amazon's Sponsored Display bid validation, quoted verbatim from a live 207
+response rather than from documentation: `[0.02, 1000.0]`.
+
+**Trade-offs.** I argued against this and said so: Display has spent **$0.00 all month** at $0.10,
+so we are not losing money on expensive clicks, we are getting none. William's own keyword rule says
+a bid with no impressions goes UP. Lowering to five cents makes serving less likely in the short
+term. He has the counter-argument on his side though: six of fifteen targets could not serve at all
+until the creative was swapped an hour earlier, so the $0.00 is not clean evidence about the bid.
+Starting low and letting the ROAS search climb is the cheaper way to find out, and the $4 kill
+bounds the downside either way.
+
+**Status.** 417 tests, tsc clean. Fourteen targets at $0.05 verified by read-back. The search that
+moves them up and down only runs in production once PR #2 merges; until then the bids sit where they
+were set.

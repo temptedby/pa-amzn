@@ -49,7 +49,7 @@ import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
 import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
   planBids, KILL_MIN_ROAS, type BidCandidate, type BidPlan,
-  SD_BID_STEP, SD_START_BID, SD_BID_COOLDOWN_HOURS,
+  SD_BID_STEP, SD_START_BID, SD_BID_COOLDOWN_HOURS, SD_BID_FLOOR,
 } from "./ad-rules";
 
 const BASE = "https://advertising-api.amazon.com";
@@ -259,7 +259,7 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   // Display moves in NICKELS and at most ONCE A DAY (William 2026-08-13). Retargeting produces far
   // fewer clicks than search, so a six-hour window holds almost no evidence, and a dime crosses a
   // third of the usable $0.10-$0.48 range in a single move.
-  const bidPlan = planBids(candidates, { step: SD_BID_STEP, defaultBid: SD_START_BID });
+  const bidPlan = planBids(candidates, { step: SD_BID_STEP, defaultBid: SD_START_BID, floor: SD_BID_FLOOR });
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
     entityId: c.id, label: c.label, bid: c.bid ?? 0,
