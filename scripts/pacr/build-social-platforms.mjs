@@ -41,25 +41,39 @@ const CANVAS = {
 };
 
 // Six concepts. Each one is a real photograph with the product visible and a person using it.
+// THE VOICE, from William 2026-08-03 and it is the brief: "I really like comedy. I really like
+// positive energy. I don't want to give people fear... I want to give people encouragement that
+// this can help save them have worry-free days. You go to a festival, you're out boating, you're
+// running, you now have additional support and protection through all these activities without
+// losing the most important thing... Phone assured leaves you feeling assured."
+//
+// So: never lead on the loss. Lead on the freedom the clip buys you and let the reassurance be the
+// punchline. "Back seats keep phones" was fear dressed as a fact, and he was right to reject it.
+// Headlines stay short because the same line has to read on a 1280x720 thumbnail.
 const CONCEPTS = [
   { id: '01-water',  src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131504.jpg`,
-    head: 'Held out over open water.', sub: 'Still attached.', focus: 'centre' },
+    head: 'Go on. Hold it out.', sub: 'Your phone is not going anywhere.', focus: 'centre' },
+
   // FORCED TO COVER ON THE TALL CANVASES, and the override earns its place. This is the only
   // landscape source in the set, so the orientation rule sends it to the blurred fill and the
   // subject ends up in the middle 40% of a 9:16 frame with grey blur above and below. But the
   // waistband and the clip sit dead centre, so cropping here removes pink brick and nothing else.
   // A rule cannot see that; it was decided by opening the file.
   { id: '02-waist',  src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08247.jpg`,
-    head: 'It disappears into what you wear.', sub: 'Clipped, not dangling.', focus: 'centre',
+    head: 'Goes with everything.', sub: 'Clipped on, out of the way, off your mind.', focus: 'centre',
     force: { vertical: 'cover', feed: 'cover', square: 'cover' } },
+
   { id: '03-call',   src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08215.jpg`,
-    head: 'On a call. Hands full. Secured.', sub: 'The clip stays put while the phone moves.', focus: 'north' },
+    head: 'Talk with your hands.', sub: 'Both of them. It is staying right where you put it.', focus: 'north' },
+
   { id: '04-denim',  src: `${L}_Phone_Assured_Photos_Dec_10__IMG_20201210_151525.jpg`,
-    head: 'Clips where you already keep it.', sub: 'A pocket, a belt loop, a bag strap.', focus: 'centre' },
+    head: 'Pocket. Belt loop. Bag strap.', sub: 'Wherever your phone already lives, this lives too.', focus: 'centre' },
+
   { id: '05-car',    src: `${L}_Phone_Assured_Photos_Jan_10th__IMG_3290.jpg`,
-    head: 'Back seats keep phones.', sub: 'Yours leaves with you.', focus: 'centre' },
+    head: 'Leave with everything.', sub: 'Especially the phone.', focus: 'centre' },
+
   { id: '06-reel',   src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131548.jpg`,
-    head: 'One moving part. Backed for a year.', sub: 'Two clips if anything goes wrong.', focus: 'centre' },
+    head: 'One little reel. Zero worry.', sub: 'Backed for a year, and we mean it.', focus: 'centre' },
 ];
 
 /** Fit a photograph to a canvas WITHOUT cropping into the subject.
@@ -97,23 +111,60 @@ async function place(src, w, h, focus, force) {
 
 /** The caption. Scaled to the canvas rather than fixed, because a 40px headline that reads well on
  *  970x600 is invisible on 1920x1080 and overwhelming on a 1280x720 thumbnail. */
+/** Measure, wrap, and shrink until the headline FITS.
+ *
+ *  SVG <text> does not wrap and does not care that it has run off the canvas, so the first build
+ *  rendered "Leave with everything you arrived with." straight off the right edge of a 1280x720
+ *  thumbnail, cut mid-word. Nothing caught it but opening the file. This is the PACR refuse-level
+ *  assert "text overflows its box", enforced here at draw time so it cannot recur with new copy.
+ *
+ *  0.55 em per character is the measured average for Helvetica Bold in mixed case. Caps-heavy
+ *  strings run wider, which is why the loop shrinks rather than trusting one multiplier. */
+function fitLines(text, maxW, size, em = 0.55) {
+  const width = (str, px) => str.length * px * em;
+  let px = size;
+  for (let i = 0; i < 40; i++) {
+    const words = String(text).split(' ');
+    const lines = [];
+    let cur = '';
+    for (const w of words) {
+      const next = cur ? cur + ' ' + w : w;
+      if (width(next, px) <= maxW || !cur) cur = next;
+      else { lines.push(cur); cur = w; }
+    }
+    if (cur) lines.push(cur);
+    // Two lines is the most a caption block may carry; beyond that it eats the picture.
+    if (lines.length <= 2 && lines.every((l) => width(l, px) <= maxW)) return { lines, px };
+    px = Math.round(px * 0.94);
+  }
+  return { lines: [String(text)], px };
+}
+
+/** The caption. Scaled to the canvas rather than fixed, because a 40px headline that reads well on
+ *  970x600 is invisible on 1920x1080 and overwhelming on a 1280x720 thumbnail. */
 function caption(w, h, head, sub, big) {
   const k = w / 1080;
-  const hs = Math.round((big ? 68 : TYPE.head + 12) * k);
-  const bs = Math.round(28 * k);
   const pad = Math.round(52 * k);
-  const blockH = hs + bs + pad * 2 + Math.round(14 * k);
+  const maxW = w - pad * 2;
+  const H = fitLines(head, maxW, Math.round((big ? 68 : TYPE.head + 12) * k));
+  const S = fitLines(sub, maxW, Math.round(28 * k), 0.5);
+  const lh = Math.round(H.px * 1.06);
+  const headH = lh * H.lines.length;
+  const subH = Math.round(S.px * 1.25) * S.lines.length;
+  const blockH = headH + subH + pad * 2 + Math.round(14 * k);
   const top = h - blockH;
+  const headY = (i) => top + pad + H.px * 0.74 + lh * i;
+  const subY = (i) => top + pad + headH + Math.round(14 * k) + S.px * 0.78 + Math.round(S.px * 1.25) * i;
   return `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
     <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
       <stop offset="0" stop-color="rgba(9,20,24,0)"/><stop offset="1" stop-color="rgba(9,20,24,.93)"/>
     </linearGradient></defs>
-    <rect x="0" y="${top - Math.round(140 * k)}" width="${w}" height="${blockH + Math.round(140 * k)}" fill="url(#g)"/>
+    <rect x="0" y="${top - Math.round(150 * k)}" width="${w}" height="${blockH + Math.round(150 * k)}" fill="url(#g)"/>
     <rect x="${pad}" y="${top + Math.round(6 * k)}" width="${Math.round(96 * k)}" height="${Math.max(4, Math.round(6 * k))}" fill="${SEA}"/>
-    <text x="${pad}" y="${top + pad + hs * 0.72}" font-family="Helvetica,Arial" font-size="${hs}"
-      font-weight="800" letter-spacing="${-1.2 * k}" fill="#ffffff">${esc(head)}</text>
-    <text x="${pad}" y="${top + pad + hs + Math.round(14 * k) + bs * 0.75}" font-family="Helvetica,Arial"
-      font-size="${bs}" fill="#CFE6E7">${esc(sub)}</text>
+    ${H.lines.map((l, i) => `<text x="${pad}" y="${headY(i)}" font-family="Helvetica,Arial" font-size="${H.px}"
+      font-weight="800" letter-spacing="${-1.2 * k}" fill="#ffffff">${esc(l)}</text>`).join('')}
+    ${S.lines.map((l, i) => `<text x="${pad}" y="${subY(i)}" font-family="Helvetica,Arial"
+      font-size="${S.px}" fill="#CFE6E7">${esc(l)}</text>`).join('')}
   </svg>`;
 }
 
