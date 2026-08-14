@@ -1407,3 +1407,65 @@ report ignores its `marketplaceIds` parameter entirely, returning identical US d
 requested, which nearly produced a report that Canada was trading while it sits deactivated. The
 pattern across all of them is the same one as yesterday: the log said fine, and the data said
 otherwise.
+
+## 2026-08-13 (evening) — The ads did not break; adding an ad re-opened a moderation that had never passed
+
+**Context.** Six emails arrived at hello@ between 18:00 and 18:39 UTC titled "Your display ad
+requires updates". William's reading was that something had changed an image we already had
+approved. That is the right thing to suspect after a day of writes to the ad account, and it needed
+answering before any further Display work.
+
+**Options considered.** (1) Take the emails at face value and re-upload creative. (2) Establish
+first whether any of our code has ever written a creative, then work out what the emails are
+actually reporting. (3) Ignore them as notification noise, since the ads involved were already
+paused by yesterday's reversal.
+
+**Decision.** Option 2, then a scoped fix that is still pending William's approval of the images.
+
+**Reasoning.** The claim "we changed an approved image" is testable two ways and both say no. Every
+Display write in this repo goes to `/sd/productAds` or `/sd/targets`; there is no call to any
+creative endpoint anywhere in 95 scripts or `sd-engine.ts`. And all nine live creatives report
+`assetVersion: version_v1`, so no asset has ever been superseded.
+
+What the emails actually report is a re-review. Creating a product ad inside an ad group makes
+Amazon re-moderate that ad group's custom image. Twenty-one of yesterday's 42 ads landed in six ad
+groups carrying 2023 infographic panels, and those panels violate the Display custom-image rule
+against added text, graphics and inset images. Six ad groups, six emails, each listing three
+violations because the same file is cropped square, horizontal and vertical.
+
+The finding that changes what we do next is the mapping. Six of the fifteen enabled retarget targets
+sit behind a rejected image, and they are a complete duplicate set of the audiences William has just
+concluded work best: short-window views and long-window buyers, on Pro and Black Combo. The
+structure built yesterday is half dark, and not because the audiences are wrong.
+
+**Industry source.** Amazon's Display creative acceptance policy is explicit that custom product
+images may not contain text, logos, graphics, inset images or borders, and Amazon's own moderation
+guide describes the review as running on both automated and human passes at ad-creation time, which
+is why an ad-group-level image gets re-examined when a new ad enters it. Minimum accepted size is
+600x600, JPG or PNG, no borders or text overlay.
+
+**Trade-offs accepted.** I stopped short of swapping the images. William asked to see the options in
+a browser and approve them, and pushing a creative to a live ad account is an outward-facing change
+that his "get them live" did not obviously waive. The cost is that six targets stay dark another
+day. The alternative cost was writing creative he had not seen.
+
+Video is available and was not chosen. The API enum accepts `[IMAGE, VIDEO]`, but `creativeType`
+lives on the ad group and all six read `IMAGE`, so video means new ad groups and audiences that
+restart learning. That is a real decision, not a detail, so it goes to William.
+
+**Status.** Diagnosis complete and evidenced. Creative inventory complete: 73 lifestyle photographs
+plus 20 product images, contact sheets built and reviewed, best candidate identified as the Cozumel
+over-water series where the tether is visible and the risk is the whole subject. Nothing written to
+the ad account this session. PR #2 and #3 still unmerged, so the day's engine work remains inert.
+
+**Corrections.** One, and it was the important kind. I wrote that the images had been "rejected 19
+months ago". William asked how I knew, and the honest answer was that I did not: I had taken an ad
+creation date of 2025-01-11 and a current `servingStatus`, which carries no timestamp, and turned
+them into a historical claim. What I had actually measured was 30 days of zero impressions. The real
+evidence turned out to be stronger and it was sitting in our own database: `campaign_lifetime`, from
+Amazon's `Campaign_Aug_5_2026.csv` export, shows Pro Retarget and Black Combo Retarget at 0 clicks
+and $0.00 lifetime since January 2025, while the three campaigns with approved images have spent
+$2,903 between them. A rejection date is still not obtainable, because Amazon publishes no
+moderation timestamp and v3 reporting only retains to 2026-06-10. The lesson is the one from
+yesterday in a new costume: a current status field is not a history, and inferring a date from a
+creation timestamp is exactly the kind of confident wrong answer these instruments keep producing.
