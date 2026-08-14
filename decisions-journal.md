@@ -1678,3 +1678,58 @@ that should be cut, which is the line I used to decide what blocks a launch.
 
 **Status.** 422 tests, tsc clean, production build compiles. Three fixes committed with tests
 pinning each.
+
+## 2026-08-14 (part D) — A ceiling that recorded a number and changed nothing
+
+**Context.** William read the 18:00 gate notice on Telegram and answered there. Two things surfaced
+at once: the bot is send-only so nothing had read his replies, and PA-AMZN's report is landing in
+the WIS chat because I reused those credentials this morning. Then, on the branded head term:
+*"we'll put in permission for the two fifty to go up to three fifty and see what it does... if it
+has a 9x Rho as over its lifetime, then we should explore what we can do... go slow and maybe only
+raise like five cents at a time instead of ten since we're over the 250 threshold."*
+
+**The correction I owe on the recommendation.** I told him "no ROAS yet" on both gated keywords and
+recommended refusing them. That read the current month only. On lifetime:
+
+```
+phone assured retractable phone tether  PHRASE  $29.63 -> $273.18  17 ord  710 impr   9.2x
+  bid $2.50 since at least 05 August, engine never touched it
+  90-day window: $3.08 spent, 2 clicks — it is not failing, it is barely in the auction
+phone holder for pants men              EXACT    $5.04 ->  $20.95   1 ord 1,866 impr
+```
+
+It is the best return ratio in the account. His instinct was right and my window was too short.
+
+**Options for the step change.** (A) A percentage step, which self-scales — rejected, he has said
+twice that he never asked for a percentage. (B) A per-keyword step — more machinery than the problem
+needs. (C) A flat nickel above a $2.50 threshold, which is what he asked for.
+
+**Decision.** (C), enforced inside `move()` rather than at the call sites so every path that raises
+inherits it, including the turn-around. Raises only. Cuts keep the full dime, because cutting
+reduces risk and getting to a cheaper bid quickly is the point of cutting.
+
+**The bug the test found, and it is older than today.** The first test failed with `expected null to
+be 2.55`. `BID_CAP` is $2.50 and `move()` clamps to it, so a keyword sitting at $2.50 could not move
+a cent — which means **the $2.85 gate has been unreachable since the staircase was written**.
+Approving it wrote a row and changed nothing, silently. The $2.85 approval I applied twenty minutes
+earlier would have done exactly nothing.
+
+Fixed by making the cap default to `max(BID_CAP, ceiling)`. A ceiling is a human decision about one
+keyword; BID_CAP is a default backstop. The decision wins. Five tests pin the nickel step and one
+pins that a cut is still a dime.
+
+`approve-ceiling.mjs` now accepts a named ceiling off the staircase when `--id` names one keyword,
+because $3.50 is not one of the three gates. `--all` still requires a gate, since a blanket approval
+should only land on a number we have thought about before.
+
+**Reasoning.** A rule that records intent and produces no behaviour is worse than no rule, because
+the record makes it look handled. This is the third instance of that exact shape today — the
+`applied=1` flag, the empty `kw_bid_history`, and now the unreachable gate.
+
+**Trade-offs.** Raising a word that has taken two clicks in three months may simply buy silence at a
+higher price. The downside is bounded: William asked for it to be watched, the $4 kill still applies,
+and at a nickel a run it takes twenty runs to travel from $2.50 to $3.50. What is NOT yet built is
+his "bring it back down or turn it off" — the turn-around rule exists but has never fired, because
+until 18:01 today `kw_bid_history` had no rows for it to read.
+
+**Status.** 427 tests, tsc clean. Ceilings live: $3.50 on the branded term, $1.85 on the other.

@@ -23,7 +23,7 @@ import sharp from 'sharp';
 import { mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { SEA, TYPE, esc } from './design-system.mjs';
+import { INK, SEA, TYPE, esc } from './design-system.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const OUT = join(ROOT, 'build/creative/social-platforms');
@@ -53,7 +53,7 @@ const CANVAS = {
 // Headlines stay short because the same line has to read on a 1280x720 thumbnail.
 const CONCEPTS = [
   { id: '01-water',  src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131504.jpg`,
-    head: 'Go on. Hold it out.', sub: 'Your phone is not going anywhere.', focus: 'centre' },
+    head: 'Go on. Hold it out.', sub: 'Your phone is not going anywhere.', focus: 'centre' , tpl: 'kicker', kicker: 'OPEN WATER'},
 
   // FORCED TO COVER ON THE TALL CANVASES, and the override earns its place. This is the only
   // landscape source in the set, so the orientation rule sends it to the blurred fill and the
@@ -62,19 +62,21 @@ const CONCEPTS = [
   // A rule cannot see that; it was decided by opening the file.
   { id: '02-waist',  src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08247.jpg`,
     head: 'Goes with everything.', sub: 'Clipped on, out of the way, off your mind.', focus: 'centre',
-    force: { vertical: 'cover', feed: 'cover', square: 'cover' } },
+    force: { vertical: 'cover', feed: 'cover', square: 'cover' } , tpl: 'panel'},
 
   { id: '03-call',   src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08215.jpg`,
-    head: 'Talk with your hands.', sub: 'Both of them. It is staying right where you put it.', focus: 'north' },
+    // "Talk with your hands doesn't really make sense... you can say hold your phone, no worries.
+    // Like, hold my beer. So hold my phone, no worries." — William 2026-08-14. His joke, his words.
+    head: 'Hold my phone.', sub: 'No worries. It is going nowhere.', focus: 'north', tpl: 'panel' },
 
   { id: '04-denim',  src: `${L}_Phone_Assured_Photos_Dec_10__IMG_20201210_151525.jpg`,
-    head: 'Pocket. Belt loop. Bag strap.', sub: 'Wherever your phone already lives, this lives too.', focus: 'centre' },
+    head: 'Pocket. Belt loop. Bag strap.', sub: 'Wherever your phone already lives, this lives too.', focus: 'centre' , tpl: 'kicker', kicker: 'EVERYDAY'},
 
   { id: '05-car',    src: `${L}_Phone_Assured_Photos_Jan_10th__IMG_3290.jpg`,
-    head: 'Leave with everything.', sub: 'Especially the phone.', focus: 'centre' },
+    head: 'Leave with everything.', sub: 'Especially the phone.', focus: 'centre' , tpl: 'panel'},
 
   { id: '06-reel',   src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131548.jpg`,
-    head: 'One little reel. Zero worry.', sub: 'Backed for a year, and we mean it.', focus: 'centre' },
+    head: 'One little reel. Zero worry.', sub: 'Backed for a year, and we mean it.', focus: 'centre' , tpl: 'panel'},
 
   // ---- WAVE TWO, William 2026-08-14: "lets continue to build" ----------------------------------
   // The four Barcelona frames were already vouched for in build-set-v2.mjs on the test that matters
@@ -84,7 +86,7 @@ const CONCEPTS = [
   // and yellow field, unreadable at thumbnail size. Replaced with a full-body frame where the clip
   // is on the person and the setting does some work.
   { id: '07-lean',   src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08260.jpg`,
-    head: 'Long calls. Zero babysitting.', sub: 'It waits on your hip until you need it.', focus: 'centre' },
+    head: 'Long calls. Zero babysitting.', sub: 'It waits on your hip until you need it.', focus: 'centre' , tpl: 'kicker', kicker: 'ALL DAY'},
 
   // 125 dropped at the sheet stage. It is a landscape frame the man fills edge to edge, so every
   // vertical crop that keeps the phone loses his head, and the blurred-fill alternative leaves the
@@ -96,16 +98,35 @@ const CONCEPTS = [
   // show a phone hanging from this lanyard... but actually he must be holding the line" — and PACR
   // forbids it. Replaced with a frame that carries the same freedom idea and no ambiguity.
   { id: '09-wander', src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08389.jpg`,
-    head: 'Wander further.', sub: 'Everything that matters is coming with you.', focus: 'centre' },
+    head: 'Wander further.', sub: 'Everything that matters is coming with you.', focus: 'centre' , tpl: 'kicker', kicker: 'TRAVEL'},
 
   { id: '10-street', src: `${FA}os_Megan_William_Barcelona__Mabel_Llevat_111.jpg`,
-    head: 'Busy street, easy mind.', sub: 'It goes where you go, quietly.', focus: 'north' },
+    // "I'm not on a busy street, I'm by the pool, so that one doesn't work... maybe make it like
+    // always enjoying the good moments, worry-free" — William 2026-08-14. The old line described a
+    // scene that is not in the photograph, which is the kind of thing only the owner catches.
+    head: 'Good moments, worry-free.', sub: 'Every single one of them.', focus: 'north', tpl: 'kicker' },
 
   { id: '11-dog',    src: `${L}_Phone_Assured_Photos_March_6__DSC_0544_00137.jpg`,
-    head: 'Some of us guard it better.', sub: 'Good thing it is clipped on.', focus: 'centre' },
+    head: 'Some of us guard it better.', sub: 'Good thing it is clipped on.', focus: 'centre' , tpl: 'panel'},
 
   { id: '12-denim2', src: `${L}_Phone_Assured_Photos_Dec_10__IMG_20201210_151810.jpg`,
     head: 'Out all day. Still on you.', sub: 'Worry-free is the whole point.', focus: 'north' },
+
+  // ---- WAVE THREE, William 2026-08-14: "lets choose more photos and keep building" -------------
+  { id: '13-reel2',  src: `${L}_Phone_Assured_Photos_Cozumel_April_9th__IMG_20210409_131551.jpg`,
+    head: 'Small enough to forget.', sub: 'Strong enough to remember for you.', focus: 'centre', tpl: 'panel' },
+
+  { id: '14-steps',  src: `${L}hone_Assured_Photos_Megan_Lindsay_Oaxaca__A7_08356.jpg`,
+    head: 'Out exploring. Fully equipped.', sub: 'Phone on you, hands free.', focus: 'centre', tpl: 'kicker', kicker: 'WEEKEND' },
+
+  { id: '15-street2', src: `${L}_Phone_Assured_Photos_Dec_10__IMG_20201210_151833.jpg`,
+    head: 'Take the picture. Twice.', sub: 'Nothing is going in the gutter.', focus: 'north' },
+
+  { id: '16-car2',   src: `${L}_Phone_Assured_Photos_Jan_10th__IMG_3291.jpg`,
+    head: 'In. Out. Everything with you.', sub: 'No seat-cushion search required.', focus: 'centre', tpl: 'panel' },
+
+  { id: '17-dog2',   src: `${L}_Phone_Assured_Photos_March_6__DSC_0550_00143.jpg`,
+    head: 'Left it on the sofa.', sub: 'On purpose, for once.', focus: 'centre', tpl: 'kicker', kicker: 'HOME' },
 ];
 
 /** Fit a photograph to a canvas WITHOUT cropping into the subject.
@@ -200,6 +221,58 @@ function caption(w, h, head, sub, big) {
   </svg>`;
 }
 
+/** TEMPLATE B — PANEL. Photograph on top, a solid ink block beneath carrying the type.
+ *
+ *  William 2026-08-14: "use other tempalte splease". One treatment across sixty files reads as a
+ *  batch export rather than a campaign, and a bottom gradient is also the weakest option on a pale
+ *  frame — half this library is bright sun and white stone. A solid block never fails that way and
+ *  it lets the headline run bigger, which is what carries a feed at thumbnail size. */
+function tplPanel(w, h, head, sub) {
+  const k = w / 1080;
+  const pad = Math.round(58 * k);
+  const panelH = Math.round(h * (h > w ? 0.26 : 0.30));
+  const top = h - panelH;
+  const H = fitLines(head, w - pad * 2, Math.round(64 * k));
+  const S = fitLines(sub, w - pad * 2, Math.round(27 * k), 0.5);
+  const lh = Math.round(H.px * 1.05);
+  const headTop = top + Math.round(panelH * 0.30);
+  return { panelH, svg: `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+    <rect x="0" y="${top}" width="${w}" height="${panelH}" fill="${INK}"/>
+    <rect x="${pad}" y="${top + Math.round(panelH * 0.16)}" width="${Math.round(84 * k)}" height="${Math.max(4, Math.round(6 * k))}" fill="${SEA}"/>
+    ${H.lines.map((l, i) => `<text x="${pad}" y="${headTop + H.px * 0.74 + lh * i}" font-family="Helvetica,Arial"
+      font-size="${H.px}" font-weight="800" letter-spacing="${-1.4 * k}" fill="#ffffff">${esc(l)}</text>`).join('')}
+    ${S.lines.map((l, i) => `<text x="${pad}" y="${headTop + lh * H.lines.length + Math.round(18 * k) + S.px * 0.78 + Math.round(S.px * 1.25) * i}"
+      font-family="Helvetica,Arial" font-size="${S.px}" fill="#9FC4C6">${esc(l)}</text>`).join('')}
+  </svg>` };
+}
+
+/** TEMPLATE C — KICKER. Full-bleed photograph, a small accent pill top-left, type bottom-left over
+ *  a short scrim. The lightest treatment in the set, for frames strong enough to carry themselves. */
+function tplKicker(w, h, head, sub, kicker) {
+  const k = w / 1080;
+  const pad = Math.round(52 * k);
+  const kp = Math.round(19 * k);
+  const kw = kicker.length * (kp * 0.74) + kp * 2.2, kh = kp * 2.3;
+  const H = fitLines(head, w - pad * 2, Math.round(58 * k));
+  const S = fitLines(sub, w - pad * 2, Math.round(26 * k), 0.5);
+  const lh = Math.round(H.px * 1.06);
+  const blockH = lh * H.lines.length + Math.round(S.px * 1.3) * S.lines.length + pad * 2;
+  const top = h - blockH;
+  return `<svg width="${w}" height="${h}" xmlns="http://www.w3.org/2000/svg">
+    <defs><linearGradient id="k" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="rgba(9,20,24,0)"/><stop offset="1" stop-color="rgba(9,20,24,.86)"/>
+    </linearGradient></defs>
+    <rect x="0" y="${top - Math.round(120 * k)}" width="${w}" height="${blockH + Math.round(120 * k)}" fill="url(#k)"/>
+    <g><rect x="${pad}" y="${pad}" rx="${kh / 2}" width="${kw}" height="${kh}" fill="${SEA}"/>
+      <text x="${pad + kw / 2}" y="${pad + kh * 0.69}" text-anchor="middle" font-family="Helvetica,Arial"
+        font-size="${kp}" font-weight="700" letter-spacing="${1.4 * k}" fill="#ffffff">${esc(kicker)}</text></g>
+    ${H.lines.map((l, i) => `<text x="${pad}" y="${top + pad + H.px * 0.74 + lh * i}" font-family="Helvetica,Arial"
+      font-size="${H.px}" font-weight="800" letter-spacing="${-1.2 * k}" fill="#ffffff">${esc(l)}</text>`).join('')}
+    ${S.lines.map((l, i) => `<text x="${pad}" y="${top + pad + lh * H.lines.length + Math.round(12 * k) + S.px * 0.78 + Math.round(S.px * 1.3) * i}"
+      font-family="Helvetica,Arial" font-size="${S.px}" fill="#CFE6E7">${esc(l)}</text>`).join('')}
+  </svg>`;
+}
+
 mkdirSync(OUT, { recursive: true });
 
 // CLEAN FIRST. Renaming a concept leaves its old files behind, and they are indistinguishable from
@@ -210,13 +283,27 @@ for (const f of readdirSync(OUT)) if (f.endsWith('.jpg')) rmSync(join(OUT, f));
 const built = [];
 for (const c of CONCEPTS) {
   for (const [name, cv] of Object.entries(CANVAS)) {
-    const base = await place(c.src, cv.w, cv.h, c.focus, c.force?.[name]);
-    const buf = await sharp(base)
-      .composite([{ input: Buffer.from(caption(cv.w, cv.h, c.head, c.sub, name === 'thumb' || name === 'wide')), top: 0, left: 0 }])
-      .jpeg({ quality: 90 }).toBuffer();
+    const tpl = c.tpl || 'caption';
+    let buf;
+    if (tpl === 'panel') {
+      // The photograph is resized to the space ABOVE the panel, never composited under it, so the
+      // block never covers a subject the crop was chosen to keep.
+      const { panelH, svg } = tplPanel(cv.w, cv.h, c.head, c.sub);
+      const photo = await place(c.src, cv.w, cv.h - panelH, c.focus, c.force?.[name]);
+      buf = await sharp({ create: { width: cv.w, height: cv.h, channels: 3, background: INK } })
+        .composite([{ input: photo, top: 0, left: 0 }, { input: Buffer.from(svg), top: 0, left: 0 }])
+        .jpeg({ quality: 90 }).toBuffer();
+    } else {
+      const base = await place(c.src, cv.w, cv.h, c.focus, c.force?.[name]);
+      const svg = tpl === 'kicker'
+        ? tplKicker(cv.w, cv.h, c.head, c.sub, c.kicker || 'PHONE ASSURED')
+        : caption(cv.w, cv.h, c.head, c.sub, name === 'thumb' || name === 'wide');
+      buf = await sharp(base).composite([{ input: Buffer.from(svg), top: 0, left: 0 }])
+        .jpeg({ quality: 90 }).toBuffer();
+    }
     const file = join(OUT, `${c.id}-${name}.jpg`);
     writeFileSync(file, buf);
-    built.push({ concept: c.id, canvas: name, w: cv.w, h: cv.h, serves: cv.serves,
+    built.push({ concept: c.id, canvas: name, template: tpl, w: cv.w, h: cv.h, serves: cv.serves,
       file: file.replace(ROOT + '/', ''), bytes: buf.length, head: c.head, sub: c.sub, source: c.src.replace(ROOT + '/', '') });
   }
 }

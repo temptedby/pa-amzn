@@ -754,6 +754,20 @@ export const BID_SEARCH_STEP = 0.10;
 // out of auctions it was winning, and the traffic does not return just because the bid does. That
 // is market share, and it is expensive to re-buy. Cutting too slow only costs time. When the
 // evidence cannot tell the two apart, the cheaper mistake is the slow one.
+// A FINER STEP ONCE THE BID IS HIGH. William 2026-08-14, approving $3.50 on the branded head term:
+// "go slow and maybe only raise like five cents at a time instead of ten since we're over the 250
+// threshold, please."
+//
+// The reasoning holds beyond this one keyword. A dime is 40% of a $0.25 bid and 4% of a $2.50 one,
+// so a flat step is coarse where it is cheap and timid where it is expensive. Above $2.50 every
+// rung costs real money on a word that is, by definition, barely winning impressions, so the search
+// slows down exactly where a wrong guess is most expensive.
+//
+// RAISES ONLY, which is what he said. Cuts keep the full dime, because cutting reduces risk and
+// reaching a cheaper bid quickly is the point of cutting at all.
+export const BID_FINE_STEP = 0.05;
+export const BID_FINE_ABOVE = 2.50;
+
 export const BID_SHAVE_STEP = 0.02;
 
 /** Clicks needed before a ROAS reading is trusted. Below this the ratio is noise: the bid still
@@ -1050,8 +1064,17 @@ export function searchStep(
   const shave = opts.shave ?? BID_SHAVE_STEP;
   const floorFound = opts.floorFound ?? null;
   const floor = opts.floor ?? BID_FLOOR;
-  const cap = opts.cap ?? BID_CAP;
   const ceiling = opts.ceiling ?? BID_CONFIRM_CEILING;
+  // THE CAP MUST NEVER SIT BELOW AN APPROVED CEILING.
+  //
+  // Found by a test on 2026-08-14 and it is older than today's change. BID_CAP is $2.50 and move()
+  // clamps to it, so a keyword sitting AT $2.50 could not move a cent — which means the $2.85 gate
+  // on the staircase has been unreachable since the staircase was written. Approving it recorded a
+  // number and changed nothing, silently, which is the worst shape a rule can have.
+  //
+  // A ceiling is a human decision about one keyword; BID_CAP is a default backstop. The decision
+  // wins.
+  const cap = opts.cap ?? Math.max(BID_CAP, ceiling);
   const minClicks = opts.minClicks ?? SEARCH_MIN_CLICKS;
   const target = opts.target ?? TARGET_ROAS;
   const base = currentBid > 0 ? currentBid : floor;
@@ -1078,6 +1101,12 @@ export function searchStep(
   const move = (dir: "up" | "down", reason: string, thisStep: number = step): SearchStep => {
     if (dir === "up" && isSpending) {
       return { bid: null, reason: `${reason} — but it IS spending, and a spending word is never raised` };
+    }
+    // Above $2.50 a raise moves a nickel instead of a dime (William 2026-08-14). Applied here rather
+    // than at the call sites so every path that raises — including the turn-around — inherits it.
+    if (dir === "up" && base >= BID_FINE_ABOVE - 0.005 && thisStep > BID_FINE_STEP) {
+      thisStep = BID_FINE_STEP;
+      reason += ` (nickel steps above $${BID_FINE_ABOVE.toFixed(2)})`;
     }
     const stepC = Math.round(thisStep * 100), baseC = Math.round(base * 100);
     const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);

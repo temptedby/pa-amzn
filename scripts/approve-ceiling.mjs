@@ -27,7 +27,13 @@ if(has('list')){
 }
 const product=PRODUCTS[(val('product')||'').toUpperCase()]||val('product');
 const ceiling=Number(val('ceiling'));
-if(!product||!GATES.some(g=>Math.round(g*100)===Math.round(ceiling*100))){
+// A NAMED CEILING FOR ONE KEYWORD is allowed off the staircase. William 2026-08-14 approved $3.50
+// on the branded head term, which is not one of the three gates. The staircase still governs --all,
+// because a blanket approval should only ever land on a number we have thought about before.
+const namedOne = has('id') || val('id');
+const okCeiling = Number.isFinite(ceiling) && ceiling > 0 && ceiling <= 10
+  && (namedOne || GATES.some(g=>Math.round(g*100)===Math.round(ceiling*100)));
+if(!product||!okCeiling){
   console.log(`usage: --product=SP|SB|SD --ceiling=${GATES.map(g=>g.toFixed(2)).join('|')} (--all | --id=<entityId>)`);
   console.log('       --list');
   process.exit(1);

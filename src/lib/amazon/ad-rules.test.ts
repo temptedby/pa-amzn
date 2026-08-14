@@ -1294,3 +1294,39 @@ describe("Display raises only when it is genuinely absent from the auction (revi
     expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
   });
 });
+
+describe("nickel steps above $2.50 (William 2026-08-14)", () => {
+  // "go slow and maybe only raise like five cents at a time instead of ten since we're over the 250
+  // threshold, please" — approving $3.50 on the branded head term, a word at 9.2x lifetime that
+  // barely wins an impression.
+
+  it("raises a nickel at $2.50 and above", () => {
+    const r = searchStep(2.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
+      undefined, { ceiling: 3.50 });
+    expect(r.bid).toBe(2.55);
+  });
+
+  it("still raises a dime below the threshold", () => {
+    const r = searchStep(2.40, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
+      undefined, { ceiling: 3.50 });
+    expect(r.bid).toBe(2.50);
+  });
+
+  it("says so in the reason, because the digest is where this gets noticed", () => {
+    const r = searchStep(2.60, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
+      undefined, { ceiling: 3.50 });
+    expect(r.reason).toContain("nickel steps above");
+  });
+
+  it("does NOT slow a cut — cutting reduces risk and should get there quickly", () => {
+    const r = searchStep(2.60, { spend: 3.0, sales: 1.0, orders: 1, clicks: 6, impressions: 900 },
+      undefined, { ceiling: 3.50 });
+    expect(r.bid).toBe(2.50);
+  });
+
+  it("still stops dead at the approved ceiling rather than stepping past it", () => {
+    const r = searchStep(3.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
+      undefined, { ceiling: 3.50 });
+    expect(r.bid).toBeNull();
+  });
+});
