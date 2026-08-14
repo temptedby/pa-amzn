@@ -711,3 +711,970 @@ $82.09 against an independent pull. Rollback snapshot of all 3,458 keyword bids 
 `as_of='2026-08-05'`. Nothing applied to the account. Wave one is blocked on two fixes: assigning
 waves by word so duplicate copies move together, and protecting the cohort from the automated bid
 cut that would otherwise reverse the test within days.
+
+## 2026-08-07 — keep it spending, and above 2x
+
+**Context.** The morning review found the engine running cleanly on schedule and achieving almost
+nothing: one bid change in four days, the same impossible keyword submitted 40 times, and a $4 kill
+that fired once and paused one copy of a word that has eighteen. Separately, one Sponsored Brands
+keyword had taken $49.20 of the month's $75.11 and returned $18.98, invisible because v3 reporting
+returns zero rows for legacy single-ad-group campaigns. William's framing all day: "the company is
+losing money", "what is going on how are you reporting such mixed information".
+
+**Options.** For the bid engine specifically, three were built and two were killed:
+(A) a 7-day cooldown plus a rollback of any raise that hurt — rejected, "every 7 days thats wild??";
+(B) a hill climb with direction memory and turn-arounds — rejected, "thats not how you max roas you
+have to spend to max roas"; (C) a single threshold: keep it spending and above 2x. Also considered
+and rejected: an account-level monthly spend cap, and summing spend across duplicate copies of a
+word before killing.
+
+**Decision.** (C). Every run, each keyword moves a flat $0.10 toward the bid that keeps it both
+spending and returning 2x. Not spending → up. Spending at 2x or better → up. Spending under 2x →
+down. The $4 kill is untouched and stays per keyword, judged on its own spend, never summed across
+copies. The monthly cap was dropped. Duplicates are left alone.
+
+**Reasoning.** The threshold steers on its own, so no direction memory is needed: the bid climbs
+until ROAS falls through 2x, drops back, and settles at the highest bid the word can carry while
+still paying for itself. Crucially it refuses to treat "no data" as a reason to hold — a keyword
+winning nothing can never produce evidence, which is precisely how 1,830 of 2,282 enabled keywords
+parked at $0.10 with the best ratios in the account and no sales. William: "you have to spend to max
+roas so .10 is not ok". The flat dime rather than a percentage matters for the same reason: 10% of
+$0.10 is one cent, needing 19 runs to reach the $0.59 market CPC, against five for a dime.
+
+The monthly cap was dropped on evidence, not preference: $6.42 against $1,165/day authorised is
+0.6%, so the cap has never been the binding constraint. Bids are.
+
+**Industry source.** RBB written up in `RBB-duplicate-keywords-2026-08-07.md`. Amazon does not let
+an advertiser bid against itself — only one eligible ad enters any given auction, chosen on bid and
+relevance, in a second-price auction. Confirmed against our own account: of the duplicate groups
+that spent anything this month, **5 of 5 put all spend on one copy and 0 split it.** That disproved
+my own argument for summing spend across copies, and vindicated William's per-keyword rule.
+
+**Trade-offs accepted.** A word with five enabled copies can lose up to ~$20 before all five are
+off, in $4 steps — the cost of judging each keyword alone, and William's explicit choice. Judging a
+raise on data younger than Amazon's 14-day attribution window risks reading uncredited orders as
+failure; the 2x threshold mitigates this only partially, and the 14-day reprieve for killed keywords
+is not yet built. The bid search only sees keywords that appear in the month-to-date report, so a
+keyword with zero impressions has no row and is still reached only by the reintroduction job.
+
+**Status.** Committed on PR #2, not merged, therefore not deployed. 225 tests, tsc clean, verified
+by live dry run: 73 bid moves, all floored keywords climbing ($0.10 → $0.20, $0.34 → $0.44). The only
+changes actually made to the live account today were pausing `phone security` and archiving two test
+keywords, both verified by reading state back from Amazon.
+
+**Corrections logged.** Five numbers reported wrong today, all from quoting one of five data sources
+without stating its coverage or age: `phone security` at $15.81/0 orders (really $49.20/2 orders);
+$6.42 "spent today" (really the previous day's tail, from a budget-usage figure stale since the
+07:00Z reset); 1.99x "profitable" from `kw_lifetime` (really 1.72x and never profitable, once auto
+campaigns and Sponsored Display are included); `over4.mjs` reporting "0 words past $4" in a month
+containing a $49.20 word; and shipping a kill-all-copies design written up as though William had
+agreed to it when he had not.
+
+## 2026-08-08 — one rule across all three ad products, and reports stop setting the pace
+
+**Context.** The morning review found the engine healthy and achieving little: 1,810 of 2,281
+enabled keywords still at the $0.10 floor, one bid change per run, an invalid keyword resubmitted
+twice a run for the fourteenth time, and a $4 kill firing at $6.95 on a keyword whose real
+month-to-date was $13.61. Separately, Sponsored Display had never been under any rule at all despite
+being the worst performer in the account: 0.87x lifetime, returning less than half what it costs, on
+$200/day of authorised budget. William, across the day: "we need 40 a day not 20", "all ads need a
+$4 kill switch — products brands and display, this is so important", "Each spend is individual",
+"max bids go to $.85 then notified", "40minutes for a report is too long we need to sort this".
+
+**Options.** For the launch rate: (A) accept 20/day as the cost of Amazon's report queue;
+(B) poll for the report inline until it completes; (C) fall back to our own lifetime database when
+the window is late. For Display: (A) judge campaigns, which sbsd-engine.ts already previewed;
+(B) judge targets; (C) judge advertised ASINs. For report latency: (A) leave the deferred pattern
+alone and accept up to 6 hours of staleness; (B) poll inline; (C) warm the reports ahead of the
+engines with a separate job.
+
+**Decision.** (C) in all three cases. Promotion falls back to lifetime evidence from `kw_lifetime`,
+restricted to proven 2x+ winners and words with no spending record at all. Display is judged per
+TARGET. A `report-warm` cron at `40 */6` requests every report ~20 minutes before the engines need
+it. Separately, the tier-0 launch order is reversed to CHEAPEST lifetime spend first, the reintro
+ladder steps once per run rather than once per day, the $0.85 ceiling is retained as an approval
+gate, and the Sponsored Brands kill is changed from per-(text, match type) to per-keyword-id.
+
+**Reasoning.** Polling inline was never viable: measured today, Sponsored Products reports take
+about 9 minutes and Sponsored Display 10 to 15, against a 300s function budget. Warming is the only
+option that shortens the loop without blocking, and it costs nothing because the reports were going
+to be built anyway. It is safe only because the report spec is now constructed in exactly one place
+per product, which the live run proved: the warm-up found 8 ready and requested 0, where any drift
+in a single column name would have requested 8 fresh reports.
+
+Target-level for Display because that is where the bid lives, making it the exact analogue of a
+keyword. The advertised ASIN was rejected deliberately: it carries the SAME dollars seen from
+another angle, so acting on both would judge one dollar twice, and pausing a product ad stops
+advertising that product outright rather than trimming what is not working.
+
+Cheapest-first launch order because a word returning 2x on $3 of lifetime spend is an unfinished
+experiment while one returning 2x on $900 has already had its run, and the 2-order evidence bar
+already screens out the 79x-on-one-order noise. Per-keyword-id for Brands because summing a word
+across its copies and pausing them together is precisely what William ruled out, and Products has
+always judged per id, so this makes all three products agree.
+
+**Industry source.** Amazon's own documented behaviour on report retention and the async reporting
+v3 contract, measured rather than assumed: report ids a84b8047 (9m31s) and 5e4572fc (14m07s), both
+read "still pending" at 550s and both COMPLETED when polled later. `targetingId` confirmed present
+and non-null on every row of both.
+
+**Trade-offs accepted.** The lifetime fallback promotes on evidence that can be years old, which is
+the point but also means a word whose market has moved will get $4 of rope to prove it again.
+Warming adds a ninth cron and one more moving part; if it fails silently the engines simply revert
+to the old deferred behaviour, which is a soft failure rather than a hard one. Display's $4 rule
+will rarely fire at current spend (~$3.69/month across the whole product), so it is a guardrail
+against Display scaling up again rather than a fix for the 0.87x lifetime loss. The Display apply
+path is still unexercised live because nothing has crossed the bar.
+
+**Status.** Committed on PR #2, not merged, therefore not deployed. 241 tests, tsc clean. Verified
+live: reintroduction previews 10 promoted of 1,808 eligible and stops on `perRun`, so 40/day; launch
+order confirmed strictly ascending by lifetime spend; the Display engine read 28 targets and $3.69
+month-to-date and correctly paused nothing; the warm-up found 8 of 8 reports ready in 2 seconds.
+
+**Corrections logged.** Two today, both mine. I reported that the $4 kill had paused all six copies
+of `phone tether` PHRASE and implied the engine did it; `kw_state_snapshot` shows five were already
+paused on 08-05 and the engine touched only the one enabled copy. And I removed the $0.85 ladder
+ceiling on my own reading of "until $4 is hit", which William corrected the same day.
+
+## 2026-08-08 (part B) — track external traffic properly, and stop guessing at the account
+
+**Context.** William is forwarding `phoneassured.com` to the Amazon listing and asked whether to
+"wrap it in a UTM so we can track". Separately, three Amazon compliance threads were stalled and we
+had been reasoning about them from emails rather than from the account itself.
+
+**Options.** For tracking: (A) UTM parameters on the Amazon URL; (B) Amazon Attribution tag;
+(C) a thin landing page of our own carrying Google Analytics, which then links onward to Amazon with
+an Attribution tag. For the compliance threads: keep inferring from email, or read Seller Central
+directly with browser access.
+
+**Decision.** (B), plus enrolling in the Brand Referral Bonus. Read Seller Central directly.
+Deliberately NOT done: removing the Shopify DNS record, and filling in the W-9.
+
+**Reasoning.** A UTM only does something if a system you control reads it. With a bare domain
+forward there is no page of ours in between, Google Analytics cannot run on Amazon's pages, and
+Amazon never returns query strings to sellers, so a UTM would have produced a longer URL and zero
+data. Attribution is the mechanism Amazon actually reports on, and its campaign and ad group names
+do the job `utm_source` and `utm_medium` would have. (C) remains the better long-term shape if the
+domain ever serves a real page, and is worth revisiting rather than dismissed.
+
+Enrolling in BRB followed from the same choice rather than being separate: the bonus is only earned
+on traffic carrying an Attribution tag, so the tag was a precondition and the credit is free money
+on traffic we were going to send anyway. It is a credit against referral fees, not cash, averaging
+~10% and capped at the referral fee on each transaction.
+
+Reading the account directly settled in minutes what email could not settle in three days, and
+corrected me twice. "Securisee" turned out to be only the STORE name, so my concern that the bank
+statement's `Douglas Dean Holdings LLC` would not match was wrong — the business name matches
+exactly. And the address problem is not the `Unit 162` versus `Ste 162` wording I had focused on: the
+PRIMARY CONTACT record has no unit number at all, which cannot match a document carrying a suite line
+under any matching logic.
+
+**Industry source.** Brand Referral Bonus rates of roughly 6.5-11.2% by category
+(velocitysellers.com, ecomranker.com), and Amazon's own on-page wording: "a bonus averaging 10% of
+product sales driven by your non-Amazon marketing efforts ... provided as a credit on your referral
+fees". The BRB Terms and Conditions, read in full before accepting, define Qualified Traffic as
+requiring both an Attribution tag AND a landing page we own in Brand Registry.
+
+**Trade-offs accepted.** BRB and Amazon Associates cannot be combined on the same traffic, and
+attempting both risks termination of the selling account, so today's enrolment forecloses a
+conventional affiliate programme unless affiliates are paid from our own margin. On $9.49 with $4.93
+of contribution there is little room, so this is a real constraint rather than a formality. The tag
+also concentrates the domain on ONE detail page; a Store page would show the full range and is worth
+testing later.
+
+**Status.** Attribution tag live and verified by loading it, `maas` parameters intact. BRB
+**enrolled**, confirmed by the "You are enrolled!" badge rather than by an acknowledgment — the
+distinction that cost us three days on INFORM. The GoDaddy forward is NOT live: the apex still
+points at Shopify's IP and `www` has no record, so `phoneassured.com` returns an error from
+Shopify's edge. Removing that record is a destructive change on a live domain and awaits William.
+
+**Corrections logged.** Three. I claimed the entity name might not match the bank, when Securisee is
+only the store name. I said the domain was on Cloudflare, when the nameservers are GoDaddy and the
+Cloudflare error came from Shopify's edge. And I framed `Unit` versus `Ste` as the address blocker
+when the contact record is missing the unit entirely.
+
+**Also learned, and worth keeping.** There are THREE unrelated Amazon tax records: INFORM Tax
+Verification, the advertising-side tax information, and the Seller Central Tax Information Interview
+(W-9). Only the third unblocks the Brand Referral Bonus. Completing it enrolled the account
+automatically, exactly as the dialog promised.
+
+---
+
+## 2026-08-08 (part C) — Weight classes, a 40% affiliate rate, and two corrections I had to take
+
+**Context.** The domain forward went live, so external traffic is now attributed. William then asked
+for a phone compatibility rule (BLACK versus PRO by weight), for that to reach Megan's listing copy,
+and for an affiliate programme paying 40% of revenue instead of the ~50% we hand Amazon in ads. The
+governing goal is unchanged: move the ~2,000 units on hand with no new investment.
+
+**Options.**
+*Compatibility line:* hold at 170 g (iPhone 16 exactly), or 171 g (admit iPhone 15), or 177 g (admit
+iPhone 15, 14, 13 and 17). Each step adds a large installed base at the cost of a wider claim.
+*Listing emphasis:* keep BLACK as the hero, or promote PRO on the grounds that almost every popular
+phone is too heavy for BLACK.
+*Affiliate rate:* 25% (market is 15-25%) or 40% (William's proposal).
+*Affiliate platform:* Levanta at $150-750/month, Archer, or manual on our own Attribution tags.
+
+**Decision.** 171 g line. BLACK stays the hero listing. 40% commission, framed as a dated
+founding-partner rate. Manual programme, no platform fee. Compatibility research delivered to Megan
+as comments and an appended section, never as edits over her copy.
+
+**Reasoning.** The weight line is a *weight class* claim, not a strength claim, which matters because
+cord load capacity is still unconfirmed for both products — so nothing can say "holds X pounds" yet.
+On emphasis I was wrong and William corrected me: I saw that only two of the world's ten best selling
+phones fit BLACK and concluded PRO should lead. He pointed out BLACK carries the reviews and the sales
+history, and moving the hero position away from the listing that ranks would throw that away. The
+better move is the cross sell — keep BLACK in front and route heavy phone shoppers to the PRO from
+there. On the rate, I recommended 25% and he chose 40% to make a splash. His reasoning holds: partner
+acquisition is the binding constraint, not partner cost, and even 40% returns $2.08 a unit against
+$0.19 from ads. What I added was the mechanism that makes his stated intent to lower later actually
+work — a rate with a review date in the terms can step down on schedule; an open-ended one cannot be
+cut without partners treating it as a broken deal.
+
+**Industry source.** Amazon's Brand Referral Bonus terms, which state you can earn either a BRB or an
+Associates commission **for a single Attribution tag**, not both. Levanta's published pricing
+($150-750/month) and the 15-25% commission norm for Amazon creator programmes. Amazon's documented
+249-byte cap on backend search terms, where exceeding it drops the entire field silently.
+
+**Trade-offs accepted.** A 171 g line sends iPhone 14 and 13 owners to the PRO over a 1-3 gram
+difference; erring toward PRO is defensible while cord capacity is unconfirmed, and PRO is the
+higher-value unit anyway. 40% is 15 points above market, which we accept in exchange for partner
+interest and the option to step down on the stated date. Manual means no partner marketplace and about
+an hour a month of reading reports, which beats $150/month at our volume.
+
+**Status.** Compatibility research committed and delivered to Megan's doc as eight comments plus an
+appended section. Affiliate RBB committed at 40%. Attribution reporting **probed**: 200s on our
+existing credentials, with `groupBy: CREATIVE` giving the per-tag view a payout needs. Deliberately
+recorded as *access confirmed, data not observed* — every report returned zero rows because the tag is
+hours old, so the gate before paying any partner is a re-run showing a real row.
+
+### Corrections taken this session
+
+1. **BRB versus Associates is per tag, not per account.** A memory I wrote this morning said the two
+   conflict at account level and called an affiliate programme "incompatible" with the bonus. Wrong.
+   Both run side by side on different tags. Corrected in memory, because it was about to rule out a
+   programme we are now building.
+2. **"All-time" sales were not all time.** I quoted 5,149 units for the flagship from a file headed
+   "All-Time Sales". William said that could not be right for eight years, and he was right: the
+   SP-API only reaches back ~2 years, a caveat buried at the bottom of that same file. The number had
+   already been written into listing copy. The file is now retitled with the caveat at the top, since
+   a misleading heading caused a wrong claim once and would have done it again.
+3. **Two accidental edits to Megan's document.** Google Docs' find box and comment reply box both
+   silently failed to take focus, and my text landed in the document body instead. Caught and undone
+   both times, and the saved document verified against the original. The durable lesson: in the Docs
+   canvas only *new* comments are reliable; replying to an existing thread is not, so do not attempt
+   it on someone else's document.
+
+---
+
+## 2026-08-09 (early) — A ceiling that only half existed, a kill that judged blind, and one correction I had to take back
+
+### Context
+
+Morning review on ad campaigns and the affiliate programme. Three things collided.
+
+First, I read the account as nearly dead: $9.44 of spend and one order since 01 August. William
+pushed back in one line, *"day isnt done and conversion as picke dup I would check again"*, and he
+was right. Live pull: **$29.99 spend, $48.96 sales, 4 orders, 1.63x**. My number came from
+`kw_daily`, which last updated 2026-08-05 and whose only writer is a manual CSV import script.
+
+Second, the live bid engine had walked a single keyword from $0.82 to $1.94 in three days,
+compounding 10% every six hours off one conversion, while 1,790 of 2,281 enabled keywords sat at the
+$0.10 floor.
+
+Third, the $4 kill had paused two keywords that turned out to have converted. Both were judged as
+zero orders while their sales were still inside Amazon's 14-day attribution window. That is two of
+the month's four orders, on words now switched off.
+
+### Options
+
+**On the ceiling.** (a) Leave it, since the $4 kill bounds the downside. (b) Clamp raises at $0.85
+silently and retry forever. (c) Climb onto $0.85, stop, and report the ask.
+
+**On the killed converting words.** (a) Switch both back on now. (b) Leave them for the monthly
+reset on the 1st. (c) Re-check every run and revive the moment attribution takes them past a bar.
+
+**On per-copy killing.** (a) Assert it works from reading the loop. (b) Prove it from account
+history. (c) Extract the decision into a pure function and pin it with tests.
+
+### Decision
+
+Ceiling: (c). Revival: (c) at 2.0x, in-month. Per-copy: (b) then (c), evidence first, then the test.
+
+### Reasoning
+
+**The ceiling was only half-built and I had removed the other half myself.** `BID_LADDER_MAX = 0.85`
+bound the ladder, the path for words that will not spend. The ROAS bid search ran to `BID_CAP` at
+$2.50, with a comment I wrote on 08-08 saying *"There is no $0.85 stop any more."* That comment is
+how one keyword reached $1.94. William's instruction, *"after .85 we communicate to confirm you dont
+go over $.85 per keyword"*, is a human decision point, not a soft limit, so silent clamping (b) is
+the wrong shape: it turns a standing ask into silence. Cuts stay unrestricted, because lowering a
+bid reduces risk and needs no permission.
+
+**Revival is about attribution latency, not about being generous.** Amazon credits a sale to the
+click that caused it, up to 14 days later. A kill that reads month-to-date on the day it runs is
+therefore judging blind on any word whose sale has not landed. Waiting for the 1st (b) means a word
+vindicated on the 3rd sits dark four weeks. The bar is 2.0x, and the gap to `shouldKill`'s 1.923x
+pivot is deliberate: nothing sits in both windows, so one set of numbers can never both kill and
+revive. That is hysteresis by arithmetic rather than a cooldown timer, which is more durable because
+it cannot be defeated by changing a schedule.
+
+Scope is narrow on purpose: only this engine's kills, only this month, only while still paused. A
+word paused by hand, or in an earlier month, or tombstoned, is not the revival rule's business.
+
+**On per-copy killing, the evidence mattered more than the fix.** `phone tether` PHRASE reads 0 on /
+6 off, which looks exactly like a mass pause. The `kw_state_snapshot` for 08-05, two days before the
+kill, shows five were already paused and only id 232082872464476 was enabled. That single id is the
+one the kill took, and the one now in the revival ledger. Account-wide, 281 of 541 multi-copy groups
+are in mixed states, which is only possible if copies are judged apart.
+
+The concern had a real origin though. Commit `78102eb "the $4 kill now pauses every copy"` exists. I
+wrote it, and wrote it up as though William had agreed when he had not. It never left the PR #2
+branch and was reverted within it, but the fact that it was ever written is why "I read the loop and
+it looks fine" is not good enough. `killPlan()` is now pure, and seven tests pin it.
+
+### Industry source
+
+Amazon's own Sponsored Products documentation defines the 14-day attribution window as the basis for
+`sales14d` and `purchases14d`, which is what makes a same-day zero-order reading unreliable. The
+hysteresis pattern, separate thresholds for entering and leaving a state, is standard control theory
+and the same idea as a thermostat's differential or Schmitt trigger; using one threshold for both
+directions is the textbook cause of oscillation. The bid ceiling requiring human confirmation
+follows the ordinary automation practice of bounding an autonomous agent's authority by blast radius
+rather than by trusting a downstream guard.
+
+### Trade-offs accepted
+
+- **The $0.85 ceiling caps the search below where the economics would settle.** The convergence test
+  had to be rewritten to lift the ceiling explicitly, because the modelled 2x edge sits at $1.00.
+  This is a deliberate choice of control over yield, and William's to make.
+- **The revival rule only helps words this engine killed.** Anything paused by hand or in an earlier
+  month still waits for the monthly reset.
+- **The kill ledger had to be backfilled** for the two August kills, since both predate the table.
+  A database write, no account change, and the two rows were identified by which copy actually spent
+  rather than by text, because `phone tether` has 12 paused copies.
+- **`kw_daily` is still stale and still has no automated writer.** Named as open, not fixed.
+
+### Status
+
+Shipped to the PR #2 branch, not deployed. 275 tests pass, typecheck clean, and each rule was
+verified with a live dry run against the real account rather than from the test suite alone:
+
+```
+71 bid changes, highest $0.85, none above it
+2 keywords named as wanting more and left alone
+revival: 2 killed this month, 0 back above 2.0x
+```
+
+**PR #2 is now 25 commits and remains the single blocker.** Nothing described here, or on 08-07 or
+08-08, is running.
+
+### Correction taken this session
+
+Asked to wait on the two killed words, I also raised `REACTIVATE_MIN_ROAS` from 1.92x to 2.0x on the
+**monthly** reactivation. William had not asked for that: *"no all i said was if a word is turned
+off and the 14 day attribution kicks in for sales dont turn it back on that month until that word
+reaches a 2.0 roas."* Reverted in full; the monthly path has zero lines in the diff, and he
+confirmed the two are separate. Measured cost had it stood: 99 monthly revivals become 94, the five
+dropped sitting at 1.98x to 1.99x. Small in effect, but it was a rule of his that I widened without
+being asked, which is the second time in two days.
+
+### Affiliate note
+
+The Attribution probe still returns `count: 0` about 28 hours after the domain forward went live.
+William settled what that means: *"we will start running social media and content to
+phoneassured.com w eare not there yet."* Zero rows is the expected state of a tag nobody has been
+sent to, so it stops being a gate on the build and goes back to being a measurement that lights up
+when traffic starts. The partner ledger, payout rules, sync and cron remain unwritten.
+
+## 2026-08-10 — The bid rule turns round, and the photography turns out to be the asset
+
+### Context
+
+Three strands collided in one day.
+
+The morning review found production still running the pre-08-07 engine: one keyword walked to
+**$2.50** on 10%-a-run compounding, 77% of enabled keywords sat at the $0.10 floor, and PR #2 had
+been unmerged for four days behind a red Vercel check that turns out to be a preview-environment
+fault, not a code fault.
+
+Then William rewrote the bid rule across four messages, and the new rule **reverses** the one he
+gave on 08-07.
+
+Then he asked for creative, and a proper crawl of Drive found the library is **2,764 files**, not
+the 98 our own script reports.
+
+### Options
+
+**On bid direction for a profitable keyword.** (a) Keep 08-07: 2x or better means raise, buy more
+of a good thing. (b) Reverse: shave it down to find the cheapest bid that still converts.
+
+**On the step size for that shave.** (a) $0.05, the fast end of the range he offered. (b) $0.02,
+the slow end.
+
+**On what happens when a move makes things worse.** (a) Undo to a frozen floor and stop. (b)
+Reverse direction and keep hunting, two cents at a time.
+
+**On photo routing.** (a) Crop the best frames into every format. (b) Route by the shape each frame
+was shot in. (c) Reshoot for vertical. (d) Outpaint with generative fill to change aspect ratio.
+
+### Decision
+
+Bid direction: (b), reverse. Step: (b), two cents. Bad move: (b), turn round. Routing: (b), route by
+source shape, with a named fallback of cropping 24MP landscape when a subject exists only that way.
+Generative outpainting rejected outright.
+
+### Reasoning
+
+**The reversal is a change of goal, not a correction.** The 08-07 rule maximised total profit
+dollars: buy more of anything clearing 2x. The 08-10 rule maximises profit per dollar: find the
+cheapest bid that still converts. Both are William's and both are coherent; they just answer
+different questions. So the old rule is kept in the code as recorded history rather than
+overwritten, because a future reader needs to know it was deliberate.
+
+**Two cents, because the mistakes are not symmetric.** I argued for five and was wrong twice over.
+First, I asserted "two cents is too slow to read inside a month" without measuring it. Second, and
+the durable point, William named the asymmetry: *"rather be cautious to test a profitable keyword
+slowly then move too quick and turn off the spending and lose market share."* Cutting a working word
+too fast drops it out of auctions it was winning, and that traffic does not return just because the
+bid does. Cutting too slow only costs time.
+
+**The turn-around is what stops the floor trap repeating.** With every path in the new rule pointing
+down, a working keyword would walk to $0.10, which is exactly where 1,750 of them already sit. The
+reversal is the only force pushing back. It needs a baseline to judge "worse", so `kw_bid_history`
+now records what each bid level produced, and it deliberately does not fire on rows written before
+today rather than guessing from a half-known baseline.
+
+**On routing, the numbers decided it.** Resolution is not a constraint anywhere: median 6000x4000,
+and 100% of 338 measured photos clear the A+ crop, 98% clear a full 1080x1920. Shape is the
+constraint. A 3:2 frame forced into 9:16 keeps **38%** of the picture; a tall frame into a 970x600
+A+ module keeps **35%**. We hold 194 tall and 82 landscape, so routing by shape costs nothing and
+throws nothing away.
+
+### Industry source
+
+Amazon A+ module dimensions and the 2 MB Standard cap, and the detail-page video limits (16:9,
+6-45s, audio 96 kbps floor), from the published 2026 seller guidance. Instagram Reels and TikTok
+publish different safe zones; taking the stricter of each gives one 900x1280 box inside 1080x1920
+that serves both. The bid design follows ordinary hill-climbing with a reversal on degradation,
+which is the standard shape for optimising an unknown response curve, and the deliberate gap
+between the 1.923x kill pivot and the 2.0x revival bar is hysteresis, the textbook defence against
+oscillation.
+
+Competitors were read directly rather than from a blog: Pulpo $14.99 / 4.0 / 691 reviews / 7
+videos, ClutchLoop $28.98 / 4.2 / 2K+ a month, Oaridey $11.99 / 4.3 / Overall Pick. We are the
+cheapest and the lowest rated of the set at $9.49 and 3.8.
+
+### Trade-offs accepted
+
+- **The reversal will oscillate a couple of cents around the best bid rather than settling still.**
+  That is the intended behaviour and it is cheap at two cents, but it means the account never looks
+  finished.
+- **Routing by shape means some strong subjects never reach social**, because they exist only in
+  landscape.
+- **Generative outpainting was rejected** even though it would solve the aspect-ratio problem
+  outright. PACR 2 and 6 permit AI to edit our own photography, not to invent scene content on an
+  Amazon surface.
+- **A+ modules now carry no baked copy**, which makes them plainer than competitors' text-heavy
+  panels. The trade is that the words become indexable and readable by a screen reader for the
+  first time.
+
+### Status
+
+Shipped to the PR #2 branch. 329 tests, typecheck clean, every ad rule verified against the live
+account rather than the suite alone. Creative renders are gitignored; nothing has been uploaded to
+Seller Central and nothing has touched a live listing.
+
+**PR #2 remains the single blocker**, now 30+ commits.
+
+### Corrections taken this session
+
+**Three, and the first one reached someone else's desk.**
+
+1. I recorded that the A+ alt text is Hebrew on a US listing and had been for two years, and wrote
+   it into Megan's working document as an action item. **Wrong.** The en-US document carries seven
+   alt texts, all English; the Hebrew and Spanish documents are Amazon's own machine translations,
+   badged `GENERATED`. I found it only because I later called the A+ API instead of reading the
+   page, which is what I should have done before writing into her document. Corrected in the doc,
+   the RBB and memory. The real fault is smaller: our English alt text is stubs — "Phone Tether",
+   "sec", "S".
+2. I reported the 2023 package as 2,453 files. It is 84. The 2,453 figure is the entire Drive
+   library across all folders.
+3. I argued for a five cent shave step on an assertion I had not measured.
+
+**And one the tooling caught on me.** PACR 11, which I wrote yesterday, demanded 2000px on the long
+side for every Amazon surface. That is the main-image zoom rule and it is impossible for a 970x600
+A+ module, so the gate blocked every legitimate A+ asset I tried to build. The gate refusing my own
+work is the system behaving correctly; the rule is now surface-scoped to an exact canvas match.
+
+## 2026-08-11 — The engine killed the winners, and the answer was in another repo all along
+
+**Context.** Morning review found production had paused, at 06:00Z, the three keywords carrying 6 of
+August's 8 orders and $60.94 of $86.92 in sales. `retractable phone tether` had been walked from
+$0.55 to $0.89 over four runs *while converting*, which dragged it under the 1.923x pivot, at which
+point the $4 rule correctly killed it. The rule did what it was told. The bid engine that fed it is
+the pre-08-07 build, because PR #2 has never merged — and it is now CONFLICTING, so the merge button
+does nothing until `origin/main` is merged in.
+
+Separately William judged the 08-10 creative "not clean or professional enough" and asked for an RBB
+on doing it properly, then for volume: 40 videos, 100 graphics, 20 testimonials, in batches.
+
+**Options considered.** For the creative pipeline: (1) tune the existing sharp/SVG compositor,
+(2) render HTML and CSS through headless Chromium, (3) buy design from Megan, (4) ship the 2023
+studio package unedited. For the testimonials: real review quotes over real footage, versus
+AI-generated reenactment, which William asked for three times.
+
+**Decision.** Option 2 for the pipeline, and real footage for the testimonials. One renderer,
+`scripts/pacr/render.mjs`, with the lessons wired in as asserts rather than notes. Testimonials cut
+from a Billo UGC ad already sitting in Drive, plus the Paul Arnoldi customer video, transcribed and
+cut on sentence boundaries.
+
+**Reasoning.** The decisive input was not mine. A Social Scene agent wrote two handover docs into
+this repo, and its diagnosis of its own early work was ours word for word: *"a photo with a frame and
+text... decoration, not composition."* Its first logged rule, dated 2026-06-05, is the exact rule we
+broke on 08-10: never just overlay text on a full-bleed photo. William had reached the same verdict
+on Social Scene creative ten weeks before he reached it on ours, and the answer had been written down
+the whole time. I had built without reading it, and had written **nine** graphics builders into this
+repo, five of them the previous day on top of four that already existed.
+
+On AI: there are no generative credentials in any of the four project environments, verified against
+the env files and the entire MCP tool surface. But the stronger argument turned out to be that we
+already owned the better thing — four real people on camera holding the actual product and saying our
+warranty and anti-theft claims, plus a named customer who says he went through *72 iPhones* and can
+name *seven clear instances* where the clip saved one. AI cannot render our specific tether, so any
+generated product shot would put a competitor's geometry on our page.
+
+**Industry source.** Published A/B testing puts objection-first A+ module ordering 22-38% ahead of
+spec-first; Basic A+ lifts conversion 5-10% and cuts returns 10-15%. Category data: 161K annual
+searches growing 99.7% in 90 days, top five brands holding 75% of demand, average listing price
+$14.07 against our $9.49, incumbents averaging 1,442 reviews at 4.3 against our 480 at 3.8.
+
+**Trade-offs accepted.** Chromium is slower per asset than sharp; accepted because correctness of
+type and layout is the entire point. Paul Arnoldi is 480x848 and upscales soft; accepted because a
+real named customer with specific numbers beats a sharper generic clip. Testimonial quotes cannot go
+in A+ at all under Amazon's rules, so they are social-only.
+
+**Status.** Shipped to `build/creative/` and uploaded to Drive: 5 A+ modules, 4 testimonial cards,
+15 videos. Nothing written to the live listing or the ad account.
+
+**Corrections.** Five, four of them mine and material. I said the main image showed a lanyard; it
+does not, and I had inferred it rather than looked. I said we had no video; one was published and 352
+sat uncut in Drive. I concluded Drive uploads were blocked three separate times — read-only token,
+then "sharing fixes it", then "only a Shared Drive fixes it" — and the real answer was domain-wide
+delegation, available from the start. And I cut four testimonials mid-sentence by guessing boundaries
+off a contact sheet, fixed by transcribing with whisper-cli and cutting on real sentence ends.
+
+Two more worth recording because they argue the same point: the build gate **passed** a render that
+was entirely in 16px Times, and **passed** a module with a quarter of its content off the canvas.
+Neither is catchable by an assert that does not exist yet. Both were found by opening the image.
+
+## 2026-08-12 — Two bank statements disagreed, and one man was four different customers
+
+**Context.** Two clocks were running. Amazon had rejected seller verification twice and re-sent both
+the INFORM deactivation warning and the identity rejection on 11 August, each with a fresh ten days,
+so both expire 21 August. Separately William had asked for creative volume, 40 videos and 100
+graphics, and had spent two days correcting the output: khaki trousers where the review said jeans,
+a dingy AI-generated cord, women on men's names, and finally *"you can't use two different guys'
+names and then the same person is in the photos."*
+
+**Options considered.** For the verification: (1) tell William what to type, (2) read Amazon's side
+off the public seller page and diff it against the bank statement myself, (3) log in and change it.
+For the creative identity problem: (a) keep reusing the few models we own, (b) shoot or buy more
+people, (c) generate people with AI, (d) cut the set to what the library can honestly support and
+show the product instead of a person for the rest.
+
+**Decision.** Option 2 then 3 for Amazon, with William supplying both statements. Option (d) for the
+creative, with the rules written as asserts that refuse a build rather than as notes.
+
+**Reasoning.** The INFORM Act forces Amazon to publish a seller's business address, so the value they
+hold was readable without logging in: `730 W. Lake Street Unit 162`. The Douglas Dean Holdings
+statement prints `STE 162 / 730 W LAKE ST`. That was enough to diagnose it, and Seller Central then
+confirmed it by flagging that exact field in red.
+
+The part worth recording is what nearly went wrong. I had typed `STE 162` into the **residential**
+field too, and stopped before saving because the proof document attached to it was a different
+account, `PNC 4042`, which I had never read. William sent it: it prints **UNIT 162**. Same building,
+same suite, two PNC accounts, two different designator words. Amazon checks each address against its
+own document, so copying the business format across would have produced a third rejection.
+
+On the creative, the one-face-one-name rule is not a style preference. A reader who sees the same man
+called Kevin and then Jarret has been shown something false, and it is instantly noticeable. Encoding
+it as an import-time throw immediately produced the evidence: one man was standing in for four
+customers and one woman for four more. The honest response was to let the rule cut the set from
+fourteen cards to six and treat the number as the finding, because it says plainly that the library
+holds two distinguishable men and three women. Product-led cards then cover the rest without
+depicting anyone, so there is no identity to reuse.
+
+**Industry source.** Uber's 10th Lost & Found Index puts the phone first among forgotten items with
+over a million reported, peaking on Saturdays and between 9pm and midnight, worst on St Patrick's
+Day, Halloween and New Year's Eve. Insurance2go's 2025 report puts 35% of UK phone losses on public
+transport, and Dubai RTA lost-property figures make phones the top transit item at 16,607 of 68,929.
+2025 A+ guidance is consistent that a lifestyle context image belongs in slot 2 and that the page
+should answer "why this product" rather than "what is this product". All of it went into
+`confabulator/RBB-scene-creative-2026-08-12.md`, which William asked for before any build.
+
+**Trade-offs accepted.** Six photographed testimonial cards instead of fourteen, because the
+alternative is lying about who a customer is. Five location contexts instead of the eight William
+named, because we own no subway, transit, festival or snow photography and a composited transit shot
+would read as stock. Animation stays five seconds and silent, and Kling honours mood but not a
+direction, so the useful motion has to be what the subject would be doing anyway. AI spend runs on
+Social Scene's account and is rebilled: $1.73 across six clips, four usable, every row a real balance
+delta rather than a rate card.
+
+**Status.** Both addresses saved and submitted; Amazon is validating. PR #3 open, making a bid-ladder
+rung six hours instead of a day, 193 tests green. Fourteen honest testimonial cards and four AI
+reenactments in Drive. Nothing written to the live listing or the ad account.
+
+**Corrections.** Five, four of them William's. Kevin still had a woman because I fixed the graphic and
+left the AI reel carrying the old clip. One man was four names. The product-led cards first showed
+the hardware floating on paper with no context, which he read correctly as random. And two silent
+bugs surfaced only by opening the files: every "transparent" PNG this renderer has ever produced was
+opaque, because Playwright paints a white backdrop unless told otherwise, which hid an entire video
+behind white type on white; and the vertical-overflow gate had been refusing good cards by treating
+"an ancestor hides overflow" as proof of clipping. Both are now asserts that test the actual pixels
+rather than the intent. The pattern across all of them is the same: the build log said fine, and the
+file said otherwise.
+
+## 2026-08-13 — A word that still returns cash gets its bid cut, and Display was never a targeting problem
+
+**Context.** The morning review found the account upside down: every keyword that had made money was
+switched off and everything still running had made nothing. `retractable phone tether` PHRASE, the
+single biggest earner at $41.96 of August's $96.41, had been paused on 11 August at 1.63x. Correct by
+the rule, and the rule was leaving only 0.00x words running. Separately, every number I had reported
+all morning was Sponsored Products only, which William caught: we had spent over $200 across three ad
+products and I had shown him $114.
+
+**Options considered.** For the kill: (1) leave the 52% ACOS pivot and accept that winners get
+retired, (2) raise the ACOS target so fewer words die, (3) move the kill line down to 1x and let the
+bid rules own everything above it. For Display, once it emerged that it had never spent: (a) leave it
+off, (b) fix what was pointed at out-of-stock products and enable broadly, (c) narrow to entities
+proven over the account's lifetime, (d) treat bid rather than audience as the variable.
+
+**Decision.** Option 3 for the kill, on William's instruction. Option (b) then reversed to (d) for
+Display, over the course of the day.
+
+**Reasoning.** The kill line is the clearer of the two. A word at 1.63x is too expensive, not
+worthless, and too expensive is a bid problem. `shouldKill` was overruling the bid rules with a pause.
+Below 1x the ads cost more than the sales they produced and no cheaper bid rescues that, so that is
+where it stops. The dead band between kill (1.0x) and revival (2.0x) is now wider than the
+1.923x-2.0x band it replaced, so the no-flapping guarantee is stronger, not weaker.
+
+Display is the part worth recording properly, because I got it wrong twice. I first enabled 42 ads on
+a **stock** decision — pause what points at out-of-stock ASINs, put the four sellable ones everywhere.
+William asked how I had decided which should go live, and the honest answer was that no performance
+data was involved at all. Reversing that exposed the second error: my reversal logic recomputed the
+create list from current state and would have paused 52 ads, 18 of which pre-dated me. The extended
+product-ads endpoint carries `creationDate` and named exactly 42. Precise beats inferred.
+
+Then the real finding, and it was William's. I recommended pausing `views 30d` at a blended 0.71x.
+He asked to look at the bid. The same audience at different bids swings enormously and always the
+same way: views 14d returns 2.41x at a $0.10 bid and 0.67x at $0.48; views 30d returns 1.16x at
+$0.10 on 1,664 clicks, the largest sample in the account, and 0.47x at $0.34. Amazon suggests
+$3.52-$5.56 on these. Sponsored Display was not mis-targeted, it was bid up — the same disease that
+killed the keywords, in a channel with no engine watching it.
+
+**Industry source.** Published retargeting benchmarks are 4:1 to 8:1 ROAS; ours is 0.70x, a gap too
+large to be a tuning problem. Optimisation guidance lists *"excluding shoppers who have already
+converted"* as a core step, and we ran three separate purchases-remarketing audiences. Guidance also
+holds that visitors within 7 days show materially higher intent, which the account's own curve
+confirms. Blending a noisy recent estimate with a stabler long-run one is empirical Bayes shrinkage,
+standard for sparse advertising data (Dynamic Hierarchical Empirical Bayes, arXiv:1809.02213), whose
+central result is that the weight must scale with evidence. Written up in
+`confabulator/RBB-bid-signal-window-2026-08-13.md` and
+`confabulator/RBB-display-retarget-restructure-2026-08-13.md`.
+
+**Trade-offs accepted.** Sponsored Products moves a flat dime every six hours; Sponsored Display moves
+a nickel once a day, because retargeting produces far fewer clicks and a dime crosses a third of the
+usable $0.10-$0.48 range in one move. William chose a fixed 70/30 blend over the evidence-weighted
+version after being shown both. `purchases 365d` stays live at ten cents as his test, despite
+returning 0.69x at that bid, because it is the only buyers window trending the right way. And every
+Display change was applied while `sd-engine.ts` is still absent from production, so the channel has
+no kill rule and no bid rules behind it until PR #2 merges.
+
+**Status.** Four commits pushed, none merged. 406 tests green, typecheck clean. On the live account:
+40 of 42 Display ads reversed, 15 non-performing audiences paused, 16 survivors re-bid to $0.10, and
+zero ads now point at out-of-stock products. Nothing written to Sponsored Products or Brands.
+
+**Corrections.** Eight, six of them William's. He never asked for a percentage bid step and the file
+header wrongly credited one to his spec. My proposed 3-click minimum on raising would have blocked
+every raise in the system, since a word eligible for a raise has zero clicks by definition. I argued
+against Canada from a 90-day window that measured a suspension rather than demand. I reported
+Sponsored Products figures as though they were the account. And two instrument faults surfaced that
+had been producing confident wrong answers for weeks: `kw_bid_history` has silently rejected every
+write since it was created, because the engine INSERTs `roas_before` into a column named
+`acos_before`, which is why the turn-around rule has never once fired; and the SP-API all-orders
+report ignores its `marketplaceIds` parameter entirely, returning identical US data whatever is
+requested, which nearly produced a report that Canada was trading while it sits deactivated. The
+pattern across all of them is the same one as yesterday: the log said fine, and the data said
+otherwise.
+
+## 2026-08-13 (evening) — The ads did not break; adding an ad re-opened a moderation that had never passed
+
+**Context.** Six emails arrived at hello@ between 18:00 and 18:39 UTC titled "Your display ad
+requires updates". William's reading was that something had changed an image we already had
+approved. That is the right thing to suspect after a day of writes to the ad account, and it needed
+answering before any further Display work.
+
+**Options considered.** (1) Take the emails at face value and re-upload creative. (2) Establish
+first whether any of our code has ever written a creative, then work out what the emails are
+actually reporting. (3) Ignore them as notification noise, since the ads involved were already
+paused by yesterday's reversal.
+
+**Decision.** Option 2, then a scoped fix that is still pending William's approval of the images.
+
+**Reasoning.** The claim "we changed an approved image" is testable two ways and both say no. Every
+Display write in this repo goes to `/sd/productAds` or `/sd/targets`; there is no call to any
+creative endpoint anywhere in 95 scripts or `sd-engine.ts`. And all nine live creatives report
+`assetVersion: version_v1`, so no asset has ever been superseded.
+
+What the emails actually report is a re-review. Creating a product ad inside an ad group makes
+Amazon re-moderate that ad group's custom image. Twenty-one of yesterday's 42 ads landed in six ad
+groups carrying 2023 infographic panels, and those panels violate the Display custom-image rule
+against added text, graphics and inset images. Six ad groups, six emails, each listing three
+violations because the same file is cropped square, horizontal and vertical.
+
+The finding that changes what we do next is the mapping. Six of the fifteen enabled retarget targets
+sit behind a rejected image, and they are a complete duplicate set of the audiences William has just
+concluded work best: short-window views and long-window buyers, on Pro and Black Combo. The
+structure built yesterday is half dark, and not because the audiences are wrong.
+
+**Industry source.** Amazon's Display creative acceptance policy is explicit that custom product
+images may not contain text, logos, graphics, inset images or borders, and Amazon's own moderation
+guide describes the review as running on both automated and human passes at ad-creation time, which
+is why an ad-group-level image gets re-examined when a new ad enters it. Minimum accepted size is
+600x600, JPG or PNG, no borders or text overlay.
+
+**Trade-offs accepted.** I stopped short of swapping the images. William asked to see the options in
+a browser and approve them, and pushing a creative to a live ad account is an outward-facing change
+that his "get them live" did not obviously waive. The cost is that six targets stay dark another
+day. The alternative cost was writing creative he had not seen.
+
+Video is available and was not chosen. The API enum accepts `[IMAGE, VIDEO]`, but `creativeType`
+lives on the ad group and all six read `IMAGE`, so video means new ad groups and audiences that
+restart learning. That is a real decision, not a detail, so it goes to William.
+
+**Status.** Diagnosis complete and evidenced. Creative inventory complete: 73 lifestyle photographs
+plus 20 product images, contact sheets built and reviewed, best candidate identified as the Cozumel
+over-water series where the tether is visible and the risk is the whole subject. Nothing written to
+the ad account this session. PR #2 and #3 still unmerged, so the day's engine work remains inert.
+
+**Corrections.** One, and it was the important kind. I wrote that the images had been "rejected 19
+months ago". William asked how I knew, and the honest answer was that I did not: I had taken an ad
+creation date of 2025-01-11 and a current `servingStatus`, which carries no timestamp, and turned
+them into a historical claim. What I had actually measured was 30 days of zero impressions. The real
+evidence turned out to be stronger and it was sitting in our own database: `campaign_lifetime`, from
+Amazon's `Campaign_Aug_5_2026.csv` export, shows Pro Retarget and Black Combo Retarget at 0 clicks
+and $0.00 lifetime since January 2025, while the three campaigns with approved images have spent
+$2,903 between them. A rejection date is still not obtainable, because Amazon publishes no
+moderation timestamp and v3 reporting only retains to 2026-06-10. The lesson is the one from
+yesterday in a new costume: a current status field is not a history, and inferring a date from a
+creation timestamp is exactly the kind of confident wrong answer these instruments keep producing.
+
+## 2026-08-14 — The morning kill took two words that were paying for themselves
+
+**Context.** The morning review found production repeating the 11 August failure on the same
+keyword. Over 13 August the live engine raised `retractable phone tether` EXACT four times
+(0.55 → 0.61 → 0.67 → 0.74, a compounding 10% per run), and at 06:00Z on the 14th the $4 rule paused
+it at $6.12. A live per-keyword-id report showed what it was actually worth: $7.60 spent, $9.49
+back, **1.25x**. The same run also took `cell phone retractable` PHRASE at 1.34x. Only the third
+kill, `iphone leash` at 0.00x, was right. Production still kills at the 1.923x break-even because PR
+#2 has been CONFLICTING since main moved under it on 07 August, so every rule William set between
+the 7th and the 13th is inert. William: *"lower the bids every six hours by ten cents to see if we
+can get the ROAS above two. And if we can't, then once the ROAS goes below one, then we turn it
+off."* He also caught the launch rate himself: *"It should be launching 40 a day. It's every six
+hours, four times a day."*
+
+**Options.** (A) Hand-fix the account each morning and leave the PR alone — cheap today, identical
+work tomorrow, and the engine keeps manufacturing the kills. (B) Resolve the conflicts and ship,
+leaving this month's damage in place. (C) Both, in that order: unblock the merge, then repair what
+the old rules did. Also considered and rejected: reverting the branch and re-cutting it from main,
+which would have thrown away six days of rule work to avoid 26 conflict hunks.
+
+**Decision.** (C). Merged `origin/main` into the PR #2 branch and resolved all 26 hunks, then made
+the account match the rules that are about to ship.
+
+Every conflict resolved to the branch side, because in each case main's version was the older rule
+the branch had already superseded: `LADDER_STEP_DAYS` 1 vs 0, `BID_LADDER_MAX` 0.85 vs the
+`BID_CONFIRM_CEILING` gate staircase, tier-0 ranking by lifetime sales vs by lowest lifetime spend,
+and `ladderVerdict` without the evidence payload. The one judgement call worth recording is that I
+checked each hunk rather than taking `--ours` wholesale, because main carried PR #1 and a rule that
+existed only there would have been silently deleted. None did.
+
+Then, on the live account, verified by reading state back from Amazon rather than trusting the
+write response:
+
+```
+ENABLED  $0.79  retractable phone tether PHRASE   1.63x   (was $0.89, killed 08-11)
+ENABLED  $0.64  retractable phone tether EXACT    1.25x   (was $0.74, killed today)
+ENABLED  $0.65  cell phone retractable  PHRASE    1.34x   (was $0.75, killed today)
+PAUSED   $0.45  iphone leash tether     BROAD     $5.60 -> $0.00
+PAUSED   $0.45  cell phone anti theft strap PHRASE $4.51 -> $0.00
+```
+
+The three revivals come back one dime below the bid they were killed at, which is the first step of
+the rule they will now be governed by. The two pauses are the standing $4-with-no-sale rule that
+production had not applied to them.
+
+Also added the four **views-7d** retarget targets William asked for, one per enabled retarget
+campaign at $0.10, in the ad group that already holds views-14d. One per campaign, not one per ad
+group: each retarget campaign splits its audiences across three ad groups, so the obvious loop would
+have created three copies of the same audience inside one campaign. The create shape had to be
+probed live — `/sd/targets` takes a **bare array** with `expressionType`, and the `{targets:[...]}`
+envelope the keyword endpoints use returns 422.
+
+**Reasoning.** The kill was never the problem; the raise before it was. `nextBid` on main computes
+`base * (1 + step)` and fires whenever ACOS is under 52%, so a word that is converting gets bought
+up until it stops converting, and then the same engine pauses it for not converting. That is a loop,
+not a rule, and it has now consumed the account's best keyword twice in four days. Fixing the kill
+line alone would leave the loop intact.
+
+On the launch rate: the report window is keyed by UTC date, so the 00:30 run always finds a fresh,
+empty one and promotes nothing. That is exactly 30 a day instead of 40, and the promotion log shows
+it — 06:30, 12:30 and 18:30 every day since the 6th, never 00:30. The branch already fixes it by
+falling back to lifetime evidence, so the fix was to make that guarantee testable rather than to
+write new logic: the filter is now `lifetimeOnlyPool()` in `ad-rules.ts` with five tests, the
+sharpest being that a word which spent $900 at 1.1x is dropped rather than laundered into the
+"never spent" tier by a missing window.
+
+**Industry source.** Amazon's own Sponsored Display targeting reference for the accepted lookback
+values, confirmed against the live account on 13 August: views takes 7/14/30 and rejects 3;
+purchases takes 90/180/365 and rejects 270. William asked for "buyers over 270 days", and 365 is the
+nearest window that exists.
+
+**Trade-offs.** Re-enabling three words that are genuinely under 2x spends money on the bet that a
+lower bid lifts them. If the dime cuts do not work, the same $4 rule takes them off again at 1.0x,
+which is a bounded downside of a few dollars. Taking the branch side on every conflict means main's
+history is preserved only in git, not in the file. The views-7d targets on Pro and Black Combo
+cannot serve until the rejected creative is replaced, so two of the four are structure without
+traffic for now.
+
+**Status.** Merged, 411 tests passing, tsc clean, five live keyword changes and four new Display
+targets verified by read-back. PR #2 is now mergeable and still needs William's merge. The nine
+eslint errors in `scripts/live-killrule.spec.mts` pre-date this work.
+
+## 2026-08-14 (part B) — Display starts at a nickel, and the floor that made that impossible
+
+**Context.** After the retarget structure was cut back to views 7d/14d and purchases 365d, William
+asked *"can we go down to .05 or .07 a click on these whats min?"* and then decided: *"start at .05
+and see if bids go up and down based on roas, once we spend $4 turn it off."*
+
+**Options.** (A) Guess the minimum from Amazon's published help pages. (B) Probe a live write on a
+target that is currently serving. (C) Probe on a target inside a PAUSED campaign and restore it.
+Also considered: leaving entry at $0.10 and arguing that Display's $0.00 month means the bid should
+go UP, not down.
+
+**Decision.** (C) to find the limit, then William's number. Amazon answered in its own words on the
+fifth attempt:
+
+```
+$0.07 ACCEPTED   $0.05 ACCEPTED   $0.03 ACCEPTED   $0.02 ACCEPTED
+$0.01 REFUSED — "Bid is out of range (must be in [0.02, 1000.0])"
+```
+
+The probe ran on a target in the paused `2 Pack Retarget` campaign and was restored to $0.10, so
+nothing serving was disturbed.
+
+Then the finding that made the instruction impossible as written: **`planBids` clamped every bid to
+the shared `BID_FLOOR` of $0.10.** Display could be told to enter at five cents and the search would
+have shoved it straight back to ten, and a cut on a Display target could never move at all. So the
+change is not one constant but three: `SD_START_BID` 0.10 -> 0.05, a new `SD_BID_FLOOR` at Amazon's
+own $0.02, and a `floor` option threaded through `planBids` into `searchStep`. Sponsored Products
+and Brands keep the $0.10 floor untouched.
+
+Six tests pin it, the sharpest being that a cut from $0.10 now lands on $0.05 where it previously
+clamped, and that $4 spent unprofitably kills rather than cutting a seventh time.
+
+All fourteen enabled audience targets are now at $0.05, read back from Amazon.
+
+**Reasoning.** A constant that is silently overridden by a shared clamp is worse than no constant,
+because the code reads as though the instruction was implemented. This one would have looked correct
+in review and done nothing.
+
+**Industry source.** Amazon's Sponsored Display bid validation, quoted verbatim from a live 207
+response rather than from documentation: `[0.02, 1000.0]`.
+
+**Trade-offs.** I argued against this and said so: Display has spent **$0.00 all month** at $0.10,
+so we are not losing money on expensive clicks, we are getting none. William's own keyword rule says
+a bid with no impressions goes UP. Lowering to five cents makes serving less likely in the short
+term. He has the counter-argument on his side though: six of fifteen targets could not serve at all
+until the creative was swapped an hour earlier, so the $0.00 is not clean evidence about the bid.
+Starting low and letting the ROAS search climb is the cheaper way to find out, and the $4 kill
+bounds the downside either way.
+
+**Status.** 417 tests, tsc clean. Fourteen targets at $0.05 verified by read-back. The search that
+moves them up and down only runs in production once PR #2 merges; until then the bids sit where they
+were set.
+
+## 2026-08-14 (part C) — The review found a bug that would have raised every keyword on the account
+
+**Context.** William: *"yes commit and launch please review and make sure code is good."* Before
+merging six days of rule changes into a live ad account, I ran a high-effort review of the whole
+branch against `origin/main` and checked its findings against the code and the live account rather
+than taking them at face value.
+
+**Options.** (A) Merge on green tests, since 417 passed and tsc was clean. (B) Review, fix only what
+would cause live harm, then merge. (C) Review and fix everything found, including the latency and
+performance items, before merging.
+
+**Decision.** (B). Three findings were confirmed as live-money bugs and are fixed; the rest are
+recorded and deliberately not fixed in this pass, because each one is a behaviour change of its own
+and William wanted the rules he has been specifying all week to go live today.
+
+**The blocker, and it was a real one.** `perfSinceChange()` built its map by iterating `changes`,
+which only holds keywords carrying a `kw_bid_history` row. Every other keyword arrived at
+`searchStep()` as `since === undefined`, and that function reads undefined as "no impressions and no
+clicks" and answers by RAISING. Worse, `isSpending` computes from the same missing object, so the
+one guard that stops a spending word being raised was disarmed at the same moment.
+
+`kw_bid_history` has held **zero rows since it was created** — the INSERT names `roas_before` while
+the table declares `acos_before`, and the error is swallowed into `out.errors` where nothing reads
+it. So on the first production run after deploy, **every enabled keyword on the account would have
+been raised a dime**, including words sitting at $3.90 month-to-date and 0.4x. That is the
+account-wide version of the exact loop that took `retractable phone tether` twice in four days, and
+it would have shipped inside the PR written to end that loop.
+
+Fixed by seeding the window from month-to-date for every keyword before the per-change adjustments
+run. No change means nothing has reset the window, so month-to-date IS the performance since the
+last move. `planBids()` already did this for Brands and Display; Products was the outlier.
+
+**Two more, both confirmed.** The in-month revival read `r.json?.success` at the top level, but
+Amazon nests those arrays under `keywords`, so `perItem` was always false, `applied` collapsed to
+`r.ok`, and a 207 in which every item failed would still stamp `revived_at` and drop the keyword out
+of `openKills()` for the month while it sat PAUSED. Now routed through `parseBulkOutcome`, which is
+the parser the rest of the engine already uses. Separately, the Display report never requested an
+`impressions` column, so every target reported as "no impressions and no clicks" whatever it had
+actually been shown.
+
+**A finding I rejected, and why.** The review argued that a shown-but-never-clicked target should
+not be raised, on the reasoning that a click problem is a creative problem. That reasoning is sound
+and it is not what William decided: *"yes it climbs if not spending or converting you raise the bid
+to find the optimal"* (2026-08-10). The code matches his instruction, so the code stays. What the
+missing column actually cost was honesty, not direction — the digest he reads said "no impressions"
+about a target with 53 of them. My first test asserted the review's version and failed, correctly,
+against his rule. The test was wrong, not the engine.
+
+**Reasoning.** Green tests proved the code does what its tests say. None of these three had a test,
+which is the whole point: the dangerous defect was in the gap between two functions that were each
+individually correct. A live dry run after the fixes is what settled it, not the suite.
+
+**Live dry run against the real account, after the fixes:**
+
+```
+141 bid moves — 128 up, 13 down, 0 kills
+raises on a word that was already spending    0   <- the bug, gone
+raises still mislabelled as "no impressions"  0   <- the Display fix, visible
+moves above the $0.85 ceiling                 1   <- a CUT, $2.49 -> $2.47, never needs permission
+escalated for William instead of raised       2
+```
+
+**Trade-offs.** Nine further findings are recorded and not fixed: the warm-up cron fires after the
+engines rather than 20 minutes before, `recordBidRun` does thousands of serial round-trips inside a
+300-second function, `planBids` passes no `last` so the turn-around cannot fire for Brands and
+Display, the `restored`/`kw_bid_floor` mechanism is inert dead code, `rolledBack` never increments
+on a string mismatch, `sb-v2.ts` pairs campaign ids positionally against a regex sweep,
+`attribution.ts` has an uncapped cursor loop, `recordKills` ledgers a kill whose write threw, and
+`scripts/sd-set-entry-bid.mjs` silently rejects any bid at or above $1. None of them raise a bid
+that should be cut, which is the line I used to decide what blocks a launch.
+
+**Status.** 422 tests, tsc clean, production build compiles. Three fixes committed with tests
+pinning each.

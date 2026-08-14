@@ -1,0 +1,24 @@
+{
+  "asset_type": "image",
+  "surface": "amazon-secondary",
+  "product": "BOTH",
+  "slot": 1,
+  "template_id": "peace-of-mind-gallery",
+  "size": "2000x2000",
+  "background": "white",
+  "product_visible": true,
+  "shows_phone_hauled_up": false,
+  "headline": "Peace of mind, wherever you take it",
+  "body": [
+    "Clip it on once and use your phone exactly as you normally would.",
+    "It stays attached to you, your bag or your belt loop.",
+    "Real customers, real trips, no staging."
+  ],
+  "alt_text": "Four photographs of people smiling while using their phones in Barcelona and on holiday, each with a Phone Assured retractable tether attached to the phone.",
+  "source_assets": [
+    { "id": "bcn-132", "name": "Megan William Barcelona/Mabel_Llevat_132.jpg", "provenance": "own-photo" },
+    { "id": "bcn-126", "name": "Megan William Barcelona/Mabel_Llevat_126.jpg", "provenance": "own-photo" },
+    { "id": "bcn-111", "name": "Megan William Barcelona/Mabel_Llevat_111.jpg", "provenance": "own-photo" },
+    { "id": "bcn-125", "name": "Megan William Barcelona/Mabel_Llevat_125.jpg", "provenance": "own-photo" }
+  ]
+}

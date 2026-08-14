@@ -57,3 +57,11 @@ scripts/pw-*.png
 
 # Legal/identity docs - never commit (may contain payment/PII)
 .docs/
+
+# Seller Central status reads — account PII, never commit
+.sc-status/
+
+# Creative sources pulled from Drive (203MB of originals). Drive is the master copy;
+# these are a working cache and must never be committed.
+/assets/source/
+/build/creative/

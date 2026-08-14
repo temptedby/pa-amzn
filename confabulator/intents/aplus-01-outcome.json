@@ -1,0 +1,24 @@
+{
+  "asset_type": "image",
+  "surface": "amazon-aplus",
+  "product": "BOTH",
+  "slot": 1,
+  "template_id": "aplus-header-outcome",
+  "size": "970x600",
+  "background": "photo",
+  "product_visible": true,
+  "shows_phone_hauled_up": false,
+  "headline": "Your phone stays with you",
+  "body": [
+    "Clip it on once. Use your phone exactly as you normally would, and it stays attached to you, your bag or your belt loop."
+  ],
+  "alt_text": "A man holding his phone on a city street, with a Phone Assured retractable tether running from the phone down to a clip on his waistband.",
+  "source_assets": [
+    {
+      "id": "bcn125",
+      "name": "Megan William Barcelona/Mabel_Llevat_125.jpg",
+      "provenance": "own-photo"
+    }
+  ],
+  "module_type": "STANDARD_HEADER_IMAGE_TEXT"
+}

@@ -213,3 +213,70 @@ needs that customer's written permission first.
 3. Whether we put a tether tab in the box. Blocks PACR 46.
 4. Product photography of the clip WORN under clothing. We have no asset that demonstrates
    discretion, which is our single best differentiator (PACR 34, 35).
+
+-----
+
+# 9. v2 — 2026-08-09. ENFORCED IN CODE.
+
+Everything above this line was a document. From here it is also a program. The rules below, and
+every rule above that can be expressed mechanically, are checked by `src/lib/creative/pacr-rules.mjs`
+before anything renders. Modelled on the Social Scene BRC: a gate emits a pass token, and every
+renderer imports a guard that refuses to run without one.
+
+```
+node scripts/pacr/pacr-gate.mjs --intent candidate.json     # PASS -> /tmp/pacr-pass-<sha>.token
+PACR_INTENT=candidate.json node scripts/pacr/pacr-guard.mjs # refuses without that exact token
+```
+
+Changing the candidate after it passes changes the hash, so the token no longer matches. There is
+no way to render something the gate has not seen.
+
+**PACR 43.** The wristband and the necklace are discontinued (William, 2026-08-09). Only BLACK and
+PRO exist. No asset, no copy and no source file from the lanyard shoot. As of today the dead product
+is still in **A+ modules 1, 3 and 5**, and module 3 is entirely it.
+*Note on scope:* the copy check stays literal to what William said. The bare word "lanyard" is NOT
+blocked in copy, because our own listings still use it as a search term. The five Drive folders that
+are factually the lanyard shoot are blocked by name instead.
+
+**PACR 44.** No load, capacity or retraction number until it has been physically measured.
+ClutchLoop publishes 10 oz, Oaridey publishes 15 oz, Rogue publishes 36 inches. We publish nothing,
+and we may not answer with an invented figure. The gate unblocks this only when
+`confabulator/pacr-measurements.json` exists. **This is the highest-value blocked item on the page
+and it is a kitchen-scale job, not a design job.**
+
+**PACR 45.** The only weight claim we may make is the class: *"Best used with phones 171 g (6.0 oz)
+and under, about the weight of an iPhone 16."* Never *"tested with"* across a phone list. Only an
+iPhone 16 in a case has actually been tested.
+
+**PACR 46.** Video must show the product within 3 seconds. The scroll decision is made in about
+1.7 seconds, and the highest-performing hook type across 34,635 analysed clips is the product or
+outcome shown in the first 2.
+
+**PACR 47.** Video must carry burned-in captions. Most Amazon and social browsing is muted.
+
+**PACR 48.** Testimonials must be a real person's honest opinion of a product they used. The FTC
+treats **AI-generated testimonials as fake reviews**. Synthetic voice cloning of a real person needs
+their consent AND a disclosure the audience sees without expanding anything. A material connection,
+including free product, must be disclosed. AI may **edit** our own footage, upscale it, caption it
+and voice a script we wrote. AI may not invent an endorser or fabricate product footage.
+
+**PACR 49.** Alt text is required and must be English. The live A+ alt text is **Hebrew** and the
+2026 draft is **Spanish**, both Amazon auto-generated, on a US listing, for two years.
+
+**PACR 50.** A layout may not repeat within the last 6 assets on the same surface. Build 3 to 5
+variants per idea and rotate on performance, not on a calendar. Hook formats fatigue by weeks 6 to 8.
+
+## What v2 changes about the diagnosis
+
+Two beliefs this file was partly built on turned out to be wrong, both corrected 2026-08-09 against
+live data:
+
+- **"The creative is 2019-stale."** No. `/AMZ1Step Content` in Drive is a complete professional 2023
+  package: finished BLACK and PRO stacks, the A+ source, 32 RAW files at 6720x4480, a product video
+  and a real customer testimonial. The library is ~2,453 Phone Assured files, not the 98 our own
+  script reports.
+- **"Slots are unused."** No. Every ASIN runs MAIN + 7. Competitors run 5 to 8. We are at the median.
+
+The problem was never how old the photography is or how many slots are filled. It is what the
+assets **say**: no strength number, no compatibility slot, no head-to-head, a dead product in the
+A+, and a main image carrying "BEST VALUE" that Amazon's own rules prohibit.

@@ -58,15 +58,17 @@ describe("clampBidStep — C1 cap-rounding fix", () => {
   });
 });
 
-import { harvestCandidates, harvestWindows, HARVEST_MIN_SPEND, HARVEST_MAX_ACOS, type SearchTermRow } from "./ad-engine";
+import { harvestCandidates, harvestWindows, parseBulkOutcome, HARVEST_MIN_SPEND, HARVEST_MAX_ACOS, type SearchTermRow } from "./ad-engine";
 
 // H1 fix (confabulator/ad-engine-audit-2026-06-25.md) + Rule 3 of
 // .agent/ad-engine-rules-2026-08-02.md: harvest a search term INTO THE AD GROUP IT CONVERTED IN
 // (not one global anchor), as soon as it CONVERTS — no spend bar. Amazon's 80-char/10-word keyword
 // limit is enforced by shortening an over-long term to its longest valid root.
 const NEW_KW_BID = 0.5;
+// matchType defaults to BROAD because since 2026-08-08 only broad discoveries are harvested;
+// the tests below are about the OTHER conditions, so they all start from an eligible match type.
 const row = (o: Partial<SearchTermRow>): SearchTermRow =>
-  ({ campaignId: "C1", adGroupId: "A1", cost: 0, sales14d: 0, purchases14d: 0, ...o });
+  ({ campaignId: "C1", adGroupId: "A1", cost: 0, sales14d: 0, purchases14d: 0, matchType: "BROAD", ...o });
 
 describe("harvestCandidates — harvest on first conversion, into the source ad group", () => {
   it("harvests a qualifying term as EXACT + PHRASE into its OWN ad group", () => {
@@ -86,14 +88,23 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
     expect(adds.filter((a) => a.adGroupId === "A2")).toHaveLength(2);
   });
 
-  it("RULE 3: harvests a cheap term the moment it converts, with no spend bar", () => {
-    // Under the old >=$4 rule this term was invisible. It converted, so it is harvested.
+  it("harvests a cheap term the moment it converts WELL, with no spend bar", () => {
+    // 42 cents -> $9.49 is 22.6x. No minimum spend: cheap evidence is still evidence.
     expect(harvestCandidates([row({ searchTerm: "cheap", cost: 0.42, sales14d: 9.49, purchases14d: 1 })], new Set())).toHaveLength(2);
   });
 
-  it("harvests a converter even when its ACOS is poor (the kill rule handles it later)", () => {
-    // cost 10, sales 19 -> ACOS 52.6%. It converted, so it earns a keyword and $4 of rope.
-    expect(harvestCandidates([row({ searchTerm: "pricey", cost: 10, sales14d: 19, purchases14d: 2 })], new Set())).toHaveLength(2);
+  // William 2026-08-07: converting is not enough, it has to RETURN. Break-even is 1.92x.
+  it("REFUSES a converter that does not clear 2x — converting at a loss is still a loss", () => {
+    // cost 10, sales 19 -> 1.9x, under break-even. Previously this earned two keywords and $4 of rope.
+    expect(harvestCandidates([row({ searchTerm: "pricey", cost: 10, sales14d: 19, purchases14d: 2 })], new Set())).toHaveLength(0);
+  });
+
+  it("harvests exactly at the 2x line", () => {
+    expect(harvestCandidates([row({ searchTerm: "breakeven", cost: 5, sales14d: 10, purchases14d: 1 })], new Set())).toHaveLength(2);
+  });
+
+  it("refuses a hair under the 2x line", () => {
+    expect(harvestCandidates([row({ searchTerm: "just under", cost: 5, sales14d: 9.99, purchases14d: 1 })], new Set())).toHaveLength(0);
   });
 
   it("excludes a term with spend but ZERO conversions", () => {
@@ -105,6 +116,7 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
       row({ searchTerm: "phone leash", cost: 2.5, sales14d: 0, purchases14d: 0 }),
       row({ searchTerm: "phone leash", cost: 2.0, sales14d: 9.49, purchases14d: 1 }),
     ];
+    // $4.50 total against $9.49 -> 2.1x, so it clears the bar on the COMBINED windows, not on one.
     expect(harvestCandidates(rows, new Set())).toHaveLength(2);
   });
 
@@ -115,7 +127,9 @@ describe("harvestCandidates — harvest on first conversion, into the source ad 
     for (const a of adds) {
       expect(a.keywordText.length).toBeLessThanOrEqual(80);
       expect(a.keywordText.split(/\s+/).length).toBeLessThanOrEqual(10);
-      expect(long.startsWith(a.keywordText)).toBe(true);
+      // Word order preserved; the separator dash is stripped, so compare against the normalised form.
+      expect(long.replace(/(^|\s)[-–—]+(\s|$)/g, " ").replace(/\s+/g, " ").trim().startsWith(a.keywordText)).toBe(true);
+      expect(a.keywordText).not.toMatch(/(^|\s)[-–—]+(\s|$)/);
     }
   });
 
@@ -165,7 +179,7 @@ describe("harvestWindows — chunked <=31d trailing windows", () => {
 });
 
 
-import { reactivationCandidates, REACT_WINDOW_DAYS } from "./ad-engine";
+import { reactivationCandidates, REACT_WINDOW_DAYS, inMonthRevivals, REVIVE_MIN_ROAS, killPlan } from "./ad-engine";
 
 // Monthly reactivation (ad-engine-harvest-rule.md step 4, William 2026-06-26): re-enable a PAUSED
 // keyword whose trailing 65d recovered to the same winner bar as harvest (cost >= $4 AND ACOS <= 50%).
@@ -209,5 +223,287 @@ describe("reactivationCandidates — monthly re-enable of recovered paused keywo
   it("uses a 65-day trailing window split into <=31d report chunks", () => {
     expect(REACT_WINDOW_DAYS).toBe(65);
     expect(harvestWindows(REACT_WINDOW_DAYS, Date.parse("2026-06-26T00:00:00Z")).length).toBeGreaterThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-item write outcomes. Probed live 2026-08-07 against /sp/keywords with one
+// valid id and one invalid one: Amazon answered HTTP 207 carrying BOTH a success
+// and an error. 207 is inside the 2xx range, so `res.ok` was true — which is
+// exactly how a keyword Amazon refused 40 times was logged applied=1 every time.
+// ---------------------------------------------------------------------------
+describe("parseBulkOutcome", () => {
+  const real207 = {
+    keywords: {
+      success: [{ index: 0, keywordId: "52522040859374" }],
+      error: [{
+        index: 1,
+        errors: [{
+          errorType: "entityNotFoundError",
+          errorValue: { entityNotFoundError: { entityId: "1", entityType: "KEYWORD", message: "Could not find keyword with id: 1", reason: "ENTITY_NOT_FOUND" } },
+        }],
+      }],
+    },
+  };
+
+  it("splits a real 207 into the item that landed and the item that did not", () => {
+    const o = parseBulkOutcome(real207, 2);
+    expect([...o.succeededIdx]).toEqual([0]);
+    expect(o.failed).toHaveLength(1);
+    expect(o.failed[0]).toMatchObject({ index: 1, reason: "ENTITY_NOT_FOUND" });
+  });
+
+  it("a batch where EVERY item failed is not a success", () => {
+    const allFailed = { keywords: { success: [], error: [{ index: 0, errors: [{ errorType: "x", errorValue: { x: { reason: "DUPLICATE_VALUE", message: "m" } } }] }] } };
+    const o = parseBulkOutcome(allFailed, 1);
+    expect(o.succeededIdx.size).toBe(0);
+    expect(o.failed[0].reason).toBe("DUPLICATE_VALUE");
+  });
+
+  it("claims nothing from a body it does not recognise — silence is failure, never success", () => {
+    for (const body of [null, {}, { something: "else" }, "not json at all"]) {
+      expect(parseBulkOutcome(body, 3).succeededIdx.size).toBe(0);
+    }
+  });
+
+  it("does not credit an index Amazon never mentioned", () => {
+    const partial = { keywords: { success: [{ index: 0, keywordId: "1" }] } };
+    const o = parseBulkOutcome(partial, 5);
+    expect(o.succeededIdx.has(0)).toBe(true);
+    expect(o.succeededIdx.has(4)).toBe(false);   // submitted, unacknowledged, therefore not applied
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Monthly reset on LIFETIME evidence (William 2026-08-07: "if the words
+// converted in past we refresh at the start of the new month").
+//
+// Route A on its own is a catch-22: a PAUSED keyword does not spend, so it can
+// never build trailing-window evidence, so it can never prove it recovered.
+// Measured against the live account the same day: 106 Sponsored Products words
+// clear 1.92x lifetime on 2+ orders holding $27,764 of lifetime sales, and the
+// window route finds essentially none of them.
+// ---------------------------------------------------------------------------
+describe("reactivationCandidates — lifetime route", () => {
+  const paused = (id = "K1", text = "phone tether", match = "EXACT") =>
+    [{ keywordId: id, keywordText: text, matchType: match, state: "PAUSED" }];
+  const lt = (roas: number, orders: number, spend = 100) =>
+    new Map([["phone tether|EXACT", { roas, spend, sales: spend * roas, orders }]]);
+
+  it("brings back a word with NO recent spend at all, on its lifetime record alone", () => {
+    const out = reactivationCandidates(paused(), new Map(), lt(3.1, 40));
+    expect(out).toHaveLength(1);
+    expect(out[0].via).toBe("lifetime");
+  });
+
+  it("leaves it off when lifetime is below break-even", () => {
+    expect(reactivationCandidates(paused(), new Map(), lt(1.5, 40))).toHaveLength(0);
+  });
+
+  it("leaves it off on a single order, however flattering the ratio", () => {
+    // 79x on one order and $0.25 of spend is noise, and led a real preview astray on 2026-08-06.
+    expect(reactivationCandidates(paused(), new Map(), lt(79.8, 1, 0.25))).toHaveLength(0);
+  });
+
+  it("prefers the recent-recovery route and never double-counts a keyword", () => {
+    const out = reactivationCandidates(paused(), perf([["K1", 6, 20]]), lt(3.1, 40));
+    expect(out).toHaveLength(1);
+    expect(out[0].via).toBe("window");
+  });
+
+  it("still never touches a keyword that is already ENABLED", () => {
+    const on = [{ keywordId: "K1", keywordText: "phone tether", matchType: "EXACT", state: "ENABLED" }];
+    expect(reactivationCandidates(on, new Map(), lt(3.1, 40))).toHaveLength(0);
+  });
+
+  it("works with no lifetime table at all — the window route is unaffected", () => {
+    expect(reactivationCandidates(paused(), perf([["K1", 6, 20]]))).toHaveLength(1);
+    expect(reactivationCandidates(paused(), new Map())).toHaveLength(0);
+  });
+});
+
+describe("only BROAD discoveries are harvested (William 2026-08-08)", () => {
+  // "only way to add new phrase and exact is if they perform as search terms for broad keywords"
+  const win = { searchTerm: "anti theft phone strap", cost: 2.24, sales14d: 16.49, purchases14d: 1 };
+
+  it("harvests a converting BROAD search term as EXACT + PHRASE", () => {
+    // The real row from the live account, 2026-08-08: 7.4x, found by the broad keyword
+    // "hand strap universal phone lanyard clip to belt" — the very keyword the $4 rule killed
+    // that morning at 83% ACOS. The keyword loses money; this term inside it returns 7.4x.
+    const adds = harvestCandidates([row({ ...win, keyword: "hand strap universal phone lanyard clip to belt" })], new Set());
+    expect(adds.map((a) => a.matchType).sort()).toEqual(["EXACT", "PHRASE"]);
+    expect(adds.every((a) => a.keywordText === "anti theft phone strap")).toBe(true);
+  });
+
+  it("does NOT harvest the same term when a PHRASE keyword found it", () => {
+    expect(harvestCandidates([row({ ...win, matchType: "PHRASE" })], new Set())).toHaveLength(0);
+  });
+
+  it("does NOT harvest when an EXACT keyword found it", () => {
+    expect(harvestCandidates([row({ ...win, matchType: "EXACT" })], new Set())).toHaveLength(0);
+  });
+
+  it("does NOT harvest auto-campaign discoveries by default", () => {
+    // Auto reports as TARGETING_EXPRESSION_PREDEFINED with keyword text "loose-match", never BROAD.
+    // Excluding it is the literal reading of William's rule and remains an open question.
+    expect(harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED", keyword: "loose-match" })], new Set())).toHaveLength(0);
+  });
+
+  it("CAN include auto when asked, without a code change", () => {
+    const adds = harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED" })], new Set(),
+      NEW_KW_BID, { discoveryMatchTypes: ["BROAD", "TARGETING_EXPRESSION", "TARGETING_EXPRESSION_PREDEFINED"] });
+    expect(adds).toHaveLength(2);
+  });
+
+  it("treats a row with NO match type as ineligible rather than assuming broad", () => {
+    // Rows predating the column cannot be shown to be discoveries. Silence is not eligibility.
+    expect(harvestCandidates([{ ...row(win), matchType: undefined }], new Set())).toHaveLength(0);
+  });
+
+  it("still applies the 2.0x bar to broad discoveries", () => {
+    // 1.5x: converted, but below the bar William set and below the 1.92x break-even.
+    expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 15, purchases14d: 1 })], new Set())).toHaveLength(0);
+    expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 20, purchases14d: 1 })], new Set())).toHaveLength(2);
+  });
+
+  it("does not let a PHRASE row's spend drag a BROAD winner below the bar", () => {
+    // Same term, two match types. Only the broad row counts toward the decision.
+    const adds = harvestCandidates([
+      row({ searchTerm: "shared term", cost: 1, sales14d: 10, purchases14d: 1, matchType: "BROAD" }),
+      row({ searchTerm: "shared term", cost: 90, sales14d: 0, purchases14d: 0, matchType: "PHRASE" }),
+    ], new Set());
+    expect(adds).toHaveLength(2);
+  });
+});
+
+
+// William 2026-08-08: "if a word is turned off and the 14 day attribution kicks in for sales dont
+// turn it back on that month until that word reaches a 2.0 roas" / "turn it back on the moment the
+// attribtion credits it above a 2.0".
+import { shouldKill } from "./ad-rules";
+
+describe("inMonthRevivals — the $4 kill undone once attribution lands", () => {
+  const MONTH = "2026-08";
+  const led = (id = "K1", word = "phone tether", match = "PHRASE", month = MONTH) =>
+    [{ keywordId: id, word, matchType: match, month }];
+  const live = (state = "PAUSED", id = "K1") => new Map([[id, { state }]]);
+  const mtd = (spend: number, sales: number, orders = 1, id = "K1") =>
+    new Map([[id, { spend, sales, orders }]]);
+
+  it("brings back the real case: killed at 0 orders, then credited above 2x", () => {
+    const out = inMonthRevivals(led(), live(), mtd(4.50, 9.49), MONTH);
+    expect(out).toHaveLength(1);
+    expect(out[0].roas).toBeCloseTo(2.11, 2);
+    expect(out[0].word).toBe("phone tether");
+  });
+
+  it("leaves it off at the ACTUAL numbers both August kills are sitting on", () => {
+    // 1.26x and 1.21x on 2026-08-08. Converting is not the bar, returning 2x is.
+    expect(inMonthRevivals(led(), live(), mtd(7.55, 9.49), MONTH)).toHaveLength(0);
+    expect(inMonthRevivals(led(), live(), mtd(13.61, 16.49), MONTH)).toHaveLength(0);
+  });
+
+  it("holds the line exactly at 2.0", () => {
+    expect(inMonthRevivals(led(), live(), mtd(10, 19.99), MONTH)).toHaveLength(0);
+    expect(inMonthRevivals(led(), live(), mtd(10, 20), MONTH)).toHaveLength(1);
+  });
+
+  it("cannot flap: nothing sits in both the kill window and the revival window", () => {
+    // shouldKill pauses below the 52% ACOS pivot (1.923x); revival needs 2.0x. The band between
+    // them is dead space on purpose, so one set of numbers can never do both.
+    for (const roas of [1.93, 1.95, 1.99]) {
+      expect(shouldKill({ spend: 10, sales: 10 * roas, orders: 1 })).toBe(false);
+      expect(inMonthRevivals(led(), live(), mtd(10, 10 * roas), MONTH)).toHaveLength(0);
+    }
+  });
+
+  it("ignores a kill from a previous month — that is the monthly reset's job", () => {
+    expect(inMonthRevivals(led("K1", "phone tether", "PHRASE", "2026-07"), live(), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("never overwrites a keyword William turned back on himself", () => {
+    expect(inMonthRevivals(led(), live("ENABLED"), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("skips a keyword that is gone from the account entirely", () => {
+    expect(inMonthRevivals(led(), new Map(), mtd(4, 20), MONTH)).toHaveLength(0);
+  });
+
+  it("will not revive on sales with no order behind them", () => {
+    expect(inMonthRevivals(led(), live(), mtd(4, 20, 0), MONTH)).toHaveLength(0);
+  });
+
+  it("will not revive a keyword with no month-to-date row at all", () => {
+    expect(inMonthRevivals(led(), live(), new Map(), MONTH)).toHaveLength(0);
+  });
+
+  it("returns one pick per keyword even if the ledger holds duplicates", () => {
+    const dupes = [...led(), ...led()];
+    expect(inMonthRevivals(dupes, live(), mtd(4, 20), MONTH)).toHaveLength(1);
+  });
+
+  it("pins the bar at 2.0 so it cannot quietly drift to break-even", () => {
+    expect(REVIVE_MIN_ROAS).toBe(2.0);
+  });
+});
+
+
+// William 2026-08-08: "should not be pausing all key words when only 1 spends". Sponsored Brands and
+// Sponsored Display already had this pinned; Sponsored Products did not, so the guarantee rested on
+// reading a loop. The real shape on the account: 541 groups hold more than one copy of the same
+// (text, match type), and 281 of them are legitimately in mixed states.
+describe("killPlan — the $4 kill judges a keyword id, never a word", () => {
+  const kw = (id: string, text: string, match: string, state = "ENABLED", bid = 0.5) =>
+    [id, { keywordText: text, matchType: match, state, bid }] as const;
+  const live = (...ks: ReturnType<typeof kw>[]) => new Map(ks.map((k) => [k[0], k[1]]));
+  const row = (id: string, cost: number, sales = 0, orders = 0) =>
+    ({ keywordId: id, cost, sales14d: sales, purchases14d: orders });
+
+  it("pauses only the copy that spent, leaving its siblings running", () => {
+    // The real 2026-08-08 case: three copies of one text, one of them over $4 with nothing to show.
+    const byId = live(
+      kw("A", "hand strap universal phone lanyard clip to belt", "BROAD"),
+      kw("B", "hand strap universal phone lanyard clip to belt", "EXACT"),
+      kw("C", "hand strap universal phone lanyard clip to belt", "PHRASE"),
+    );
+    const out = killPlan([row("A", 6.95), row("B", 0.40), row("C", 0.10)], byId);
+    expect(out).toHaveLength(1);
+    expect(out[0].keywordId).toBe("A");
+  });
+
+  it("pauses two copies when two copies each spent $4 on their own", () => {
+    // Independence cuts both ways: this is not "one per word", it is "each on its own evidence".
+    const byId = live(kw("A", "phone tether", "PHRASE"), kw("B", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 5), row("B", 6)], byId)).toHaveLength(2);
+  });
+
+  it("does not let a sibling's spend push a copy over the $4 line", () => {
+    // $3 + $3 = $6 across two copies. Neither copy reaches $4, so neither dies.
+    const byId = live(kw("A", "phone tether", "PHRASE"), kw("B", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 3), row("B", 3)], byId)).toHaveLength(0);
+  });
+
+  it("ignores a copy that is already paused", () => {
+    const byId = live(kw("A", "phone tether", "PHRASE", "PAUSED"));
+    expect(killPlan([row("A", 99)], byId)).toHaveLength(0);
+  });
+
+  it("ignores a report row for a keyword that is no longer on the account", () => {
+    expect(killPlan([row("GONE", 99)], live())).toHaveLength(0);
+  });
+
+  it("spares a copy that spent $4 but is still returning 1x or better", () => {
+    // $4 alone is not the rule, and since 2026-08-13 nor is the 52% pivot. $4 AND under 1x is.
+    // A copy between 1x and break-even gets its BID cut by the bid rules, not a pause.
+    const byId = live(kw("A", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 5, 20, 2)], byId)).toHaveLength(0);  // 4.0x
+    expect(killPlan([row("A", 5, 6, 1)], byId)).toHaveLength(0);   // 1.2x — cut the bid, do not pause
+    expect(killPlan([row("A", 5, 4.99, 1)], byId)).toHaveLength(1); // 0.998x — off
+    expect(killPlan([row("A", 5, 0, 0)], byId)).toHaveLength(1);   // never converted — off
+  });
+
+  it("returns one verdict per id even if the report repeats a row", () => {
+    const byId = live(kw("A", "phone tether", "PHRASE"));
+    expect(killPlan([row("A", 9), row("A", 9)], byId)).toHaveLength(1);
   });
 });

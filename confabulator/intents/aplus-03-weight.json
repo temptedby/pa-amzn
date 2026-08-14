@@ -1,0 +1,29 @@
+{
+  "asset_type": "image",
+  "surface": "amazon-aplus",
+  "product": "BOTH",
+  "slot": 3,
+  "template_id": "aplus-weight-split",
+  "size": "970x600",
+  "background": "white",
+  "product_visible": true,
+  "shows_phone_hauled_up": false,
+  "headline": "Two sizes, split by phone weight",
+  "body": [
+    "Black is best used with phones 171 g (6.0 oz) and under, about the weight of an iPhone 16. Pro is for everything heavier."
+  ],
+  "alt_text": "Side by side comparison of Phone Assured Black for phones 171 grams and under and Phone Assured Pro for heavier phones.",
+  "source_assets": [
+    {
+      "id": "black",
+      "name": "Final Black 1 Clip Images/Packof1.jpg",
+      "provenance": "own-photo"
+    },
+    {
+      "id": "pro",
+      "name": "Megan Updated Images/1 Pack Pro.jpg",
+      "provenance": "own-photo"
+    }
+  ],
+  "module_type": "STANDARD_HEADER_IMAGE_TEXT"
+}
