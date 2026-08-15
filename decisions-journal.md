@@ -1733,3 +1733,59 @@ his "bring it back down or turn it off" — the turn-around rule exists but has 
 until 18:01 today `kw_bid_history` had no rows for it to read.
 
 **Status.** 427 tests, tsc clean. Ceilings live: $3.50 on the branded term, $1.85 on the other.
+
+## 2026-08-14 (part E) — Testing whether AI can hold our own hardware
+
+**Context.** William asked for use-case creative — "let's work on more animations for how the
+product can be used" — then named the uses himself: headphones, car key fobs, door key fobs, and
+sunglasses cases that carry a belt loop on the back. He also raised the mechanism that reframes the
+product: *"you can clip the clip to its own string so that it stays in place. So you can wrap it
+around anything to hold something in place that might be moving like a boat."* And on the graphic I
+built from real photography: *"we can built the graphic with Ai to simulate?"*
+
+**Options.** (A) Generate the missing use cases from text — rejected outright; ai-animate.mjs has
+forbidden it since 08-11 because a tether drawn from a prompt is a competitor's hardware on our
+page. (B) Photograph them, thirty seconds each with a phone. (C) Image-to-image from our own product
+shot, which keeps our hardware as the input and edits around it. (D) Composite our real hardware
+onto real photographs of keys and rails.
+
+**Decision.** (C) as a test, two generations at $0.04 each, with (B) as the recommendation for
+anything that ships. Arguing about whether AI can hold a thin cord is cheaper to settle by spending
+eight cents than by debating it.
+
+Built `scripts/pacr/ai-image.mjs` under the same two rules as the video script: the money is Social
+Scene's so the cost is a REAL balance delta rather than a published price, and the input is always
+one of our own photographs. It carries the same prompt gate, which refuses "retract", "hangs",
+"suspend" and their neighbours, because Stevo's one-star review is about exactly that misreading.
+
+**Results, and they split.** The keys edit held the reel, the belt clip, the carabiner and the
+quick-release connector close to the real geometry, with a car fob on the cord end — a usable
+concept for four cents. The boat rail produced a genuinely beautiful photograph that **does not show
+the mechanism William described**: it hooked the carabiner over the rail rather than wrapping the
+cord and clipping back onto itself. The model rendered a plausible scene and ignored the instruction
+that mattered, which is the same failure the 08-12 ledger recorded for motion — "extends further
+away" became "raises up". Kling and Kontext both honour mood and ignore vectors.
+
+So the verdict is narrow and worth writing down: **image-to-image is good enough to show an idea and
+not good enough to ship as product imagery.** Amazon requires accurate product representation, and
+an approximation of our hardware is exactly what PACR rule 1 exists to stop.
+
+**Three defects found on the way, all mine.** The submit died on "Unexpected end of JSON input"
+because a 2500px source base64-encodes to megabytes — ai-animate.mjs already downscales for this
+reason and I did not copy that. Then the status poll built `/requests/<id>/status` by hand, which
+returns an empty body for a namespaced model, so the script crashed AFTER the generation had been
+paid for. Twelve cents went out before a single image came back. It now uses the `status_url` and
+`response_url` fal returns, and every non-JSON response is caught rather than parsed blind.
+
+**Industry source.** Amazon's product image policy requires the image to accurately represent the
+product being sold, which is the line between a social concept and listing imagery. Our own 08-12
+ledger supplies the mechanical caveat: where the hardware is thin the model degrades it, and in one
+clip erased it off a waistband entirely. In an attachment graphic the thin cord IS the mechanism.
+
+**Trade-offs.** Recommending a phone photograph over generation is slower for William and costs his
+time rather than four cents. It is still right for anything that lands on a detail page. The
+generated frames stay in `build/creative/ai-test/`, deliberately outside any delivery folder.
+
+**Status.** Two images generated, $0.08 total, logged to `ai-spend-ledger.jsonl` with the balance
+delta and the rebill target. Nothing shipped. The wrap-around mechanism is unphotographed and
+un-generated, and it is the strongest product idea raised today.

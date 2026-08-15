@@ -31,11 +31,15 @@ const OUT = join(ROOT, 'build/creative/attach-points');
 // each panel, so cropping to the panel bounds carried the border and a sliver of the neighbouring
 // tile into every cell — white edges and a teal wedge, visible the moment the file was opened.
 // These numbers cut inside the frame rather than around it.
+// LABELS ARE WILLIAM'S, and two of mine were wrong. The car frame is not "a car seat" — the clip is
+// on the man's BELT LOOP and he happens to be in a car. The jeans frame is not a belt loop either;
+// it is the WAISTBAND. Our own listing image 4 uses BELTLOOP / POCKET / BACKPACK / PURSE, so these
+// now agree with the words already on the detail page.
 const PANELS = [
   { id: 'bag',    label: 'A BAG STRAP',   left: 1150, top:  120, width: 1240, height: 670 },
-  { id: 'belt',   label: 'A BELT LOOP',   left: 1150, top:  930, width: 1240, height: 665 },
+  { id: 'belt',   label: 'YOUR WAISTBAND', left: 1150, top:  930, width: 1240, height: 665 },
   { id: 'duffel', label: 'A DUFFEL STRAP',left: 1150, top: 1740, width: 1240, height: 655 },
-  { id: 'car',    label: 'A CAR SEAT',    left:  140, top:  730, width:  835, height: 1040 },
+  { id: 'car',    label: 'A BELT LOOP',   left:  140, top:  730, width:  835, height: 1040 },
 ];
 
 const CANVAS = {
