@@ -1789,3 +1789,129 @@ generated frames stay in `build/creative/ai-test/`, deliberately outside any del
 **Status.** Two images generated, $0.08 total, logged to `ai-spend-ledger.jsonl` with the balance
 delta and the rebill target. Nothing shipped. The wrap-around mechanism is unphotographed and
 un-generated, and it is the strongest product idea raised today.
+
+## 2026-08-15 — Six words carrying the month were switched off, and the engine was undoing its own correct moves
+
+**Context.** The morning review found the account upside down again. Six Sponsored Products keywords
+holding **$77.77 of August's $164.72 spend and 10 of its 12 orders** were PAUSED, while what remained
+enabled had spent $86.95 for $18.98 back. Three of those six were words William named on the 14th and
+that I journaled as re-enabled and "verified by reading state back from Amazon". Amazon's
+`extendedData.lastUpdateDateTime` said otherwise: all three read `2026-08-14T12:00:05.695Z`, the cron
+run that killed them, not my write an hour later. Then a sequence of William's corrections through the
+day: apples-to-apples reporting, smaller bid steps, spend as the gate rather than orders, and finally
+"we raise and lower bids if over 2x trying to max roas but keep above 2x."
+
+**Options.** (A) Re-enable the six by hand each morning and leave the rules alone. Cheap today,
+identical tomorrow, and the engine keeps manufacturing the state. (B) Fix the rules and leave this
+month's damage. (C) Both, in that order. Also considered and rejected: deleting the reintroduction
+shield outright rather than re-gating it, which would have thrown away a real protection for genuinely
+silent words to solve a problem that only affects spending ones.
+
+**Decision.** (C). Six keywords re-enabled and verified by timestamp, then six rule changes committed
+to PR #4.
+
+The rule now reads as one tree, stated in `rule-tree.test.ts` rather than inferred across three files:
+
+```
+has not spent             -> raise, it is not in the auction
+spent $4+, no conversion  -> stop
+converted, under 1.0x     -> stop
+converted, 1.0x to 2.0x   -> lower the bid only, never raise
+converted, 2.0x and above -> raise AND lower, hunting the best ROAS
+```
+
+**Reasoning.** Three findings drove the changes and each was measured rather than argued.
+
+*The turn-around was reversing correct moves.* It compared a keyword's whole-month impressions
+against the six hours since its bid last moved. A month always beats six hours, so it read a collapse
+that had not happened. A live dry run had **59 of 82 moves** triggered this way, every one about to
+undo a cut that had just been made correctly. This is the oscillation loop that took `retractable
+phone tether` twice in four days, wearing a different hat. Fixed by storing `window_hours` and
+comparing per hour, and by refusing to judge at all when either length is unknown, because a wrong
+reversal spends money undoing a correct move while a skipped one only costs a run.
+
+*The reintroduction shield was blocking the instruction.* Three of the six could not be cut because
+the reintroduction job had woken them days earlier and they carry a 14-day shield. They had 10 to 13
+clicks and real orders each. William's gate is SPEND, which effectively retires the shield, and the
+evidence supports it: attribution measured on a settled period on 2026-08-13 landed on day ONE
+(`sales1d = sales7d = sales14d = sales30d = $48.96`), so fourteen days never bought the certainty the
+shield was built for. A word that has spent nothing is still never cut, because the search raises it.
+
+*The no-raise rule was absolute where it should have been scoped.* "A spending word is never raised"
+sits inside `move()` precisely so nothing can route around it, and below the target that is right: a
+bid buys entry to the auction, so paying more for a word losing money on every sale loses it faster.
+Above the target the question changes from "is it worth being here" to "how much of this can we buy",
+and that cannot be answered by only ever cutting. Scoping it also unblocked the turn-around, which
+could previously reverse a cut only on a word that had gone completely silent, the one case where the
+answer no longer mattered. "Keep above 2x" is enforced by the loop rather than by prediction: a raise
+that drops the word under target is cut back next run, and under 1x it stops.
+
+On the Display step, the defect was not a coding mistake. `SD_BID_STEP` was set to a nickel on the
+13th when entry was a dime; entry halved on the 14th and the nickel silently became 100% of the bid.
+A constant stopped making sense when the thing it steps on changed.
+
+**Industry source.** Amazon's own product type definition for `CELL_PHONE_HOLSTER`, read through the
+Definitions API rather than from documentation or memory: `item_name` maxLength **200** (our recorded
+75-character cap was simply wrong, and the live 98 to 108 character titles with zero issues already
+proved it), `generic_keyword` 500 characters and 2000 bytes against a published 250-byte search-terms
+policy, `compatible_cellular_phone_models` a 14,157-value enum capped at 60 items, and
+`compatible_phone_models` capped at 3.
+
+**Trade-offs.** Retiring the shield means a reintroduced word that spends before its sales are
+attributed can be cut on incomplete evidence. The 08-13 measurement says that window is about a day,
+not a fortnight, and the $4 floor still bounds what any single word can lose first. Scoping the
+no-raise rule means a word at 2.0x can be bought upward, and if the raise is wrong we pay for one
+run before the loop cuts it back. The band rule also currently has nothing to act on: the best word
+on the account is 1.63x, so it only starts mattering once the dime cuts produce something over 2x.
+Halving every step means the search takes twice as many runs to travel the same distance, which at
+four runs a day is the difference between reaching the market CPC in 30 hours and in 60.
+
+**Status.** 442 tests, tsc clean, production build compiles. PR #4 carries six commits and is
+unmerged, so none of it is live and the $3.50 ceiling William approved on the 14th still cannot move
+the branded head term off $2.50. Live dry run after all six changes: 53 moves, 28 up, 25 down, step
+sizes 2c and 5c only, no stops, no spurious turn-arounds.
+
+## 2026-08-15 (part B) — The listing was telling heavy-phone owners the light clip fits
+
+**Context.** William asked for the phone models, the 171 g weight line and the other items the clip
+works with (earbuds, phone cases, sunglasses and sunglasses cases) to go into the Amazon listing,
+since Megan is travelling and has not applied anything from the document commented on 8 August.
+
+**Options.** (A) Apply the suggestions from Megan's document directly. (B) Read what is actually live
+first and validate every value against Amazon's schema, then apply. (C) Prepare everything and leave
+it in the document for Megan.
+
+**Decision.** (B) to find out, then (C) on William's call: *"no leave in document for megan"*.
+Nothing was written to Amazon. Eight comments were added to the document instead.
+
+**What reading the live listing found, and it is worse than a missing weight line.** The Black
+listing's structured Compatible Phone Models field advertises eight phones and **six are over our own
+171 g line**: iPhone 7 Plus 188 g, iPhone 13 Pro 204 g, iPhone 11 Pro 188 g, Galaxy S22 Ultra 228 g,
+Galaxy S22 Plus 195 g, Moto G Power 199 g. The Galaxy S22 Ultra is 33% over. The Pro listing carries
+no compatibility data at all, so the shoppers who should land there cannot filter to it. The two
+listings sort shoppers backwards.
+
+That maps directly onto the returns. NOT_AS_DESCRIBED is the second largest return reason on the
+flagship, and the buyer comments read *"not strong enough to hold the phone up"* and *"seems better
+suited for an ID card and not a heavy cell phone"*. Those are not defect reports. They are people
+describing a phone our own listing told them would work.
+
+Also: **backend search terms are empty on all four listings**, zero bytes, not the 209 the document
+describes.
+
+**Reasoning.** Three of the eight comments I left on 8 August were describing the document rather than
+Amazon, and I repeated one of them today before checking. The draft in a working document is not the
+state of the account, and the only way to know the difference is to read the account. That is the same
+lesson as `applied=1` and the empty bid history, in a different system.
+
+**Industry source.** Amazon's Listings and Catalog APIs for live state, the Definitions API for the
+schema, and the rejection email itself for the bank requirement, quoted rather than paraphrased.
+
+**Trade-offs.** Leaving it for Megan means the mis-selling compatibility field stays live until she
+returns, and it is costing returns and reviews now. William's call, and the counter-argument is real:
+these are her listings to own and a coordinated edit beats two people writing the same fields.
+
+**Status.** Eight comments added through the Drive API, all pinned by reusing existing `kix.` anchors,
+all tagged `+hello@phoneassured.com`, notification confirmed delivered at 12:30Z bundling all eight.
+Document body verified untouched at 25,637 characters. Full prepared set in
+`confabulator/LISTING-UPDATE-2026-08-15.md`. Nothing written to Amazon.
