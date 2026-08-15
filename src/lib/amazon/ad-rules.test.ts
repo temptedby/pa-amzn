@@ -678,22 +678,39 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     };
     const H = { sinceHours: 24 };   // same length, so rate comparison equals total comparison
 
-    // SUPERSEDED 2026-08-13. These two used to assert the turn-around climbing back up while the
-    // word was still spending. William: "do not raise bid if the word is spending", "only raise
-    // bid if word is not spending". His newer rule wins, and it is deliberately absolute — the
-    // guard sits inside move() precisely so the turn-around cannot route around it. What the
-    // turn-around still does is reverse a cut on a word that has gone SILENT, which is the case it
-    // was written for on 08-10 ("less impressions less sales then we start to go the other way").
-    it("will NOT climb back while the word is still spending", () => {
+    // THE BAND RULE, and it has moved twice. On 2026-08-13 William made the no-raise rule absolute
+    // ("do not raise bid if the word is spending"), which stopped the turn-around reversing a cut
+    // on any word that was still spending. On 2026-08-15 he scoped it: "we raise and lower bids if
+    // over 2x trying to max roas but keep above 2x." So below the target it is still absolute, and
+    // above the target the search goes both ways, which is the case these two now cover.
+    it("DOES climb back above 2x — that is the maximise band", () => {
+      // 10x. The cut cost impressions, so the search turns round and buys some back.
       const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut, H);
+      expect(v.bid).toBe(0.50);
+      if (v.bid !== null) expect(v.direction).toBe("up");
+    });
+
+    it("climbs back on lost sales too, while it is still comfortably above 2x", () => {
+      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut, H);
+      expect(v.bid).toBe(0.50);
+    });
+
+    it("will NOT climb back BELOW 2x, however badly the cut went", () => {
+      // 1.5x. Losing money per sale, so a raise buys the loss faster. The guard is absolute here.
+      const v = searchStep(0.48, { spend: 3, sales: 4.5, orders: 1, clicks: 8, impressions: 60 }, cut, H);
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/never raised/);
     });
 
-    it("will NOT climb back on lost sales either, while it is still spending", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut, H);
-      expect(v.bid).toBeNull();
-      expect(v.reason).toMatch(/never raised/);
+    it("keeps the band self-correcting: a raise that drops it under 2x is cut straight back", () => {
+      // Raised to $0.50 last run, now reading 1.4x. No prediction needed, the next run just cuts.
+      const raise: BidChange = {
+        changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.48, toBid: 0.50, roasBefore: 3,
+        impressionsBefore: 300, clicksBefore: 10, salesBefore: 30, windowHours: 24,
+      };
+      const v = searchStep(0.50, { spend: 5, sales: 7, orders: 1, clicks: 10, impressions: 320 }, raise, H);
+      expect(v.bid).not.toBeNull();
+      if (v.bid !== null) expect(v.direction).toBe("down");
     });
 
     it("DOES turn round once the cut has silenced the word — the case it was built for", () => {

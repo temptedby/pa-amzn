@@ -1128,9 +1128,26 @@ export function searchStep(
   // word into the auction, and this is the line that keeps it to that job.
   const isSpending = (since?.spend ?? 0) > 0 || (since?.clicks ?? 0) > 0;
 
+  // ABOVE THE TARGET THE SEARCH GOES BOTH WAYS. William 2026-08-15: "we raise and lower bids if
+  // over 2x trying to max roas but keep above 2x."
+  //
+  // The no-raise rule above is absolute BELOW the target and that is still right: a bid only buys
+  // entry to the auction, so paying more for a word that is already losing money just loses it
+  // faster. Above the target the job is different. The word is profitable, so the question stops
+  // being "is it worth being here" and becomes "how much of this can we buy", and that cannot be
+  // answered by only ever cutting. This is what unblocks the turn-around, which could previously
+  // reverse a cut only on a word that had gone completely silent — the one case where the answer
+  // no longer mattered.
+  //
+  // "Keep above 2x" is enforced by the loop rather than by prediction: if a raise drops the word
+  // under the target, the next run reads it as under-target and cuts it straight back, and if it
+  // ever falls under 1x it stops. So the band is self-correcting and the downside is bounded.
+  const roasNow = since && since.spend > 0 ? since.sales / since.spend : 0;
+  const aboveTarget = roasNow >= target;
+
   const move = (dir: "up" | "down", reason: string, thisStep: number = step): SearchStep => {
-    if (dir === "up" && isSpending) {
-      return { bid: null, reason: `${reason} — but it IS spending, and a spending word is never raised` };
+    if (dir === "up" && isSpending && !aboveTarget) {
+      return { bid: null, reason: `${reason} — but it IS spending below ${target}x, and that is never raised` };
     }
     // Above $2.50 a raise moves a nickel instead of a dime (William 2026-08-14). Applied here rather
     // than at the call sites so every path that raises — including the turn-around — inherits it.
