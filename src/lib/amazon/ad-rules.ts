@@ -843,6 +843,18 @@ export const TARGET_ROAS = 2.0;
 // six-hour window holds almost no evidence. Moving four times a day would be moving on noise, which
 // is the same argument that produced the blended-window rule for keywords.
 export const SD_BID_STEP = 0.05;
+// WILLIAM 2026-08-15: "you're only supposed to be lowering by two cents, so I'd check that bug."
+//
+// He is right and the arithmetic is the proof. SD_BID_STEP was set to a nickel on 2026-08-13, when
+// Display entry was still a dime. On 08-14 entry moved to $0.05, and a nickel step became ONE
+// HUNDRED PERCENT of the bid: a losing target at $0.05 was cut by $0.05, wanted $0.00, and clamped
+// to Amazon's $0.02 minimum. Four targets went from the entry bid to the absolute floor in a single
+// run, four hours after he set them. Nothing was miscoded; a constant simply stopped making sense
+// when the bid it steps on halved.
+//
+// So the cut gets its own size. RAISES stay on the nickel he asked for on 08-13 ("increments of
+// five cents since it looks like retargeting is a smaller click system"); CUTS move two cents.
+export const SD_CUT_STEP = 0.02;
 export const SD_BID_COOLDOWN_HOURS = 24;
 
 // WILLIAM 2026-08-14: "start at .05 and see if bids go up and down based on roas, once we spend $4
@@ -1056,12 +1068,16 @@ export function searchStep(
     step?: number; floor?: number; cap?: number; ceiling?: number; minClicks?: number; target?: number;
     /** the gentle cut for a word that already works (BID_SHAVE_STEP) */
     shave?: number;
+    /** the cut for a word that is NOT working. Defaults to `step`, which is right for Products and
+     *  Brands where a raise and a cut are both a dime. Display overrides it: see SD_CUT_STEP. */
+    cut?: number;
     /** the lowest bid this word has been PROVEN to still need; never cut at or below it */
     floorFound?: number | null;
   } = {},
 ): SearchStep {
   const step = opts.step ?? BID_SEARCH_STEP;
   const shave = opts.shave ?? BID_SHAVE_STEP;
+  const cut = opts.cut ?? step;
   const floorFound = opts.floorFound ?? null;
   const floor = opts.floor ?? BID_FLOOR;
   const ceiling = opts.ceiling ?? BID_CONFIRM_CEILING;
@@ -1199,7 +1215,7 @@ export function searchStep(
   }
   return roas >= target
     ? move("down", `${roas.toFixed(2)}x, at or above ${target}x — works, so shaving gently to find the cheapest bid that still converts`, shave)
-    : move("down", `${roas.toFixed(2)}x, below ${target}x — paying too much per sale`);
+    : move("down", `${roas.toFixed(2)}x, below ${target}x — paying too much per sale`, cut);
 }
 
 /**
@@ -1297,8 +1313,11 @@ export function planBids(
   candidates: BidCandidate[],
   opts: {
     defaultBid?: number; killSpend?: number; killMinRoas?: number;
-    /** step size per move. Sponsored Display uses SD_BID_STEP (5c); the others use a flat dime. */
+    /** step size per RAISE. Sponsored Display uses SD_BID_STEP (5c); the others use a flat dime. */
     step?: number;
+    /** step size per CUT. Display uses SD_CUT_STEP (2c) because a nickel is its whole entry bid.
+     *  Left unset, a cut is the same size as a raise, which is the Products and Brands rule. */
+    cut?: number;
     /** lowest bid a cut may reach. Display goes to SD_BID_FLOOR ($0.02, Amazon's own limit);
      *  everything else stays on the shared $0.10. Without this the shared floor clamped every
      *  Display cut and a five-cent bid was unreachable. */
@@ -1319,7 +1338,8 @@ export function planBids(
       clicks: c.clicks, impressions: c.impressions ?? 0,
     };
     const ceiling = activeCeiling(c.approvedCeiling);
-    const step = searchStep(base, since, undefined, { ceiling, floor, step: opts.step, shave: opts.step });
+    const cut = opts.cut ?? opts.step;
+    const step = searchStep(base, since, undefined, { ceiling, floor, step: opts.step, shave: cut, cut });
 
     if (step.bid === null) {
       if (step.escalate) {

@@ -1042,7 +1042,7 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
 // ---------------------------------------------------------------------------
 // planBids — one bid planner for Products, Brands and Display (William 2026-08-13)
 // ---------------------------------------------------------------------------
-import { planBids, SD_BID_STEP, SD_BID_COOLDOWN_HOURS, SD_START_BID, type BidCandidate } from "./ad-rules";
+import { planBids, SD_BID_STEP, SD_CUT_STEP, SD_BID_COOLDOWN_HOURS, SD_START_BID, type BidCandidate } from "./ad-rules";
 
 const bidCand = (o: Partial<BidCandidate>): BidCandidate =>
   ({ id: "1", label: "w", bid: 0.5, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
@@ -1240,6 +1240,48 @@ describe("Display bids start and cut at five cents (William 2026-08-14)", () => 
     const p = planBids([t({ id: "e", bid: 0.05, spend: 4.10, sales: 9.49, orders: 1, clicks: 9 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
     expect(p.killing).toBe(0);
+  });
+});
+
+describe("a Display cut is two cents, not the whole bid (William 2026-08-15)", () => {
+  const sd = { step: SD_BID_STEP, cut: SD_CUT_STEP, floor: SD_BID_FLOOR };
+  const t = (o: Partial<BidCandidate> & { id: string }): BidCandidate => ({
+    label: "views 14d", bid: 0.05, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o,
+  });
+
+  it("is two cents", () => {
+    expect(SD_CUT_STEP).toBe(0.02);
+  });
+
+  // THE BUG, pinned. On 2026-08-14 at 18:45Z four targets went $0.05 -> $0.02 in one run, four
+  // hours after William set them to $0.05. A nickel cut off a nickel bid wants $0.00 and clamps to
+  // Amazon's minimum, so the entry bid and the absolute floor were one step apart.
+  it("cuts a losing $0.05 target to $0.03, not straight to the floor", () => {
+    const p = planBids([t({ id: "a", bid: 0.05, spend: 2.42, sales: 0, orders: 0, clicks: 14 })], sd);
+    expect(p.moves[0]).toMatchObject({ fromBid: 0.05, toBid: 0.03, direction: "down" });
+  });
+
+  it("reaches the $0.02 floor on the SECOND cut and stops there", () => {
+    const p = planBids([t({ id: "b", bid: 0.03, spend: 2.42, sales: 0, orders: 0, clicks: 14 })], sd);
+    expect(p.moves[0]?.toBid).toBe(0.02);
+    const done = planBids([t({ id: "c", bid: 0.02, spend: 2.42, sales: 0, orders: 0, clicks: 14 })], sd);
+    expect(done.moves).toHaveLength(0);
+  });
+
+  // Too few clicks to trust the ratio took the cautious step, which for Display was ALSO a nickel.
+  it("cuts two cents on a thin-evidence target as well", () => {
+    const p = planBids([t({ id: "d", bid: 0.05, spend: 1.76, sales: 0, orders: 0, clicks: 2 })], sd);
+    expect(p.moves[0]?.toBid).toBe(0.03);
+  });
+
+  it("still RAISES a nickel — only the cut changed", () => {
+    const p = planBids([t({ id: "e", bid: 0.05 })], sd);
+    expect(p.moves[0]).toMatchObject({ toBid: 0.10, direction: "up" });
+  });
+
+  it("leaves Products and Brands cutting a full dime", () => {
+    const p = planBids([t({ id: "f", bid: 0.75, spend: 3.0, sales: 3.0, orders: 1, clicks: 9 })]);
+    expect(p.moves[0]).toMatchObject({ fromBid: 0.75, toBid: 0.65, direction: "down" });
   });
 });
 
