@@ -736,7 +736,18 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // at all, despite 10 to 13 clicks and real orders each, because they had been reintroduced
       // days earlier. That directly blocked his instruction: "continue to lower the bids to see if
       // we can raise the ROAS." 260 enabled keywords were shielded at the time.
-      const hasEvidence = perf.orders > 0;
+      // WILLIAM 2026-08-15, the whole tree in one line: "no cuts if they have[n't] spent but if
+      // they are over $4 no conversion they stop and if they did convert and above 1.0 roas you
+      // lower bids, once below 1.0 roas you stop."
+      //
+      // SPEND is the gate, not orders. That is a real narrowing of what I shipped an hour earlier,
+      // which lifted the shield only once a keyword had an ORDER, and it effectively retires the
+      // shield: any keyword the search would cut has clicks, and clicks mean spend. That is his
+      // call and the evidence backs it — on 2026-08-13 attribution measured on a settled period
+      // landed on day ONE (sales1d = sales7d = sales14d = sales30d = $48.96), so the fourteen-day
+      // wait was never buying the certainty it was built for. A word that has spent nothing is
+      // still never cut, because searchStep raises it instead.
+      const hasEvidence = perf.spend > 0;
       if (isCut && !hasEvidence && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
       if (m.reason.includes("turning around")) rolledBack++;
       const acos = perf.sales > 0 ? perf.spend / perf.sales : 0;
