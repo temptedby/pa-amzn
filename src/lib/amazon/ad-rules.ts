@@ -51,7 +51,10 @@ export const KILL_MIN_ROAS = 1.0;
 //
 // This matches BID_SEARCH_STEP, which the newer searchStep() has always used. The two paths now
 // agree instead of quietly disagreeing.
-export const BID_STEP = 0.10;     // FLAT DOLLARS per run, not a percentage
+// WILLIAM 2026-08-15: "If five cents or ten cents is too much of a move, try five or two. Just try
+// smaller incremental increases or decreases." So every ten-cent move becomes five, and every
+// five-cent move becomes two. Still flat cents, never a percentage.
+export const BID_STEP = 0.05;     // FLAT DOLLARS per run, not a percentage
 export const BID_FLOOR = 0.10;
 export const BID_CAP = 2.50;
 
@@ -740,7 +743,7 @@ export function isNextMonth(a: string, b: string): boolean {
 /** Minimum gap between moves on one keyword. Every engine run may act (William: "every 6 hours"). */
 export const BID_COOLDOWN_HOURS = 6;
 /** How much a bid moves per step: a flat ten cents (William: "i asked raising by .10 not 10%"). */
-export const BID_SEARCH_STEP = 0.10;
+export const BID_SEARCH_STEP = 0.05;   // was a dime; halved on William's 2026-08-15 call
 
 // THE GENTLE CUT, for a keyword that is ALREADY profitable. William 2026-08-10:
 // "keyword returning 3x you lower bid slowly very slow maybe $.02 to $.05 every 6 hours to see if
@@ -765,7 +768,9 @@ export const BID_SEARCH_STEP = 0.10;
 //
 // RAISES ONLY, which is what he said. Cuts keep the full dime, because cutting reduces risk and
 // reaching a cheaper bid quickly is the point of cutting at all.
-export const BID_FINE_STEP = 0.05;
+// Halved again on 2026-08-15 with everything else. A five-cent fine step stopped meaning anything
+// the moment the ordinary step also became five cents, so above $2.50 a raise now moves two.
+export const BID_FINE_STEP = 0.02;
 export const BID_FINE_ABOVE = 2.50;
 
 export const BID_SHAVE_STEP = 0.02;
@@ -842,7 +847,7 @@ export const TARGET_ROAS = 2.0;
 // ONCE A DAY, not every six hours. Retargeting audiences produce far fewer clicks than search, so a
 // six-hour window holds almost no evidence. Moving four times a day would be moving on noise, which
 // is the same argument that produced the blended-window rule for keywords.
-export const SD_BID_STEP = 0.05;
+export const SD_BID_STEP = 0.02;   // Display raise: was a nickel, now two cents (William 2026-08-15)
 // WILLIAM 2026-08-15: "you're only supposed to be lowering by two cents, so I'd check that bug."
 //
 // He is right and the arithmetic is the proof. SD_BID_STEP was set to a nickel on 2026-08-13, when
@@ -992,6 +997,13 @@ export interface BidChange {
   // written before 2026-08-10, and the reversal simply does not fire without them rather than
   // guessing from a half-known baseline.
   impressionsBefore?: number;
+  /** How many HOURS the baseline window above actually covered. Without it the comparison below is
+   *  meaningless: a keyword's first move records a whole MONTH of impressions, and the next run
+   *  measures only the six hours since, so a month always beats six hours and the engine reads a
+   *  fall that never happened. Measured on 2026-08-15: 59 of 82 moves in one dry run were
+   *  turn-arounds triggered this way, every one of them about to undo a cut William had just asked
+   *  for. Undefined on rows written before that date. */
+  windowHours?: number;
   clicksBefore?: number;
   salesBefore?: number;
 }
@@ -1073,6 +1085,8 @@ export function searchStep(
     cut?: number;
     /** the lowest bid this word has been PROVEN to still need; never cut at or below it */
     floorFound?: number | null;
+    /** hours the CURRENT evidence window covers, so the turn-around can compare rates not totals */
+    sinceHours?: number;
   } = {},
 ): SearchStep {
   const step = opts.step ?? BID_SEARCH_STEP;
@@ -1122,7 +1136,7 @@ export function searchStep(
     // than at the call sites so every path that raises — including the turn-around — inherits it.
     if (dir === "up" && base >= BID_FINE_ABOVE - 0.005 && thisStep > BID_FINE_STEP) {
       thisStep = BID_FINE_STEP;
-      reason += ` (nickel steps above $${BID_FINE_ABOVE.toFixed(2)})`;
+      reason += ` (two-cent steps above $${BID_FINE_ABOVE.toFixed(2)})`;
     }
     const stepC = Math.round(thisStep * 100), baseC = Math.round(base * 100);
     const floorC = Math.round(floor * 100), capC = Math.round(cap * 100);
@@ -1164,15 +1178,27 @@ export function searchStep(
   //
   // "Worse" is his test, not mine: fewer impressions, or fewer sales, than the previous bid level
   // produced. Requires a baseline, so it never fires on the first move of a keyword's life.
-  if (last && since && last.impressionsBefore !== undefined) {
+  //
+  // LIKE FOR LIKE, OR NOT AT ALL. Both windows must have a known length, and the comparison is on a
+  // PER HOUR rate, because the two windows are almost never the same length. If either length is
+  // unknown the turn-around does not fire: a wrong reversal spends money undoing a correct move,
+  // while a skipped one only costs a run.
+  const baseH = last?.windowHours, nowH = opts.sinceHours;
+  const fair = baseH !== undefined && nowH !== undefined && baseH > 0 && nowH > 0;
+  if (last && since && last.impressionsBefore !== undefined && fair) {
     const wasCut = last.toBid < last.fromBid;
     const impNow = since.impressions ?? 0;
-    const worse = impNow < (last.impressionsBefore ?? 0) || since.sales < (last.salesBefore ?? 0);
+    const rate = (v: number, h: number) => v / h;
+    const worse = rate(impNow, nowH!) < rate(last.impressionsBefore ?? 0, baseH!)
+      || rate(since.sales, nowH!) < rate(last.salesBefore ?? 0, baseH!);
     if (worse) {
       const dir = wasCut ? "up" : "down";
-      const what = impNow < (last.impressionsBefore ?? 0)
-        ? `impressions fell ${last.impressionsBefore} -> ${impNow}`
-        : `sales fell $${(last.salesBefore ?? 0).toFixed(2)} -> $${since.sales.toFixed(2)}`;
+      // Quoted as a RATE, because that is what was actually compared. Printing the raw totals here
+      // is how "4110 -> 200" ended up in the digest describing a keyword that had improved.
+      const per = (v: number, h: number) => (v / h).toFixed(2);
+      const what = rate(impNow, nowH!) < rate(last.impressionsBefore ?? 0, baseH!)
+        ? `impressions fell ${per(last.impressionsBefore ?? 0, baseH!)}/h -> ${per(impNow, nowH!)}/h`
+        : `sales fell $${per(last.salesBefore ?? 0, baseH!)}/h -> $${per(since.sales, nowH!)}/h`;
       return move(dir, `the ${wasCut ? "cut" : "raise"} to $${last.toBid.toFixed(2)} made it worse (${what}) — turning round little by little`, shave);
     }
   }
@@ -1230,7 +1256,7 @@ export function bidWithMemory(
   nowMs = Date.now(),
   opts: {
     step?: number; floor?: number; cap?: number; ceiling?: number; hours?: number; minClicks?: number;
-    target?: number; shave?: number; floorFound?: number | null;
+    target?: number; shave?: number; floorFound?: number | null; sinceHours?: number;
   } = {},
 ): { bid: number | null; reason: string; escalate?: true; wouldBe?: number; restored?: true } {
   if (inCooldown(last, nowMs, opts.hours ?? BID_COOLDOWN_HOURS)) {

@@ -85,7 +85,7 @@ export interface AdEngineResult {
     text: string; from: number; to: number; acos: number; reason?: string; keywordId?: string;
     roasBefore?: number | null;
     /** what THIS bid level produced, carried into kw_bid_history as the next run's baseline */
-    impressionsBefore?: number; clicksBefore?: number; salesBefore?: number;
+    impressionsBefore?: number; clicksBefore?: number; salesBefore?: number; windowHours?: number;
   }[];
   /** Wanted a raise past the $0.85 ceiling and stopped. William confirms these by hand. */
   needsConfirm: { text: string; matchType: string; keywordId: string; bid: number; wouldBe: number; roas: number | null }[];
@@ -442,7 +442,7 @@ async function ensureBidMemory(): Promise<void> {
   // (William 2026-08-10: "Less impressions less sales then we start to go the other way").
   // Added to an existing table, so each column is added separately and only a genuine
   // "duplicate column" is swallowed.
-  for (const col of ["imp_before INTEGER", "clicks_before INTEGER", "sales_before REAL"]) {
+  for (const col of ["imp_before INTEGER", "clicks_before INTEGER", "sales_before REAL", "window_hours REAL"]) {
     try { await db().execute(`ALTER TABLE kw_bid_history ADD COLUMN ${col}`); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
@@ -533,7 +533,7 @@ async function lastBidChanges(): Promise<Map<string, BidChange>> {
   const out = new Map<string, BidChange>();
   try {
     const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, roas_before,
-             imp_before, clicks_before, sales_before FROM kw_bid_history
+             imp_before, clicks_before, sales_before, window_hours FROM kw_bid_history
       WHERE id IN (SELECT MAX(id) FROM kw_bid_history GROUP BY keyword_id)`);
     for (const row of r.rows) {
       out.set(String(row.keyword_id), {
@@ -542,6 +542,7 @@ async function lastBidChanges(): Promise<Map<string, BidChange>> {
         // Left undefined on pre-2026-08-10 rows on purpose. searchStep will not turn a keyword
         // round on a baseline it does not actually have.
         impressionsBefore: row.imp_before == null ? undefined : Number(row.imp_before),
+        windowHours: row.window_hours == null ? undefined : Number(row.window_hours),
         clicksBefore: row.clicks_before == null ? undefined : Number(row.clicks_before),
         salesBefore: row.sales_before == null ? undefined : Number(row.sales_before),
       });
@@ -698,8 +699,14 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       // Bid decisions go through memory: cooldown first, then roll back a raise that hurt, then
       // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
       const id = String(k.keywordId);
-      const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lastChange.get(id), since.get(id), nowMs,
-        { floorFound: floors.get(id) ?? null, ceiling: activeCeiling(spCeilings.get(id) ?? null) });
+      // How long the CURRENT evidence window has been open. With no recorded change the window is
+      // the month so far, which is exactly what perfSinceChange seeded it with.
+      const lc = lastChange.get(id);
+      const sinceHours = lc
+        ? Math.max(0, (nowMs - Date.parse(lc.changedAt)) / 3_600_000)
+        : Math.max(0, (nowMs - Date.parse(sd + "T00:00:00Z")) / 3_600_000);
+      const m = bidWithMemory(k.bid || NEW_KW_BID, perf, lc, since.get(id), nowMs,
+        { floorFound: floors.get(id) ?? null, ceiling: activeCeiling(spCeilings.get(id) ?? null), sinceHours });
       if (m.bid === null) {
         if (m.reason.startsWith("held:")) heldByCooldown++;
         // The $0.85 line. The engine has run out of authority here, so it surfaces the word rather
@@ -717,7 +724,20 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       }
       const promotedAt = protectedIds.get(id);
       const isCut = m.bid < (k.bid || NEW_KW_BID);
-      if (isCut && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
+      // THE SHIELD ENDS THE MOMENT THE WORD CONVERTS.
+      //
+      // The shield exists because a freshly woken keyword reads as zero orders while attribution
+      // catches up, gets cut, and walks back to the floor. That reasoning only holds while there is
+      // nothing to read. Once a keyword has an order the evidence has arrived, and on 2026-08-13 we
+      // measured attribution on a settled period and found it lands on day ONE, not day fourteen
+      // (sales1d = sales7d = sales14d = sales30d = $48.96).
+      //
+      // Without this, three of the six keywords William re-enabled on 2026-08-15 could not be cut
+      // at all, despite 10 to 13 clicks and real orders each, because they had been reintroduced
+      // days earlier. That directly blocked his instruction: "continue to lower the bids to see if
+      // we can raise the ROAS." 260 enabled keywords were shielded at the time.
+      const hasEvidence = perf.orders > 0;
+      if (isCut && !hasEvidence && promotedAt && isProtected(promotedAt, nowMs)) { shielded++; continue; }
       if (m.reason.includes("turning around")) rolledBack++;
       const acos = perf.sales > 0 ? perf.spend / perf.sales : 0;
       // roasBefore is measured on the window SINCE the last move, which is what the next run will
@@ -733,6 +753,8 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
         reason: m.reason, keywordId: id, roasBefore,
         // The evidence THIS bid level produced. Next run compares its own window against it.
         impressionsBefore: ev?.impressions ?? 0, clicksBefore: ev?.clicks ?? 0, salesBefore: ev?.sales ?? 0,
+        // The LENGTH of the window those numbers cover, so the next run compares rate with rate.
+        windowHours: sinceHours,
       });
     }
   }
@@ -876,10 +898,10 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
           try {
             await db().execute({
               sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,roas_before,reason,ad_product,
-                                               imp_before,clicks_before,sales_before)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                                               imp_before,clicks_before,sales_before,window_hours)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
               args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS",
-                     b.impressionsBefore ?? 0, b.clicksBefore ?? 0, b.salesBefore ?? 0],
+                     b.impressionsBefore ?? 0, b.clicksBefore ?? 0, b.salesBefore ?? 0, b.windowHours ?? null],
             });
           } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
           // A restored bid becomes this word's proven floor, but ONLY once Amazon has accepted the

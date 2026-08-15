@@ -60,20 +60,21 @@ describe("shouldKill — $4 MTD + not profitable", () => {
   });
 });
 
-describe("nextBid — a flat ±$0.10 at the 52% pivot", () => {
-  it("raises +10% when ACOS is below 52%", () => {
-    expect(nextBid(1.0, { spend: 2, orders: 2, sales: 10 })).toBe(1.1);  // 20% ACOS, +$0.10
-    expect(nextBid(1.0, { spend: 5.1, orders: 1, sales: 10 })).toBe(1.1); // 51% — still profitable
+describe("nextBid — a flat ±$0.05 at the 52% pivot", () => {
+  it("raises a flat nickel when ACOS is below 52%", () => {
+    expect(nextBid(1.0, { spend: 2, orders: 2, sales: 10 })).toBe(1.05);  // 20% ACOS, +$0.05
+    expect(nextBid(1.0, { spend: 5.1, orders: 1, sales: 10 })).toBe(1.05); // 51% — still profitable
   });
-  it("cuts a HIGH bid by a dime, not by a proportion (William 2026-08-13)", () => {
+  it("cuts a HIGH bid by a flat nickel, not by a proportion (William 2026-08-13, halved 08-15)", () => {
     // The whole point of his correction: 10% off $2.50 is 25 cents and skips three rungs before
-    // the word has had the searches to show what the last rung did.
-    expect(nextBid(2.5, { spend: 6, orders: 1, sales: 10 })).toBe(2.4);
-    expect(nextBid(0.89, { spend: 6, orders: 1, sales: 10 })).toBe(0.79);
+    // the word has had the searches to show what the last rung did. On 08-15 he halved the step
+    // again: "just try smaller incremental increases or decreases."
+    expect(nextBid(2.5, { spend: 6, orders: 1, sales: 10 })).toBe(2.45);
+    expect(nextBid(0.89, { spend: 6, orders: 1, sales: 10 })).toBe(0.84);
   });
-  it("lowers -$0.10 when ACOS is at/above 52%", () => {
-    expect(nextBid(1.0, { spend: 6, orders: 1, sales: 10 })).toBe(0.9);   // 60% ACOS, -$0.10
-    expect(nextBid(1.0, { spend: 5.2, orders: 1, sales: 10 })).toBe(0.9); // exactly 52% -> lower
+  it("lowers -$0.05 when ACOS is at/above 52%", () => {
+    expect(nextBid(1.0, { spend: 6, orders: 1, sales: 10 })).toBe(0.95);   // 60% ACOS, -$0.05
+    expect(nextBid(1.0, { spend: 5.2, orders: 1, sales: 10 })).toBe(0.95); // exactly 52% -> lower
   });
   it("holds when there is no ACOS signal (0 sales)", () => {
     expect(nextBid(0.5, { spend: 1, orders: 0, sales: 0 })).toBe(0.5);
@@ -81,19 +82,19 @@ describe("nextBid — a flat ±$0.10 at the 52% pivot", () => {
   it("clamps to the [0.10, 2.50] band and returns whole cents", () => {
     expect(nextBid(2.5, { spend: 1, orders: 1, sales: 10 })).toBe(2.5);
     expect(nextBid(0.1, { spend: 6, orders: 1, sales: 10 })).toBe(0.1);
-    expect(nextBid(0.37, { spend: 1, orders: 1, sales: 10 })).toBe(0.47); // flat dime, not 10%
+    expect(nextBid(0.37, { spend: 1, orders: 1, sales: 10 })).toBe(0.42); // flat nickel, not 10%
   });
   it("treats a zero/absent current bid as the floor", () => {
-    expect(nextBid(0, { spend: 1, orders: 1, sales: 10 })).toBe(0.2); // floor $0.10 + a dime
+    expect(nextBid(0, { spend: 1, orders: 1, sales: 10 })).toBe(0.15); // floor $0.10 + a nickel
   });
 });
 
-describe("decide — kill first, else ±10%, else hold", () => {
+describe("decide — kill first, else ±$0.05, else hold", () => {
   it("kills over bidding", () => {
     expect(decide(1.0, { spend: 5, orders: 0, sales: 0 })).toEqual({ action: "kill" });
   });
   it("bids when profitable and under the kill bar", () => {
-    expect(decide(1.0, { spend: 2, orders: 2, sales: 10 })).toEqual({ action: "bid", bid: 1.1 });
+    expect(decide(1.0, { spend: 2, orders: 2, sales: 10 })).toEqual({ action: "bid", bid: 1.05 });
   });
   it("holds when no signal", () => {
     expect(decide(0.5, { spend: 1, orders: 0, sales: 0 })).toEqual({ action: "hold" });
@@ -599,9 +600,9 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
-  it("cuts a word under 2x by the full ten cents — it is paying too much per sale", () => {
+  it("cuts a word under 2x by the full step — it is paying too much per sale", () => {
     const v = searchStep(0.50, ev(10, 15));                    // 1.5x
-    expect(v.bid).toBe(0.40);
+    expect(v.bid).toBe(0.45);
     if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
@@ -612,7 +613,7 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
 
   it("a hair under 2x gets the fast cut, not the gentle one", () => {
     const v = searchStep(0.50, ev(10, 19.9));
-    expect(v.bid).toBe(0.40);
+    expect(v.bid).toBe(0.45);
   });
 
   // The asymmetry is the point (William: "rather be cautious to test a profitable keyword slowly
@@ -621,7 +622,7 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     const working = searchStep(1.00, ev(10, 30));              // 3x
     const failing = searchStep(1.00, ev(10, 5));               // 0.5x
     expect(working.bid).toBe(0.98);
-    expect(failing.bid).toBe(0.90);
+    expect(failing.bid).toBe(0.95);
     if (working.bid !== null && failing.bid !== null) {
       expect(1.00 - working.bid).toBeLessThan(1.00 - failing.bid);
     }
@@ -629,7 +630,7 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
 
   it("RAISES a keyword with no impressions and no clicks — it is not in the auction at all", () => {
     const v = searchStep(0.10, silent);
-    expect(v.bid).toBe(0.20);
+    expect(v.bid).toBe(0.15);
     if (v.bid !== null) expect(v.direction).toBe("up");
   });
 
@@ -638,11 +639,11 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
   // position problem, and position is bought with bid.
   it("CLIMBS a keyword that is shown and never clicked — position is bought with bid", () => {
     const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 4000 });
-    expect(v.bid).toBe(0.60);
+    expect(v.bid).toBe(0.55);
     if (v.bid !== null) expect(v.direction).toBe("up");
   });
 
-  it("clears the $0.59 market CPC in five runs, not nineteen", () => {
+  it("clears the $0.59 market CPC in ten runs at a nickel, not nineteen at ten per cent", () => {
     let bid = 0.10, runs = 0;
     for (; runs < 25; runs++) {
       const v = searchStep(bid, silent);
@@ -651,7 +652,7 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
       if (bid > 0.59) break;
     }
     expect(bid).toBeGreaterThan(0.59);
-    expect(runs).toBeLessThanOrEqual(5);
+    expect(runs).toBeLessThanOrEqual(10);
   });
 
   it("cuts cautiously when there are too few clicks to trust the ratio", () => {
@@ -661,7 +662,7 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
 
   it("respects the floor, and the cap no longer binds because nothing profitable climbs", () => {
     expect(searchStep(BID_FLOOR, ev(10, 5)).bid).toBeNull();    // already at $0.10, cannot go lower
-    expect(searchStep(BID_CAP, ev(10, 50)).bid).toBe(2.48);     // 5x at the cap: shaved, not held
+    expect(searchStep(BID_CAP, ev(10, 50)).bid).toBe(2.48);     // 5x at the cap: shaved two cents, not held
   });
 
   // THE TURN-AROUND. William 2026-08-10: "we cut until the keyword doesnt perform as well. Less
@@ -669,10 +670,13 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
   // a working keyword walking to the $0.10 floor, so it gets the sharpest tests in the file.
   describe("the turn-around — reversing a move that made things worse", () => {
     // A cut from $0.50 to $0.48, taken when the $0.50 level was producing 300 impressions and $30.
+    // windowHours is REQUIRED from 2026-08-15. Without a length on both sides the comparison is
+    // a month against six hours, which always reads "worse" and reverses a correct move.
     const cut: BidChange = {
       changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3,
-      impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
+      impressionsBefore: 300, clicksBefore: 10, salesBefore: 30, windowHours: 24,
     };
+    const H = { sinceHours: 24 };   // same length, so rate comparison equals total comparison
 
     // SUPERSEDED 2026-08-13. These two used to assert the turn-around climbing back up while the
     // word was still spending. William: "do not raise bid if the word is spending", "only raise
@@ -681,26 +685,53 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     // turn-around still does is reverse a cut on a word that has gone SILENT, which is the case it
     // was written for on 08-10 ("less impressions less sales then we start to go the other way").
     it("will NOT climb back while the word is still spending", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut, H);
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/never raised/);
     });
 
     it("will NOT climb back on lost sales either, while it is still spending", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut, H);
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/never raised/);
     });
 
     it("DOES turn round once the cut has silenced the word — the case it was built for", () => {
-      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, cut);
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, cut, H);
       expect(v.bid).toBe(0.50);
       if (v.bid !== null) expect(v.direction).toBe("up");
       expect(v.reason).toMatch(/turning round little by little/);
     });
 
+    // THE BUG THIS PREVENTS, measured on 2026-08-15. A keyword's FIRST bid move records a whole
+    // month of impressions as its baseline. Six hours later the engine measures only the six hours
+    // since, sees 4,110 against 200, calls it a collapse and puts the bid straight back up. In one
+    // live dry run 59 of 82 moves were turn-arounds triggered exactly this way, every one of them
+    // about to undo a cut William had just asked for.
+    it("does NOT fire when the two windows are different lengths — rates, not totals", () => {
+      const monthLong: BidChange = {
+        changedAt: "2026-08-15T12:00:00.000Z", fromBid: 0.79, toBid: 0.69, roasBefore: 1.6,
+        impressionsBefore: 4110, clicksBefore: 36, salesBefore: 41.96, windowHours: 24 * 14,
+      };
+      // 200 impressions in 6 hours is 33/h against 12/h over the fortnight, and $1 of sales in 6
+      // hours is $0.17/h against $0.12/h. Both BETTER. On raw totals both look like a collapse.
+      const v = searchStep(0.69, { spend: 0.5, sales: 1.0, orders: 1, clicks: 1, impressions: 200 },
+        monthLong, { sinceHours: 6 });
+      expect(v.reason).not.toMatch(/turning round/);
+    });
+
+    it("refuses to judge at all when a window length is missing", () => {
+      const noLength: BidChange = {
+        changedAt: "2026-08-15T12:00:00.000Z", fromBid: 0.79, toBid: 0.69, roasBefore: 1.6,
+        impressionsBefore: 4110, clicksBefore: 36, salesBefore: 41.96,   // windowHours absent
+      };
+      const v = searchStep(0.69, { spend: 0.5, sales: 0, orders: 0, clicks: 0, impressions: 0 },
+        noLength, { sinceHours: 6 });
+      expect(v.reason).not.toMatch(/turning round/);
+    });
+
     it("keeps cutting while the cut is NOT hurting — better on both counts", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 40, orders: 2, clicks: 12, impressions: 350 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 40, orders: 2, clicks: 12, impressions: 350 }, cut, H);
       expect(v.bid).toBe(0.46);
       if (v.bid !== null) expect(v.direction).toBe("down");
     });
@@ -780,7 +811,7 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
 
   it("climbs onto the ceiling but never through it", () => {
     const v = searchStep(0.80, silent);
-    expect(v.bid).toBe(BID_CONFIRM_CEILING);   // $0.80 + $0.10 lands ON $0.85, not at $0.90
+    expect(v.bid).toBe(BID_CONFIRM_CEILING);   // $0.80 + $0.05 lands ON $0.85
   });
 
   it("stops and escalates once it is sitting at $0.85", () => {
@@ -788,7 +819,7 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
     expect(v.bid).toBeNull();
     if (v.bid === null) {
       expect(v.escalate).toBe(true);
-      expect(v.wouldBe).toBeCloseTo(0.95, 2);   // what it WANTED, so William can judge the ask
+      expect(v.wouldBe).toBeCloseTo(0.90, 2);   // what it WANTED, so William can judge the ask
     }
   });
 
@@ -807,13 +838,13 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
 
   it("still CUTS a keyword above the line without asking — lowering risk needs no permission", () => {
     const v = searchStep(1.94, ev(10, 5));       // 0.5x, badly underwater
-    expect(v.bid).toBe(1.84);
+    expect(v.bid).toBe(1.89);
     if (v.bid !== null) expect(v.direction).toBe("down");
   });
 
   it("never escalates on the way down", () => {
     const v = searchStep(0.85, ev(10, 5));
-    expect(v.bid).toBe(0.75);
+    expect(v.bid).toBe(0.80);
   });
 
   it("carries the escalation through bidWithMemory, which is what the engine calls", () => {
@@ -839,7 +870,7 @@ describe("the $0.85 ceiling — the engine asks instead of buying", () => {
       bid = v.bid;
     }
     expect(bid).toBe(BID_CONFIRM_CEILING);   // $0.10 -> $0.85, then it asks
-    expect(runs).toBeLessThanOrEqual(8);
+    expect(runs).toBeLessThanOrEqual(16);
   });
 });
 
@@ -1009,7 +1040,7 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
 
   it("still raises a genuinely silent word — that is the one job raising has", () => {
     const r = searchStep(0.40, since({ spend: 0, clicks: 0, impressions: 0 }));
-    expect(r).toMatchObject({ bid: 0.5, direction: "up" });
+    expect(r).toMatchObject({ bid: 0.45, direction: "up" });
   });
 
   it("a word shown but never clicked is not spending, so it may still climb", () => {
@@ -1020,8 +1051,8 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
   it("the TURN-AROUND cannot sneak a raise past the rule on a spending word", () => {
     // A cut that made things worse would normally reverse upward. It may not, if the word spends.
     const last = { changedAt: "2026-08-12T00:00:00Z", fromBid: 0.6, toBid: 0.5, roasBefore: 2,
-                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19 };
-    const r = searchStep(0.5, since({ spend: 1.2, clicks: 3, impressions: 200, sales: 0 }), last);
+                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19, windowHours: 24 };
+    const r = searchStep(0.5, since({ spend: 1.2, clicks: 3, impressions: 200, sales: 0 }), last, { sinceHours: 24 });
     expect(r.bid).toBeNull();
     expect(r.reason).toMatch(/never raised/);
   });
@@ -1051,7 +1082,7 @@ describe("planBids", () => {
   it("raises a silent entity — the one job raising has", () => {
     const p = planBids([bidCand({ bid: 0.4, spend: 0, clicks: 0, impressions: 0 })]);
     expect(p.moves).toHaveLength(1);
-    expect(p.moves[0]).toMatchObject({ toBid: 0.5, direction: "up" });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.45, direction: "up" });
   });
 
   it("never raises a spending entity, on any product", () => {
@@ -1059,9 +1090,9 @@ describe("planBids", () => {
     expect(p.moves.every((m) => m.direction === "down")).toBe(true);
   });
 
-  it("cuts a dime under 2x and shaves two cents at or above it", () => {
+  it("cuts a nickel under 2x and shaves two cents at or above it", () => {
     const under = planBids([bidCand({ bid: 0.6, spend: 4, sales: 4, orders: 1, clicks: 6, impressions: 300 })]);
-    expect(under.moves[0]).toMatchObject({ toBid: 0.5, direction: "down" });
+    expect(under.moves[0]).toMatchObject({ toBid: 0.55, direction: "down" });
     const over = planBids([bidCand({ bid: 0.6, spend: 4, sales: 12, orders: 2, clicks: 6, impressions: 300 })]);
     expect(over.moves[0]).toMatchObject({ toBid: 0.58, direction: "down" });
   });
@@ -1094,7 +1125,7 @@ describe("planBids", () => {
 
   it("keeps climbing past $0.85 once that entity has an approved ceiling", () => {
     const p = planBids([bidCand({ bid: 0.85, spend: 0, clicks: 0, approvedCeiling: 1.85 })]);
-    expect(p.moves[0]).toMatchObject({ toBid: 0.95, direction: "up" });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.90, direction: "up" });
   });
 
   it("ONE SYSTEM: identical numbers give an identical verdict whatever product they came from", () => {
@@ -1107,30 +1138,30 @@ describe("planBids", () => {
   });
 });
 
-describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () => {
+describe("Sponsored Display steps in 2c, once a day (William 2026-08-13, halved 08-15)", () => {
   const c = (o: Partial<BidCandidate>): BidCandidate =>
     ({ id: "1", label: "views 7d", bid: 0.10, spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, ...o });
 
   it("the constants are the ones he specified", () => {
-    expect(SD_BID_STEP).toBe(0.05);
+    expect(SD_BID_STEP).toBe(0.02);   // was a nickel; "try five or two" (William 2026-08-15)
     expect(SD_BID_COOLDOWN_HOURS).toBe(24);
     // SUPERSEDED 2026-08-14. He set entry to $0.10 on the 13th, then to $0.05 the next day once
     // Amazon confirmed a $0.02 minimum: "start at .05 and see if bids go up and down based on roas".
     expect(SD_START_BID).toBe(0.05);
   });
 
-  it("a silent Display audience climbs a NICKEL, not a dime", () => {
+  it("a silent Display audience climbs TWO CENTS, not a dime", () => {
     const p = planBids([c({ bid: 0.10 })], { step: SD_BID_STEP });
-    expect(p.moves[0]).toMatchObject({ fromBid: 0.10, toBid: 0.15, direction: "up" });
+    expect(p.moves[0]).toMatchObject({ fromBid: 0.10, toBid: 0.12, direction: "up" });
   });
 
-  it("walks his ladder: 10 -> 15 -> 20", () => {
+  it("walks his ladder in twos: 10 -> 12 -> 14", () => {
     let bid = 0.10; const seen = [bid];
     for (let i = 0; i < 2; i++) {
       const p = planBids([c({ bid })], { step: SD_BID_STEP });
       bid = p.moves[0].toBid; seen.push(bid);
     }
-    expect(seen).toEqual([0.10, 0.15, 0.20]);
+    expect(seen).toEqual([0.10, 0.12, 0.14]);
   });
 
   it("a spending Display audience is still never raised", () => {
@@ -1139,11 +1170,11 @@ describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () =>
     expect(p.moves.every((m) => m.direction === "down")).toBe(true);
   });
 
-  it("cuts in nickels too, so the search can settle between 15c and 20c", () => {
+  it("cuts in twos too, so the search can settle a couple of cents at a time", () => {
     // 1.5x: above the 1x kill line so it survives, below 2x so it is cut at pace.
     const p = planBids([c({ bid: 0.20, spend: 4, sales: 6, orders: 1, clicks: 9, impressions: 500 })],
       { step: SD_BID_STEP });
-    expect(p.moves[0]).toMatchObject({ toBid: 0.15, direction: "down" });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.18, direction: "down" });
   });
 
   it("and a Display audience under 1x is killed, not nudged", () => {
@@ -1154,9 +1185,9 @@ describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () =>
     expect(p.killing).toBe(1);
   });
 
-  it("Products is untouched and still moves a dime", () => {
+  it("Products moves a nickel, Display two cents — they are separate steps", () => {
     const p = planBids([c({ bid: 0.10 })]);          // no step override
-    expect(p.moves[0]).toMatchObject({ toBid: 0.20 });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.15 });
   });
 
   it("still stops at the $0.85 gate, and Display will never get near it at a nickel a day", () => {
@@ -1209,11 +1240,11 @@ describe("Display bids start and cut at five cents (William 2026-08-14)", () => 
   });
 
   it("cuts BELOW the shared $0.10 floor, which the old wiring made impossible", () => {
-    // Spending, one click, well under 2x -> down a nickel. With the shared floor this clamped at
+    // Spending, one click, well under 2x -> down two cents. With the shared floor this clamped at
     // $0.10 and the search could only ever move up.
     const p = planBids([t({ id: "a", bid: 0.10, spend: 1.2, sales: 0, orders: 0, clicks: 3 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
-    expect(p.moves[0]?.toBid).toBe(0.05);
+    expect(p.moves[0]?.toBid).toBe(0.08);
   });
 
   it("stops at Amazon's real minimum of $0.02 and never goes under", () => {
@@ -1224,9 +1255,9 @@ describe("Display bids start and cut at five cents (William 2026-08-14)", () => 
     expect(SD_BID_FLOOR).toBe(0.02);
   });
 
-  it("still climbs a nickel when it is not spending at all", () => {
+  it("still climbs two cents when it is not spending at all", () => {
     const p = planBids([t({ id: "c", bid: 0.05 })], { step: SD_BID_STEP, floor: SD_BID_FLOOR });
-    expect(p.moves[0]).toMatchObject({ toBid: 0.10, direction: "up" });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.07, direction: "up" });
   });
 
   it("turns off at $4 spent unprofitably rather than cutting again", () => {
@@ -1274,14 +1305,14 @@ describe("a Display cut is two cents, not the whole bid (William 2026-08-15)", (
     expect(p.moves[0]?.toBid).toBe(0.03);
   });
 
-  it("still RAISES a nickel — only the cut changed", () => {
+  it("still RAISES, now also two cents", () => {
     const p = planBids([t({ id: "e", bid: 0.05 })], sd);
-    expect(p.moves[0]).toMatchObject({ toBid: 0.10, direction: "up" });
+    expect(p.moves[0]).toMatchObject({ toBid: 0.07, direction: "up" });
   });
 
-  it("leaves Products and Brands cutting a full dime", () => {
+  it("leaves Products and Brands on their own, larger step", () => {
     const p = planBids([t({ id: "f", bid: 0.75, spend: 3.0, sales: 3.0, orders: 1, clicks: 9 })]);
-    expect(p.moves[0]).toMatchObject({ fromBid: 0.75, toBid: 0.65, direction: "down" });
+    expect(p.moves[0]).toMatchObject({ fromBid: 0.75, toBid: 0.70, direction: "down" });
   });
 });
 
@@ -1325,7 +1356,7 @@ describe("Display raises only when it is genuinely absent from the auction (revi
     // the auction yet" — in the digest William reads and in the bid history we judge moves by.
     const p = planBids([t({ id: "a", impressions: 20000, clicks: 0 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
-    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.07 });
     expect(p.moves[0]?.reason).toContain("20000 impressions");
     expect(p.moves[0]?.reason).not.toContain("no impressions");
   });
@@ -1333,37 +1364,37 @@ describe("Display raises only when it is genuinely absent from the auction (revi
   it("still raises a target with no impressions at all", () => {
     const p = planBids([t({ id: "b", impressions: 0, clicks: 0 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
-    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+    expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.07 });
   });
 });
 
-describe("nickel steps above $2.50 (William 2026-08-14)", () => {
+describe("two-cent steps above $2.50 (William 2026-08-14, halved 08-15)", () => {
   // "go slow and maybe only raise like five cents at a time instead of ten since we're over the 250
   // threshold, please" — approving $3.50 on the branded head term, a word at 9.2x lifetime that
   // barely wins an impression.
 
-  it("raises a nickel at $2.50 and above", () => {
+  it("raises two cents at $2.50 and above", () => {
     const r = searchStep(2.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
       undefined, { ceiling: 3.50 });
-    expect(r.bid).toBe(2.55);
+    expect(r.bid).toBe(2.52);
   });
 
-  it("still raises a dime below the threshold", () => {
+  it("still raises the ordinary nickel below the threshold", () => {
     const r = searchStep(2.40, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
       undefined, { ceiling: 3.50 });
-    expect(r.bid).toBe(2.50);
+    expect(r.bid).toBe(2.45);
   });
 
   it("says so in the reason, because the digest is where this gets noticed", () => {
     const r = searchStep(2.60, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 },
       undefined, { ceiling: 3.50 });
-    expect(r.reason).toContain("nickel steps above");
+    expect(r.reason).toContain("two-cent steps above");
   });
 
   it("does NOT slow a cut — cutting reduces risk and should get there quickly", () => {
     const r = searchStep(2.60, { spend: 3.0, sales: 1.0, orders: 1, clicks: 6, impressions: 900 },
       undefined, { ceiling: 3.50 });
-    expect(r.bid).toBe(2.50);
+    expect(r.bid).toBe(2.55);
   });
 
   it("still stops dead at the approved ceiling rather than stepping past it", () => {
