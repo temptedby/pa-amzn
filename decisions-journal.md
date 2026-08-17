@@ -1915,3 +1915,96 @@ these are her listings to own and a coordinated edit beats two people writing th
 all tagged `+hello@phoneassured.com`, notification confirmed delivered at 12:30Z bundling all eight.
 Document body verified untouched at 25,637 characters. Full prepared set in
 `confabulator/LISTING-UPDATE-2026-08-15.md`. Nothing written to Amazon.
+
+## 2026-08-16 — The $4 rule was right all along; it was reading a snapshot from midnight
+
+**Context.** The morning review found the account spending harder than at any point this year and
+returning less: Sponsored Products at $267.59 for $181.33, 0.68x, with daily spend going $20.07 on
+the 14th, $57.22 on the 15th, $46.55 on the 16th. William asked the question that mattered: "a lot of
+spend no conversion, are we checking any words to turn off?" and then "why havent we turned off key
+words spending past $4 that havent converted!?" Six, and by the time I applied it seven, Sponsored
+Products keywords were sitting ENABLED at $4.48 to $11.87 month-to-date with zero orders. William's
+kill rule has been in production since 14 August and had fired correctly three times that same
+morning, so the rule was not the suspect.
+
+**Options.** (A) Assume attribution lag and wait, on the theory that the sales simply had not landed.
+(B) Assume the kill path was skipping keywords and re-read `killPlan`. (C) Read what the engine
+actually saw, out of its own cached report, and compare it to what Amazon says now. Also on the table
+and rejected: adding a second kill bar, or a lower one, before knowing why the first was silent.
+
+**Decision.** (C), then pause the seven on William's go. The seven were paused live and verified,
+$48.62 of dead spend stopped. The cause was diagnosed and written up; **the fix was deliberately not
+built**, because it is a production behaviour change and PR #4 is still unmerged in front of it.
+
+**Reasoning.** The engine reads its month-to-date performance through a deferred report cached under
+this key:
+
+```
+engine-mtd|SPONSORED_PRODUCTS|spTargeting|2026-08-01|2026-08-16|targeting|clicks+cost+...
+```
+
+The key ends with the report's END DATE, which only changes at UTC midnight. So all four runs in a
+day resolve to one cached report. Today's was requested at 00:00:22Z and collected at 00:40:48Z, and
+the 06:00, 12:00 and 18:00 runs all read that same snapshot. It is worse than a 24-hour lag because
+Amazon's account day resets at 07:00Z: a report requested at 00:00Z covers a day that has not begun
+and a previous day still settling.
+
+Proven by pulling `rows_json` out of `ads_report_jobs` and diffing it against a live report, rather
+than by reading the code twice:
+
+```
+                                    engine saw    actually
+phone tether clip (BROAD)              $3.40       $11.87
+smartphone safety leash clip           $0.00       $ 8.69
+phone retractable tether (EXACT)       $1.68       $ 7.40
+phone tether tab for iphone            $0.00       $ 5.84
+phone belt string (BROAD)              $2.46       $ 4.92
+phone lanyard retractable (EXACT)      $3.25       $ 4.48
+retractable phone tether (PHRASE)      $0.70       $ 5.42
+```
+
+Every one under $4 in the data the engine held. `phone tether clip` was sixty cents short in the
+snapshot and $7.87 over the line in fact.
+
+Stacked on top: `report-warm` is scheduled at `:40` while the engines run at `:00`, `:15`, `:30` and
+`:45`. The 00:00Z run therefore requests and exits with no data, which is exactly why it has logged
+nothing but a heartbeat every day, and nothing refreshes the reading for the remaining three runs.
+
+The consequence that matters most is not the missed kills. Three of the seven were RAISED at 18:00Z,
+because on a snapshot showing $0.00 spent they satisfied the "has not spent, raise it, it is not in
+the auction" branch. The engine bought more of words that had burned $5 to $7 that afternoon. A stale
+reading does not merely delay the brake, it inverts the accelerator.
+
+Sponsored Brands is unaffected and this is the proof, not an argument: `sb-v2.ts` pulls legacy v2 day
+reports synchronously with no queue and no cache key, and the SB kill fired correctly on `phone
+assured` PHRASE at $4.81 at 00:16Z. Sponsored Display shares the SP cache-key shape and took its own
+first kill at 00:45Z on `asin="B07ZSDFY85"` at $4.56.
+
+Separately, and worth recording because no fix to freshness touches it: **a $4 monthly bar per
+keyword cannot brake a word that spends $8.50 in a day.** With 2,277 enabled keywords the rule as
+written permits roughly $9,000 a month. That was harmless while 1,810 words sat at the $0.10 floor. It
+is 1,507 today, and the ladder is still lifting them out.
+
+**Industry source.** Amazon's own Advertising API behaviour, measured on this account rather than
+taken from documentation. `PUT /sp/keywords` returns **HTTP 207**, inside the 2xx range so `res.ok` is
+true, with a body splitting the batch into `success[]` and `error[]`; the write above was verified by
+reading those per-item outcomes and then re-reading `extendedData.lastUpdateDateTime`, which moved to
+`2026-08-16T22:59:57Z` on all seven. A plain state read cannot distinguish a landed write from one
+that never happened, which is the 2026-08-15 lesson applied. The account day boundary at 07:00 UTC,
+which makes a 00:00Z report request structurally premature, was established from
+`usageUpdatedTimestamp` on the budget-usage endpoint on 2026-08-07.
+
+**Trade-offs.** Pausing seven words costs whatever they would have converted later; against that, all
+seven had zero orders on $48.62 and one of them was a duplicate copy of the account's best word, so
+the winner itself is untouched and still running at 1.63x. Not building the fix tonight means the
+account runs one more day on a daily snapshot, which on today's rate is real money; against that,
+changing the report cache key alters how every engine reads every number, and shipping that behind an
+unmerged PR #4 would put two unreviewed behaviour changes into production at once. The fix itself has
+a cost to weigh when it is built: a report per run instead of per day is four times the report
+requests, on a queue that already takes 9 to 15 minutes.
+
+**Status.** Seven keywords PAUSED and verified against Amazon. Diagnosis complete and reproducible
+from `ads_report_jobs`. No code changed. PR #4 unmerged at six commits. Two fixes specified and not
+built: run-hour in the report cache key, and `report-warm` moved ahead of the engines. Corrected a
+deadline I reported this morning: Identity Verification and INFORM are due **2026-08-21**, not the
+17th, both clocks having been reset on 11 August; the bank verification has no stated deadline at all.
