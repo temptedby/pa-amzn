@@ -64,14 +64,19 @@ describe("isStaleJob", () => {
 });
 
 describe("isFreshData", () => {
-  it("acts on data collected within the freshness window", () => {
-    expect(isFreshData("2026-08-02T00:00:00Z", "2026-08-03T05:00:00Z")).toBe(true); // 29h
+  it("acts on data collected inside the freshness window", () => {
+    expect(isFreshData("2026-08-02T00:00:00Z", "2026-08-02T01:00:00Z")).toBe(true); // 1h
   });
   it("refuses data past the window, so the engine re-requests instead of acting on stale numbers", () => {
-    expect(isFreshData("2026-08-02T00:00:00Z", "2026-08-03T06:00:00Z")).toBe(false); // exactly 30h
+    expect(isFreshData("2026-08-02T00:00:00Z", "2026-08-02T02:00:00Z")).toBe(false); // exactly 2h
   });
-  it("outlives the 6-hourly cron by design, so one slow queue cycle does not blind a run", () => {
-    expect(DATA_STALE_HOURS).toBeGreaterThan(6);
+  // Was "outlives the 6-hourly cron by design". That was the bug, not the design: reportKey ends
+  // with the report's END DATE, which only changes at UTC midnight, so a window longer than a day
+  // could never expire and all four runs re-read one snapshot. On 2026-08-16 the 06Z, 12Z and 18Z
+  // runs each read $199.91 against a live $320.99. The window must now be SHORTER than the cron so
+  // every run re-requests, which is affordable because getReport waits inline for the result.
+  it("expires inside the 6-hourly cron, so every run gets its own reading", () => {
+    expect(DATA_STALE_HOURS).toBeLessThan(6);
   });
 });
 

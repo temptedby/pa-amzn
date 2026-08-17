@@ -7,14 +7,23 @@
 // runReintroduction() preview died at 151s on exactly this. So the engine's report step has been
 // failing routinely, which explains 11 keywords touched in seven weeks better than any rule does.
 //
-// Raising the inline budget cannot fix it either: Vercel caps a function at 300s (route
-// maxDuration), and a full engine pass needs several reports. So we stop waiting.
+// CORRECTED 2026-08-17. The 9-minute figure was measured at the wrong time of day, and the
+// conclusion drawn from it was wrong. Amazon's own createdAt/updatedAt across 19 reports:
+//     00:00Z  14 reports   0.4 to  4.8 min   mean 2.6
+//     07-08Z   2 reports   9.1 to 10.7 min
+//     12-13Z   3 reports  28.2 to 31.5 min
+// The engine runs at 00Z/06Z/12Z/18Z. Its engine-mtd report on 2026-08-17 was created at 00:01:21Z
+// and COMPLETED at 00:01:52Z: 31 seconds against the 300s route budget. So getReport now WAITS up
+// to INLINE_POLL_MS for a report, and only falls back to the deferred path when that is not enough.
+// The deferred machinery below is kept exactly as it was, as the slow-case safety net.
 //
 //   Run N   : ensureRequested() creates the report at Amazon and persists its reportId. Returns null.
 //   Run N+1 : tryCollect() polls ONCE (cheap), and if COMPLETED downloads the rows and acts.
 //
-// The engine therefore becomes eventually-consistent instead of failing. A pass with no data yet
-// is a normal outcome, not an error — it simply takes no action and says so.
+// The engine is therefore fast when Amazon is fast and eventually-consistent when it is not. A
+// pass with no data yet is still a normal outcome rather than an error: it takes no action and says
+// so. What is NOT acceptable, and was the 2026-08-16 overspend, is a pass that acts confidently on
+// a reading from the previous midnight. DATA_STALE_HOURS now expires inside the cron to stop that.
 //
 // Amazon's own duplicate-request response (425, "The Request is a duplicate of : <uuid>") is
 // treated as success and the existing reportId is adopted, so re-requesting is always safe.
@@ -28,8 +37,44 @@ const RPT_CT = "application/vnd.createasyncreportrequest.v3+json";
 
 /** How long a requested-but-uncollected job may sit before we give up and request a fresh one. */
 export const JOB_STALE_HOURS = 24;
-/** How old collected data may be before the engine should not act on it. */
-export const DATA_STALE_HOURS = 30;
+/**
+ * How old collected data may be before the engine should not act on it.
+ *
+ * Was 30. Lowered to 2 on 2026-08-17, because 30 was longer than the cache key's own lifetime and
+ * so could never expire inside a day: `reportKey` ends with the report's END DATE, which only
+ * changes at UTC midnight, so all four daily runs resolved to one row and re-read one snapshot.
+ * `kw_perf_snapshot` recorded the consequence three times a day: 06Z, 12Z and 18Z on 2026-08-16
+ * every one read $199.91 against a live $320.99. Three keywords went from $0.00 to $7-$8 inside
+ * that blind window and the $4 kill never saw them.
+ *
+ * 2 hours is deliberately shorter than the 6-hourly cron: every run now re-requests rather than
+ * re-reading. That is only affordable because of INLINE_POLL_MS below.
+ */
+export const DATA_STALE_HOURS = 2;
+
+/**
+ * How long a run may wait inline for a report it just asked for.
+ *
+ * The header of this file used to assert that waiting was impossible: "Real queue latency on this
+ * account is ~9 minutes" and "Vercel caps a function at 300s". The first half was measured at the
+ * wrong time of day. Recovered from Amazon's own createdAt/updatedAt across 19 reports, latency is
+ * almost entirely a function of when you ask:
+ *
+ *     00:00Z   14 reports    0.4 to  4.8 min   mean 2.6
+ *     07-08Z    2 reports    9.1 to 10.7 min
+ *     12-13Z    3 reports   28.2 to 31.5 min
+ *
+ * The engine runs at 00Z, 06Z, 12Z and 18Z. Its own engine-mtd report on 2026-08-17 was created at
+ * 00:01:21Z and COMPLETED at 00:01:52Z: thirty-one seconds, against a 300s budget. Waiting is not
+ * only possible at the hours that matter, it is cheap.
+ *
+ * 90s covers the midnight case many times over and leaves most of the budget for the engine's own
+ * work. When it is not enough the deferred path is untouched: we return "requested" and a later run
+ * collects, exactly as before. The fast case gets fast without removing the slow-case safety net.
+ */
+export const INLINE_POLL_MS = 90_000;
+/** Gap between inline status polls. */
+export const INLINE_POLL_EVERY_MS = 5_000;
 
 export interface ReportSpec {
   /** Free-text label for what needs this report, e.g. "engine-mtd" or "reintro-history-1". */
@@ -116,6 +161,49 @@ async function ads(cfg: AdsConfig, token: string, path: string, method: string, 
   return { ok: res.ok, status: res.status, json: text ? JSON.parse(text) : null };
 }
 
+/** One status poll. Returns rows when COMPLETED, a reason on FAILURE, or null while still building. */
+async function pollOnce<T>(
+  cfg: AdsConfig, token: string, reportId: string, key: string, nowIso: string,
+): Promise<{ rows: T[] } | { failed: string } | null> {
+  const s = await ads(cfg, token, `/reporting/reports/${reportId}`, "GET", null);
+  const status = String(s.json?.status ?? "");
+  if (status === "COMPLETED" && s.json?.url) {
+    const buf = Buffer.from(await (await fetch(s.json.url)).arrayBuffer());
+    const rows = JSON.parse(gunzipSync(buf).toString()) as T[];
+    await db().execute({
+      sql: "UPDATE ads_report_jobs SET status='COMPLETED', collected_at=?, rows_json=? WHERE key=?",
+      args: [nowIso, JSON.stringify(rows), key],
+    });
+    return { rows };
+  }
+  if (status === "FAILURE") {
+    await db().execute({
+      sql: "UPDATE ads_report_jobs SET status='FAILED', note=? WHERE key=?",
+      args: [String(s.json?.failureReason ?? "FAILURE").slice(0, 300), key],
+    });
+    return { failed: `report FAILURE: ${String(s.json?.failureReason ?? "").slice(0, 120)}` };
+  }
+  return null;
+}
+
+/**
+ * Poll a building report for up to `budgetMs`, then give up and let a later run collect it.
+ * Measured queue time at the engine's own hours is about 31 seconds, so this normally returns rows
+ * on the first or second poll and the deferred fallback stays unused.
+ */
+async function pollInline<T>(
+  cfg: AdsConfig, token: string, reportId: string, key: string, nowIso: string,
+  budgetMs = INLINE_POLL_MS, everyMs = INLINE_POLL_EVERY_MS,
+): Promise<{ rows: T[] } | { failed: string } | null> {
+  const deadline = Date.now() + budgetMs;
+  for (;;) {
+    const r = await pollOnce<T>(cfg, token, reportId, key, nowIso);
+    if (r) return r;
+    if (Date.now() + everyMs >= deadline) return null;
+    await new Promise((res) => setTimeout(res, everyMs));
+  }
+}
+
 /**
  * Get report rows if a previously-requested report has finished; otherwise request one and return
  * without waiting. NEVER blocks for more than a single status poll, so a run stays well inside
@@ -134,27 +222,15 @@ export async function getReport<T = Record<string, unknown>>(
     }
   }
 
-  // A live job that has not gone stale -> poll it exactly once.
+  // A live job that has not gone stale -> wait for it, within the inline budget.
   if (existing && existing.reportId && existing.status === "REQUESTED" && !isStaleJob(existing, nowIso)) {
-    const s = await ads(cfg, token, `/reporting/reports/${existing.reportId}`, "GET", null);
-    const status = String(s.json?.status ?? "");
-    if (status === "COMPLETED" && s.json?.url) {
-      const buf = Buffer.from(await (await fetch(s.json.url)).arrayBuffer());
-      const rows = JSON.parse(gunzipSync(buf).toString()) as T[];
-      await db().execute({
-        sql: "UPDATE ads_report_jobs SET status='COMPLETED', collected_at=?, rows_json=? WHERE key=?",
-        args: [nowIso, JSON.stringify(rows), key],
-      });
-      return { state: "ready", rows, ageHours: 0 };
-    }
-    if (status === "FAILURE") {
-      await db().execute({ sql: "UPDATE ads_report_jobs SET status='FAILED', note=? WHERE key=?", args: [String(s.json?.failureReason ?? "FAILURE").slice(0, 300), key] });
-      return { state: "failed", reason: `report FAILURE: ${String(s.json?.failureReason ?? "").slice(0, 120)}` };
-    }
+    const r = await pollInline<T>(cfg, token, existing.reportId, key, nowIso);
+    if (r && "rows" in r) return { state: "ready", rows: r.rows, ageHours: 0 };
+    if (r && "failed" in r) return { state: "failed", reason: r.failed };
     return { state: "pending", job: { key, reportId: existing.reportId, status: existing.status, requestedAt: existing.requestedAt, collectedAt: existing.collectedAt } };
   }
 
-  // Nothing usable -> request a fresh report and return immediately.
+  // Nothing usable -> request a fresh report, then wait for it within budget.
   const cr = await ads(cfg, token, "/reporting/reports", "POST", {
     name: spec.purpose, startDate: spec.startDate, endDate: spec.endDate,
     configuration: {
@@ -171,5 +247,10 @@ export async function getReport<T = Record<string, unknown>>(
           ON CONFLICT(key) DO UPDATE SET report_id=excluded.report_id, status='REQUESTED', requested_at=excluded.requested_at, collected_at=NULL, rows_json=NULL`,
     args: [key, spec.purpose, reportId, nowIso],
   });
+  // Wait for the report we just asked for. At the engine's own hours this comes back in about
+  // 31 seconds, so the run no longer has to exit empty and leave the engine on old numbers.
+  const fresh = await pollInline<T>(cfg, token, reportId, key, nowIso);
+  if (fresh && "rows" in fresh) return { state: "ready", rows: fresh.rows, ageHours: 0 };
+  if (fresh && "failed" in fresh) return { state: "failed", reason: fresh.failed };
   return { state: "requested", job: { key, reportId, status: "REQUESTED", requestedAt: nowIso, collectedAt: null } };
 }
