@@ -737,8 +737,19 @@ export function isNextMonth(a: string, b: string): boolean {
 // before ROAS starts to fall. Climb while profitable, retreat when not.
 // ---------------------------------------------------------------------------
 
-/** Minimum gap between moves on one keyword. Every engine run may act (William: "every 6 hours"). */
-export const BID_COOLDOWN_HOURS = 6;
+/**
+ * Minimum gap between moves on one keyword.
+ *
+ * RAISED 6 -> 12 on 2026-08-17. William: "should test the new level for atleast 6-12 hours", and
+ * the slow end of a range he gives is the end he has twice asked for (see BID_SHAVE_STEP).
+ *
+ * At 6 hours against a 6-hourly cron, EVERY run could move EVERY keyword, so no bid level was ever
+ * observed for longer than one report cycle before being judged and replaced. That is how
+ * `retractable phone tether` took five bid changes in three days and finished higher than it
+ * started. At 12 hours a level gets at least two report cycles to produce evidence before anything
+ * is concluded from it, which is the point of testing a level at all.
+ */
+export const BID_COOLDOWN_HOURS = 12;
 /** How much a bid moves per step: a flat ten cents (William: "i asked raising by .10 not 10%"). */
 export const BID_SEARCH_STEP = 0.10;
 
@@ -755,6 +766,16 @@ export const BID_SEARCH_STEP = 0.10;
 // is market share, and it is expensive to re-buy. Cutting too slow only costs time. When the
 // evidence cannot tell the two apart, the cheaper mistake is the slow one.
 export const BID_SHAVE_STEP = 0.02;
+
+// HOW LONG A NEW BID GETS BEFORE IT IS JUDGED. William 2026-08-17: "should test the new level for
+// atleast 6-12 hours". Set to the slow end of the range he gave. The cooldown is 6 hours and the
+// cron runs 6-hourly, so without this a level could be condemned by the very next run on a few
+// hours of thin data, which is most of how the turn-around ran away with the account.
+export const TURNAROUND_MIN_HOURS = 12;
+
+// The shortest window allowed to become a per-day rate. Two impressions over half an hour is not
+// 96 a day, it is two impressions. Dividing by anything smaller manufactures a rate out of noise.
+export const MIN_RATE_WINDOW_DAYS = 0.25;
 
 /** Clicks needed before a ROAS reading is trusted. Below this the ratio is noise: the bid still
  *  moves, but always on the cautious step, never the fast one. */
@@ -962,18 +983,29 @@ export interface BidChange {
   roasBefore: number | null;
   // What the PREVIOUS bid level actually produced, recorded at the moment of the change. The next
   // run compares its own window against these to answer "did that move make things better or
-  // worse". Both windows are one cooldown long (~6h), so they are comparable. Undefined on rows
-  // written before 2026-08-10, and the reversal simply does not fire without them rather than
-  // guessing from a half-known baseline.
+  // worse". Undefined on rows written before 2026-08-10, and the reversal simply does not fire
+  // without them rather than guessing from a half-known baseline.
+  //
+  // CORRECTION 2026-08-17: this comment used to claim "both windows are one cooldown long (~6h),
+  // so they are comparable". They are not. A window runs from the last bid change to now, so it is
+  // as long as the keyword has sat still, and comparing the raw counts reversed nearly every cut.
+  // See the turn-around in searchStep. windowDaysBefore below is what makes the comparison legal.
   impressionsBefore?: number;
   clicksBefore?: number;
   salesBefore?: number;
+  /** How many DAYS the figures above were accumulated over. Without it the counts cannot be turned
+   *  into a rate, and the turn-around refuses to fire rather than compare unequal windows. */
+  windowDaysBefore?: number;
 }
 
 /** Performance accumulated SINCE a bid change — the evidence that change produced.
  *  `impressions` is what separates "the bid is too low to enter the auction" from "we are being
  *  shown and nobody clicks", which are different problems with different fixes. */
-export interface SinceChange { spend: number; sales: number; orders: number; clicks: number; impressions?: number }
+export interface SinceChange {
+  spend: number; sales: number; orders: number; clicks: number; impressions?: number;
+  /** Days this window covers: last bid change to now, or the month so far when it has never moved. */
+  windowDays?: number;
+}
 
 /** Whole days between an ISO timestamp and now. */
 export function daysSince(iso: string, nowMs = Date.now()): number {
@@ -1044,10 +1076,16 @@ export function searchStep(
     shave?: number;
     /** the lowest bid this word has been PROVEN to still need; never cut at or below it */
     floorFound?: number | null;
+    /** hours a new bid must hold before the turn-around is allowed to judge it */
+    turnaroundMinHours?: number;
+    /** now, injected so the dwell check is testable without freezing the clock */
+    nowMs?: number;
   } = {},
 ): SearchStep {
   const step = opts.step ?? BID_SEARCH_STEP;
   const shave = opts.shave ?? BID_SHAVE_STEP;
+  const turnaroundMinHours = opts.turnaroundMinHours ?? TURNAROUND_MIN_HOURS;
+  const nowMs = opts.nowMs ?? Date.now();
   const floorFound = opts.floorFound ?? null;
   const floor = opts.floor ?? BID_FLOOR;
   const cap = opts.cap ?? BID_CAP;
@@ -1119,16 +1157,56 @@ export function searchStep(
   //
   // "Worse" is his test, not mine: fewer impressions, or fewer sales, than the previous bid level
   // produced. Requires a baseline, so it never fires on the first move of a keyword's life.
-  if (last && since && last.impressionsBefore !== undefined) {
-    const wasCut = last.toBid < last.fromBid;
-    const impNow = since.impressions ?? 0;
-    const worse = impNow < (last.impressionsBefore ?? 0) || since.sales < (last.salesBefore ?? 0);
-    if (worse) {
-      const dir = wasCut ? "up" : "down";
-      const what = impNow < (last.impressionsBefore ?? 0)
-        ? `impressions fell ${last.impressionsBefore} -> ${impNow}`
-        : `sales fell $${(last.salesBefore ?? 0).toFixed(2)} -> $${since.sales.toFixed(2)}`;
-      return move(dir, `the ${wasCut ? "cut" : "raise"} to $${last.toBid.toFixed(2)} made it worse (${what}) — turning round little by little`, shave);
+  //
+  // REWRITTEN 2026-08-17. William: "lets rewrite to be the daily average", and "the goal is to
+  // lower acos and should test the new level for atleast 6-12 hours".
+  //
+  // WHAT WAS WRONG. This compared RAW TOTALS from two windows of DIFFERENT LENGTH. The BidChange
+  // comment claimed "both windows are one cooldown long (~6h), so they are comparable", and that
+  // was never true: a window runs from a keyword's LAST BID CHANGE to now, so a word that had not
+  // moved in three weeks carried a three-week total, and the window after its first cut carried
+  // six hours. Six hours cannot beat three weeks, so every first cut read as harmful, reversed,
+  // and the word then climbed a dime a run to the $0.85 ceiling.
+  //
+  // Measured on the live account the day it was found:
+  //
+  //   retractable phone tether PHRASE  cut $0.79 -> $0.69 at 1.63x, a correct cut. Next run read
+  //                                    "impressions fell 4110 -> 34" (a month against 18 hours),
+  //                                    reversed, and climbed to $0.85 — ABOVE where it started,
+  //                                    while holding $27.49 of the month's spend.
+  //   phone tether PHRASE              cut $0.50 -> $0.40 at 1.26x, then climbed to $0.72.
+  //
+  // Account-wide that day: 143 raises against 62 cuts, 35 landing on the ceiling. A rule written
+  // to hunt the cheapest bid that still converts was walking the whole account upward, which is
+  // the opposite of lowering ACOS.
+  //
+  // TWO GUARDS NOW, both his:
+  //
+  //   1. PER DAY, NOT PER WINDOW. Each side is divided by its own window length before they are
+  //      compared, so a long window and a short one are finally the same measurement.
+  //   2. LET THE NEW LEVEL RUN. Nothing is judged until it has held TURNAROUND_MIN_HOURS.
+  //
+  // Either window length unknown -> this does not fire. That is how the block has always treated a
+  // missing baseline: refuse rather than guess. Rows written from now on carry their own window
+  // length, so the rule arms itself as history accumulates.
+  if (last && since && last.impressionsBefore !== undefined
+      && since.windowDays !== undefined && last.windowDaysBefore !== undefined) {
+    const heldHours = daysSince(last.changedAt, nowMs) * 24;
+    if (heldHours >= turnaroundMinHours) {
+      const perDay = (total: number, days: number) => total / Math.max(days, MIN_RATE_WINDOW_DAYS);
+      const wasCut = last.toBid < last.fromBid;
+      const impNow = perDay(since.impressions ?? 0, since.windowDays);
+      const impWas = perDay(last.impressionsBefore ?? 0, last.windowDaysBefore);
+      const salesNow = perDay(since.sales, since.windowDays);
+      const salesWas = perDay(last.salesBefore ?? 0, last.windowDaysBefore);
+      const fewerImps = impNow < impWas;
+      if (fewerImps || salesNow < salesWas) {
+        const dir = wasCut ? "up" : "down";
+        const what = fewerImps
+          ? `impressions fell ${impWas.toFixed(0)} to ${impNow.toFixed(0)} a day`
+          : `sales fell $${salesWas.toFixed(2)} to $${salesNow.toFixed(2)} a day`;
+        return move(dir, `the ${wasCut ? "cut" : "raise"} to $${last.toBid.toFixed(2)} made it worse (${what}, after ${heldHours.toFixed(0)}h) — turning round little by little`, shave);
+      }
     }
   }
 
@@ -1185,13 +1263,15 @@ export function bidWithMemory(
   nowMs = Date.now(),
   opts: {
     step?: number; floor?: number; cap?: number; ceiling?: number; hours?: number; minClicks?: number;
-    target?: number; shave?: number; floorFound?: number | null;
+    target?: number; shave?: number; floorFound?: number | null; turnaroundMinHours?: number;
   } = {},
 ): { bid: number | null; reason: string; escalate?: true; wouldBe?: number; restored?: true } {
   if (inCooldown(last, nowMs, opts.hours ?? BID_COOLDOWN_HOURS)) {
     return { bid: null, reason: `held: last change was ${(daysSince(last!.changedAt, nowMs) * 24).toFixed(1)}h ago` };
   }
-  const v = searchStep(currentBid, since, last, opts);
+  // nowMs is threaded through so the turn-around's dwell check reads the same clock the cooldown
+  // does, rather than falling back to Date.now() inside searchStep and drifting in tests.
+  const v = searchStep(currentBid, since, last, { ...opts, nowMs });
   return {
     bid: v.bid,
     reason: v.reason,

@@ -669,9 +669,11 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
   // a working keyword walking to the $0.10 floor, so it gets the sharpest tests in the file.
   describe("the turn-around — reversing a move that made things worse", () => {
     // A cut from $0.50 to $0.48, taken when the $0.50 level was producing 300 impressions and $30.
+    // windowDaysBefore is what makes these numbers a RATE. Every `since` below carries the same
+    // one-day window, so these cases test the turn-around's judgement and not window arithmetic.
     const cut: BidChange = {
       changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3,
-      impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
+      impressionsBefore: 300, clicksBefore: 10, salesBefore: 30, windowDaysBefore: 1,
     };
 
     // SUPERSEDED 2026-08-13. These two used to assert the turn-around climbing back up while the
@@ -681,26 +683,26 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     // turn-around still does is reverse a cut on a word that has gone SILENT, which is the case it
     // was written for on 08-10 ("less impressions less sales then we start to go the other way").
     it("will NOT climb back while the word is still spending", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 30, orders: 1, clicks: 8, impressions: 120, windowDays: 1 }, cut);
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/never raised/);
     });
 
     it("will NOT climb back on lost sales either, while it is still spending", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 9.49, orders: 1, clicks: 8, impressions: 400, windowDays: 1 }, cut);
       expect(v.bid).toBeNull();
       expect(v.reason).toMatch(/never raised/);
     });
 
     it("DOES turn round once the cut has silenced the word — the case it was built for", () => {
-      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0 }, cut);
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, windowDays: 1 }, cut);
       expect(v.bid).toBe(0.50);
       if (v.bid !== null) expect(v.direction).toBe("up");
       expect(v.reason).toMatch(/turning round little by little/);
     });
 
     it("keeps cutting while the cut is NOT hurting — better on both counts", () => {
-      const v = searchStep(0.48, { spend: 3, sales: 40, orders: 2, clicks: 12, impressions: 350 }, cut);
+      const v = searchStep(0.48, { spend: 3, sales: 40, orders: 2, clicks: 12, impressions: 350, windowDays: 1 }, cut);
       expect(v.bid).toBe(0.46);
       if (v.bid !== null) expect(v.direction).toBe("down");
     });
@@ -708,11 +710,59 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     it("turns a RAISE round too — the reversal is symmetric", () => {
       const raise: BidChange = {
         changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.40, toBid: 0.50, roasBefore: 3,
-        impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,
+        impressionsBefore: 300, clicksBefore: 10, salesBefore: 30, windowDaysBefore: 1,
       };
-      const v = searchStep(0.50, { spend: 5, sales: 12, orders: 1, clicks: 9, impressions: 250 }, raise);
+      const v = searchStep(0.50, { spend: 5, sales: 12, orders: 1, clicks: 9, impressions: 250, windowDays: 1 }, raise);
       expect(v.bid).toBe(0.48);
       if (v.bid !== null) expect(v.direction).toBe("down");
+    });
+
+    // THE BUG THIS RULE SHIPPED WITH, pinned. 2026-08-17.
+    //
+    // A keyword that had not moved since the 1st carried a 14.5-day total of 4110 impressions. Its
+    // first cut then opened a 12-hour window. The old code compared 4110 against the new window's
+    // raw count, which no half-day can ever beat, so the cut read as harmful and reversed. Live,
+    // `retractable phone tether` PHRASE was cut correctly at 1.63x and then climbed $0.69 -> $0.85,
+    // finishing ABOVE where the cut started while holding $27.49 of the month's spend.
+    it("does NOT reverse a cut when the shorter window is running at the SAME daily rate", () => {
+      const longQuietWindow: BidChange = {
+        changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.79, toBid: 0.69, roasBefore: 1.63,
+        impressionsBefore: 4110, clicksBefore: 36, salesBefore: 42,
+        windowDaysBefore: 14.5,                      // 283 impressions a day
+      };
+      // Half a day, 145 impressions: 290 a day, so the cut did not hurt at all.
+      const v = searchStep(0.69, { spend: 3, sales: 1.5, orders: 0, clicks: 4, impressions: 145, windowDays: 0.5 }, longQuietWindow);
+      expect(v.reason).not.toMatch(/turning round/);
+    });
+
+    it("still reverses when the daily rate GENUINELY collapses", () => {
+      const longQuietWindow: BidChange = {
+        changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.79, toBid: 0.69, roasBefore: 1.63,
+        impressionsBefore: 4110, clicksBefore: 36, salesBefore: 42, windowDaysBefore: 14.5,
+      };
+      // Half a day, 5 impressions: 10 a day against 283. That is a real collapse.
+      const v = searchStep(0.69, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 5, windowDays: 0.5 }, longQuietWindow);
+      expect(v.reason).toMatch(/turning round little by little/);
+      expect(v.reason).toMatch(/a day/);
+    });
+
+    // William 2026-08-17: "should test the new level for atleast 6-12 hours".
+    it("will not judge a level that has not been held long enough yet", () => {
+      const fresh: BidChange = {
+        changedAt: new Date(Date.now() - 4 * 3600e3).toISOString(), fromBid: 0.50, toBid: 0.48,
+        roasBefore: 3, impressionsBefore: 300, clicksBefore: 10, salesBefore: 30, windowDaysBefore: 1,
+      };
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, windowDays: 0.17 }, fresh);
+      expect(v.reason).not.toMatch(/turning round/);
+    });
+
+    it("refuses to compare windows when it does not know how long one of them was", () => {
+      const noWindow: BidChange = {
+        changedAt: "2026-08-01T00:00:00.000Z", fromBid: 0.50, toBid: 0.48, roasBefore: 3,
+        impressionsBefore: 300, clicksBefore: 10, salesBefore: 30,   // windowDaysBefore missing
+      };
+      const v = searchStep(0.48, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 0, windowDays: 1 }, noWindow);
+      expect(v.reason).not.toMatch(/turning round/);
     });
 
     it("does not fire without a baseline, so a keyword's first move is never second-guessed", () => {
@@ -731,12 +781,12 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
       let last: BidChange | null = null;
       const seen: number[] = [];
       for (let run = 0; run < 60; run++) {
-        const since: SinceChange = { spend: 3, sales: salesAt(bid), orders: 1, clicks: 8, impressions: impsAt(bid) };
+        const since: SinceChange = { spend: 3, sales: salesAt(bid), orders: 1, clicks: 8, impressions: impsAt(bid), windowDays: 1 };
         const v = searchStep(bid, since, last);
         if (v.bid === null) break;
         last = {
           changedAt: "2026-08-01T00:00:00.000Z", fromBid: bid, toBid: v.bid, roasBefore: 3,
-          impressionsBefore: impsAt(bid), clicksBefore: 8, salesBefore: salesAt(bid),
+          impressionsBefore: impsAt(bid), clicksBefore: 8, salesBefore: salesAt(bid), windowDaysBefore: 1,
         };
         bid = v.bid;
         if (run > 40) seen.push(bid);
@@ -848,8 +898,14 @@ describe("bidWithMemory — cooldown then search", () => {
     const justMoved: BidChange = { changedAt: new Date(Date.now() - 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
     expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, justMoved, { spend: 10, sales: 40, orders: 2, clicks: 20 }).bid).toBeNull();
   });
-  it("acts once the 6-hour window has passed, so every engine run may move a bid", () => {
-    const older: BidChange = { changedAt: new Date(Date.now() - 7 * 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
+  // CHANGED 2026-08-17 with BID_COOLDOWN_HOURS 6 -> 12. William: "should test the new level for
+  // atleast 6-12 hours". A level must now survive two report cycles, not one, before it is judged.
+  it("still holds at 7 hours, because a level gets 12 hours to produce evidence", () => {
+    const seven: BidChange = { changedAt: new Date(Date.now() - 7 * 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
+    expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, seven, { spend: 10, sales: 40, orders: 2, clicks: 20 }).bid).toBeNull();
+  });
+  it("acts once the 12-hour window has passed", () => {
+    const older: BidChange = { changedAt: new Date(Date.now() - 13 * 3600e3).toISOString(), fromBid: 0.5, toBid: 0.55, roasBefore: 3 };
     expect(bidWithMemory(0.55, { spend: 1, sales: 20, orders: 2 }, older, { spend: 10, sales: 40, orders: 2, clicks: 20 }).bid).not.toBeNull();
   });
   it("never blocks a keyword with no history", () => {
@@ -1020,16 +1076,16 @@ describe("a spending word is NEVER raised (William 2026-08-13)", () => {
   it("the TURN-AROUND cannot sneak a raise past the rule on a spending word", () => {
     // A cut that made things worse would normally reverse upward. It may not, if the word spends.
     const last = { changedAt: "2026-08-12T00:00:00Z", fromBid: 0.6, toBid: 0.5, roasBefore: 2,
-                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19 };
-    const r = searchStep(0.5, since({ spend: 1.2, clicks: 3, impressions: 200, sales: 0 }), last);
+                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19, windowDaysBefore: 1 };
+    const r = searchStep(0.5, { ...since({ spend: 1.2, clicks: 3, impressions: 200, sales: 0 }), windowDays: 1 }, last);
     expect(r.bid).toBeNull();
     expect(r.reason).toMatch(/never raised/);
   });
 
   it("but the turn-around still reverses upward when the word HAS gone silent", () => {
     const last = { changedAt: "2026-08-12T00:00:00Z", fromBid: 0.6, toBid: 0.5, roasBefore: 2,
-                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19 };
-    const r = searchStep(0.5, since({ spend: 0, clicks: 0, impressions: 0, sales: 0 }), last);
+                   impressionsBefore: 500, clicksBefore: 8, salesBefore: 19, windowDaysBefore: 1 };
+    const r = searchStep(0.5, { ...since({ spend: 0, clicks: 0, impressions: 0, sales: 0 }), windowDays: 1 }, last);
     expect(r).toMatchObject({ direction: "up" });
   });
 
