@@ -1678,3 +1678,56 @@ that should be cut, which is the line I used to decide what blocks a launch.
 
 **Status.** 422 tests, tsc clean, production build compiles. Three fixes committed with tests
 pinning each.
+
+## 2026-08-17 — The report took 31 seconds all along, and we do not own the fields we were writing
+
+**Context.** Sunday 2026-08-16 cost $102.88 in Sponsored Products for $19.98 back, a 515% ACOS day.
+Three investigations in three days had all ended at the data rather than the rule, and the accepted
+explanation was that Amazon's report queue is too slow to poll inline, so the engine used a deferred
+request-now-collect-later pattern with a 30-hour freshness window. Separately, two days of listing
+copy had been written for four ASINs on the assumption that pasting it into Seller Central would
+change the pages.
+
+**Options.**
+1. Warm the reports hourly so the engine reads 40-minute-old data instead of 30-hour-old data.
+2. Add a kill-only watchdog outside the engine, running hourly on the same reports.
+3. Cap campaign budgets and accept a blind engine.
+4. Measure the actual queue latency before designing anything against it.
+
+**Decision.** Option 4 first, and it invalidated 1 and 2. Amazon's report status payload carries its
+own `createdAt` and `updatedAt`, so the true queue time for all 19 reports we have ever run was
+recoverable instantly. Latency is almost entirely a function of hour of day: mean 2.6 minutes at
+00:00Z, 29.9 minutes at midday. The engine's own `engine-mtd` report was created 00:01:21Z and
+completed 00:01:52Z. Thirty-one seconds against a 300-second function budget. Shipped `DATA_STALE_HOURS`
+30 to 2 and a 90-second inline wait, merged as `23aedee`, with `ad-engine.ts`, `ad-rules.ts` and
+`vercel.json` untouched per William's instruction not to change the engine.
+
+Then, before sending Megan a message about which listings to edit, ran the ownership check William
+asked for. On Black, 2-Pack and Pro every copy field is supplied by Amazon's shared catalogue, not by
+our seller account. Only the 3-Pack is ours.
+
+**Reasoning.** The 9-minute figure in `ads-reports.ts` was measured on 2026-08-02 and was true when
+measured; it was simply measured at the wrong time of day and then treated as a property of the
+account. Every downstream decision inherited it: the deferred pattern, the cache key ending in the end
+date, the 30-hour window longer than that key's own lifetime, and therefore the once-a-day reading
+that let three keywords go from $0.00 to $8 unnoticed. The fix removes machinery rather than adding
+it. On the listing side, the ownership check cost ninety seconds and would have saved Megan a morning
+of work that could not have taken effect.
+
+**Industry source / best practice.** Two apply. Measure before you design around a constraint: the
+deferred pattern was a correct response to a latency figure that was never re-measured, which is the
+classic form of a stale benchmark hardening into architecture. And confirm before claim: the SP-API
+Listings resource distinguishes what a seller contributes from what the shared catalogue supplies, and
+reading it is the only way to know whether an edit will surface.
+
+**Trade-offs accepted.** Cached report data now expires inside the cron, so every run re-requests
+rather than re-reads: four times the report volume against a queue that is fast at those hours, and
+Amazon's 425 duplicate response makes re-requesting safe. If a report ever takes longer than 90
+seconds the deferred path still catches it, so the slow case is no worse than before. The $4 rule
+still overshoots by 101% on average, killing at $8.04 rather than $4.00, and no freshness fix changes
+that; only a budget can.
+
+**Status.** Report fix merged and on main. 31 keywords paused and verified. Ownership finding recorded
+and now governs the listing work: the 3-Pack is the only listing that can be edited with confidence.
+The validation-only submission that would settle Black is specified and unrun. Black's browse node
+move is approved in direction and blocked on the same question.
