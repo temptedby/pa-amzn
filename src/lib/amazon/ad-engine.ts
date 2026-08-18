@@ -815,10 +815,23 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   try {
     const stRows: SearchTermRow[] = [];
     const hw = harvestWindows(HARVEST_WINDOW_DAYS, Date.now());
+    let windowsReady = 0;
     for (let i = 0; i < hw.length; i++) {
-      const { rows: chunk } = await deferredRows(cfg, token, out.notes, `engine-harvest-${i}`, "spSearchTerm", ["searchTerm"],
+      const { rows: chunk, ready } = await deferredRows(cfg, token, out.notes, `engine-harvest-${i}`, "spSearchTerm", ["searchTerm"],
         ST_COLS, hw[i][0], hw[i][1]);
+      if (ready) windowsReady++;
       for (const r of chunk) stRows.push(r as SearchTermRow);
+    }
+    // A HARVEST THAT RECEIVED NO DATA MUST NOT READ AS A HARVEST THAT FOUND NOTHING.
+    //
+    // These are the same shape in the output (`added: []`) and completely different events. Between
+    // 2026-08-14 and 2026-08-18 the harvest added nothing on all but one run, and the digest simply
+    // showed no adds each time, so it looked like a quiet week for search terms. It was not: the
+    // reports were being requested at :00 and collected at :40, after the run had already finished,
+    // so `harvestCandidates` was handed an empty array every time. Live probe on 2026-08-18 against
+    // the same 60-day window found 8 converting terms at or above 2x waiting to be picked up.
+    if (windowsReady < hw.length) {
+      out.errors.push(`harvest: only ${windowsReady}/${hw.length} search-term windows were ready — harvested nothing, this is NOT "no candidates"`);
     }
     addOps = harvestCandidates(stRows, haveByAg, NEW_KW_BID);
     for (const a of addOps) out.added.push({ text: a.keywordText, matchType: a.matchType });
