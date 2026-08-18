@@ -1731,3 +1731,70 @@ that; only a budget can.
 and now governs the listing work: the 3-Pack is the only listing that can be edited with confidence.
 The validation-only submission that would settle Black is specified and unrun. Black's browse node
 move is approved in direction and blocked on the same question.
+
+---
+
+## 2026-08-17 (evening) — Six of 695 bid moves were the rule that lowers ACOS
+
+**Context.** The evening MR asked one question: is today's spend following the engine. Spend itself
+was healthy, $29.69 against $65.45 of sales, about 2.2x and the best shape of the month. The engine's
+behaviour underneath it was not. Three things surfaced, each one underneath the last.
+
+First, the morning's fix had never shipped. PR #5 merged at 15:16Z; the production build at 15:23Z
+died on a Turso 502 while Next prerendered `/`, and Vercel kept the old build serving. The 06Z, 12Z
+and 18Z runs therefore all judged on the 30-hour staleness setting the PR existed to remove. Proved
+without guessing: the newest `ads_report_jobs` row is 00:40Z, and `kw_bid_history` records the 06:04
+and 18:02 runs with identical evidence twelve hours apart.
+
+Second, William asked whether bids were lowered once a word fell below 2x. They were, exactly once,
+and then the engine spent three days undoing it. `retractable phone tether` PHRASE was cut $0.79 to
+$0.69 at 1.63x, which was right, then reversed and climbed to $0.85, finishing above where the cut
+started while holding $27.49 of the month's spend.
+
+Third, and this is the one that reframes the day: tallying every bid move since 14 August by the
+engine's own stated reason gives 570 raises off two "no clicks" branches, 73 turn-arounds, and
+**six** moves from the rule that actually lowers ACOS.
+
+**Options considered.** (a) Ship the turn-around fix and call it done. (b) Fix the turn-around and
+also change the no-clicks branch in the same pass. (c) Fix the turn-around, measure the no-clicks
+branch properly, and put the number in front of William before touching a second rule.
+
+**Decision.** (c). PR #6 rewrites the turn-around to compare daily rates and raises the cooldown from
+6 hours to 12. The no-clicks branch is measured, documented, explicitly excluded from the PR, and put
+to William as a question. Separately, five keywords past $4 and under 1x were paused on his explicit
+approval, verified by read-back rather than by our own applied flag.
+
+**Reasoning.** The turn-around fix was the literal instruction: "lets rewrite to be the daily
+average", and "should test the new level for atleast 6-12 hours". Doing that and stopping is what
+"do not widen a stated rule" means, and I have got that wrong three times in three days.
+
+But I nearly shipped it as the fix for the climb, and it is not. Checking the rewrite against the
+live numbers before claiming it showed the reversal on `retractable phone tether` fires under the new
+rule too, because 283 impressions a day falling to 68 is a genuine collapse. That check is the only
+reason the claim did not go out wrong. It also forced the tally that found the real driver.
+
+The no-clicks branch fires on a median of 7 impressions. Account CTR is 0.595%, one click per 168
+impressions. Seven impressions with no click has roughly a 96% chance of happening to a perfectly
+healthy keyword, so the rule reads noise as a verdict and buys on it 397 times in four days. 174 of
+the 340 tracked keywords now sit at $0.80 or above. Step size is not the lever; direction is. Five
+cents instead of ten halves the speed of the climb without changing where it points.
+
+**Industry source / best practice.** Two. Comparing rates rather than counts across unequal
+observation windows is the elementary form of normalising exposure, and the same error under a
+different name is why A/B tests are not read on unequal traffic. And a minimum sample before acting
+on a zero-event outcome is standard sequential-testing practice: at p=0.006 per impression, seven
+trials cannot distinguish a dead keyword from a live one.
+
+**Trade-offs accepted.** The cooldown at 12 hours halves how fast every keyword moves, cuts included,
+so an overpriced word now bleeds twice as long before reaching a sane bid. Accepted because William
+asked for the slow end and because the raise problem is currently the larger one. The turn-around now
+declines to fire when either window length is unknown, so it is dormant for every keyword until it
+accumulates one new row, which is the conservative direction but does mean the rule is off for a few
+days. `kw_daily` remains without a writer, so day-of-week collection is still not happening even
+though it was asked for today.
+
+**Status.** PR #6 open at https://github.com/temptedby/pa-amzn/pull/6, commit `a920775`, 427 tests
+pass. Five keywords paused and verified against Amazon at 21:48:45Z. The report fix finally went live
+at 21:16Z on the back of a docs commit, so the 00:00Z run on the 18th is the first clean one.
+Awaiting William on two things: cuts at 5c or 10c, and the impressions bar before "no clicks" may
+raise a bid. Nothing verifies a deploy, and today that cost three engine runs.
