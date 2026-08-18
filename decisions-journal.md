@@ -1798,3 +1798,111 @@ pass. Five keywords paused and verified against Amazon at 21:48:45Z. The report 
 at 21:16Z on the back of a docs commit, so the 00:00Z run on the 18th is the first clean one.
 Awaiting William on two things: cuts at 5c or 10c, and the impressions bar before "no clicks" may
 raise a bid. Nothing verifies a deploy, and today that cost three engine runs.
+
+---
+
+## 2026-08-18 — The engine acts once a day, and one Assign click is the whole account crisis
+
+**Context.** The morning MR asked whether spend was following the engine. It was, exactly, and that
+was the problem: $20.07 on Friday became $102.88 on Sunday and $86.89 on Monday while ROAS fell 0.67x
+to 0.48x, impressions rose 8.8x and CTR halved. I also had to correct my own report from the previous
+evening, where I read spend at 21:35Z, called the day 2.2x and "the best shape of the month", and it
+closed at 0.48x. Two thirds of the spend landed after I looked.
+
+**Options considered.** (a) Treat the acceleration as a bid-rule problem and change the rules.
+(b) Cap campaign budgets as the only brake available today. (c) Find out why the engine was not
+reacting at all before changing what it decides.
+
+**Decision.** (c), and it found a schedule bug rather than a logic bug. `report-warm` was
+`"40 */6"` and `ad-engine` was `"0 */6"`, so the warm-up landed 5h20m before the next engine run
+instead of the 20 minutes its own comment claimed. Invisible while `DATA_STALE_HOURS` was 30. Once
+PR #5 dropped staleness to 2 hours the previous evening, every run except 00Z found its report stale,
+re-requested, waited the 90-second inline budget and gave up. The 06:04Z run made zero bid decisions
+and harvested zero search terms, silently. Shipped as PR #7: swap the crons, make an empty harvest
+report raise an explicit error instead of reading as "no candidates", and pin the relationship in
+`cron-ordering.test.ts`.
+
+Separately, William widened the harvest rule: "exact and phrase for search words converting",
+superseding his 2026-08-08 broad-only rule. Shipped as PR #8.
+
+**Reasoning.** Three constraints made the obvious cron fixes wrong and are worth recording. Both
+crons must share a UTC hour block, because the report cache key ends with an end date computed as
+`iso(now)` in UTC, so a warm at 23:40 feeding an engine at 00:00 builds a different key and the
+warm-up is discarded. The gap must clear the slowest queue ever measured, 31.5 minutes, so 40 works
+and 20 does not. And the failure had to be made loud, because `added: []` meant both "nothing
+qualified" and "I was handed nothing", which is why four days of unharvested winners looked like a
+quiet week.
+
+On the harvest, the old gate's justification was that a phrase-sourced term promoted to phrase is
+"just a copy of itself". That holds only when the search term is identical to the keyword that
+matched it. `phone safety cord` matching `tourist phone safety cord` yields a strictly narrower
+keyword with its own bid. The genuine-duplicate case was always covered by the `existing` set.
+
+**Industry source / best practice.** Two. Pinning an invariant in a test that you have *proved*
+fails against the old configuration, rather than one that merely passes: I reverted `vercel.json`
+and watched both assertions fail before shipping. And distinguishing "no result" from "no data" in
+any pipeline, which is the same class of error as treating a null as a zero.
+
+**Trade-offs accepted.** The cron swap moves `ad-engine-reintroduce` at `"30 */6"` to run *before*
+the engine rather than after. It reads 30-minute-old data instead of 5h30m-old data, so it improves,
+but it is an ordering change and is flagged as such rather than buried. On the harvest, rows for a
+term now aggregate across every match type that surfaced it, so a $1 -> $10 broad row no longer
+harvests while the same term burned $90 through phrase. That makes the new rule stricter in one
+place, which is the correct direction and is pinned by a test.
+
+**Status.** PR #7 (`648d61c`, 426 tests) and PR #8 (`45fef4c`, 423 tests) both open, both unmerged,
+alongside PR #6 from yesterday. Live probe confirms the harvest change: 18 add operations across 8
+terms under the new rule versus 8 across 4 under the old. One keyword paused and verified against
+Amazon at 08:57:36Z. **Nothing is deployed.**
+
+---
+
+## 2026-08-18 (evening) — The document that was needed already existed, and the crisis is one click
+
+**Context.** William asked whether a 2012 PNC signature card could have its EIN and address altered
+and be sent to Amazon, then whether it could be redacted and paired with a bank statement. Identity
+Verification and INFORM certification were both due 2026-08-21 with the store showing At Risk.
+
+**Options considered.** (a) Alter or redact the signature card as asked. (b) Refuse and stop.
+(c) Refuse the alteration, research what Amazon actually accepts, and find where each document
+genuinely belongs.
+
+**Decision.** (c). Declined the alteration on the grounds that Amazon requires documents be
+"authentic and unaltered" and their deactivation language is "appear to be forged or manipulated",
+a lower bar than actually being forged. William reached the same conclusion independently and called
+PNC, who issued two verification letters carrying the full account number the statement masks.
+
+Then, instead of uploading anything, read the actual verification form. The only "Action required"
+was the **Registration Extract**, rejecting the 2011 Illinois Articles as expired and unacceptable.
+No bank document could satisfy it. The Delaware Certificate of Good Standing dated 2026-08-06 was
+already on William's Desktop; uploaded it, he submitted, and it cleared.
+
+Then switched the marketplace selector from Canada to United States, which changed the entire
+picture, and read Amazon's own INFORM checklist.
+
+**Reasoning.** Everything examined for hours was in Canada context. In US context the action is
+"Update deposit method", and the INFORM panel spells out why: four of five items are green, and the
+only failure is "You don't have a verified bank account or didn't assign the verified bank account
+as your default deposit method to the US marketplace." The account `ending in 384` is Active, marked
+Default, and already paying out Brazil, Canada and Mexico. **INFORM and the deposit action are the
+same problem wearing two labels, and no document is involved anywhere.** Confirmed by searching both
+deposit pages for a file input; there is none.
+
+**Industry source / best practice.** Amazon Pay's document guidance and the Global Seller Identity
+Verification requirements both state documents must be "authentic and unaltered", and Amazon's own
+stated field list for bank documents never includes an EIN, which made the EIN mismatch a non-issue
+and redirected the effort to address and account number. Separately: read the interface before
+acting on a belief about it. Four wrong beliefs died today by looking.
+
+**Trade-offs accepted.** I was wrong three times and each is recorded rather than smoothed over.
+I read a 1,000-row page cap as the account total and told William six keywords were missing when
+only two were; the account holds 3,466. I said the Delaware certificate would have a lead time when
+it was already on his Desktop. And I advised leaving the deposit assignment until verification
+cleared, which was wrong because Amazon requires a valid deposit method to *continue selling*, not
+merely to disburse. Amazon also forces a fresh password on every visit to Deposit Methods, so the
+final click was handed back to William rather than done here.
+
+**Status.** Registration Extract submitted and validating, up to 10 business days. The Assign click
+outstanding and still showing red at last check. Every other account-health metric spotless: ODR 0%
+of 157 orders, Policy Compliance Healthy, rating 216, all issues zero. August stands at 87 units and
+$989.94 against $553.01 of ad spend, which is 133% ACOS on a 52% break-even.
