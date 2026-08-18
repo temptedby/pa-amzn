@@ -233,18 +233,29 @@ export function harvestCandidates(
   rows: SearchTermRow[], existing: Set<string>, bid = NEW_KW_BID,
   opts: { discoveryMatchTypes?: string[] } = {},
 ): HarvestAdd[] {
-  // ONLY BROAD DISCOVERIES ARE HARVESTED (William 2026-08-08): "only way to add new phrase and
-  // exact is if they perform as search terms for broad keywords".
+  // ANY CONVERTING SEARCH TERM IS HARVESTED (William 2026-08-18): "exact and phrase for search words
+  // converting". This SUPERSEDES his 2026-08-08 rule, which allowed only broad discoveries.
   //
-  // Broad is the only match type that surfaces phrasings nobody put in a keyword list, so it is the
-  // only one where promoting a term to EXACT + PHRASE creates something that did not exist. A term
-  // found by a PHRASE keyword promoted to PHRASE is just a copy of itself.
+  // Why the old rule was costing money. A live probe on 2026-08-18 over the real 60-day window found
+  // 8 search terms that converted at 2x or better. Only 2 of them were surfaced by a broad keyword,
+  // so the gate was refusing three quarters of the winners, including `tourist phone safety cord`
+  // at 16.5x ($0.82 -> $13.49) and `phone security leash` at 10.9x, neither of which existed in the
+  // account at all.
   //
-  // Auto campaigns report as TARGETING_EXPRESSION / TARGETING_EXPRESSION_PREDEFINED with the keyword
-  // text "loose-match", NOT as BROAD, so they are excluded by this list as written. That is the
-  // literal reading of William's rule and it is left as a parameter rather than hard-coded, because
-  // auto is the other half of the industry's discovery tier and is a live open question.
-  const discovery = new Set((opts.discoveryMatchTypes ?? ["BROAD"]).map((m) => m.toUpperCase()));
+  // The old reasoning was that "a term found by a PHRASE keyword promoted to PHRASE is just a copy
+  // of itself". That is only true when the search term is IDENTICAL to the keyword that matched it.
+  // A phrase keyword `phone safety cord` matching the query `tourist phone safety cord` yields a
+  // strictly narrower keyword that can carry its own bid, which is the entire point of harvesting.
+  // The genuine-duplicate case is already handled below by the `existing` set, keyed on
+  // (adGroup | matchType | text), so a true copy is skipped whatever surfaced it.
+  //
+  // Passing discoveryMatchTypes still restricts the source (the tests use it, and it is the lever if
+  // this is ever narrowed again); the default now restricts nothing. Auto campaigns report as
+  // TARGETING_EXPRESSION / TARGETING_EXPRESSION_PREDEFINED rather than BROAD and are therefore
+  // included by the new default, which is the literal reading of "any converting search word".
+  const discovery = opts.discoveryMatchTypes
+    ? new Set(opts.discoveryMatchTypes.map((m) => m.toUpperCase()))
+    : null;
   const agg = new Map<string, { cid: string; agid: string; term: string; cost: number; sales: number; orders: number }>();
   for (const r of rows) {
     const term = (r.searchTerm || "").trim();
@@ -252,9 +263,10 @@ export function harvestCandidates(
     const agid = r.adGroupId != null ? String(r.adGroupId) : "";
     if (!term || !cid || !agid) continue;            // need the source ad group to harvest into
     if (/^b0[a-z0-9]{8}$/i.test(term)) continue;     // ASIN, not a customer search phrase
-    // A row with no match type predates the column and cannot be shown to be a broad discovery, so
-    // it is skipped. Silence must not read as eligibility.
-    if (!discovery.has(String(r.matchType || "").toUpperCase())) continue;
+    // Only filtered when a caller explicitly restricts the source. With the default (no restriction)
+    // a row missing its match type is kept: under William's 2026-08-18 rule eligibility no longer
+    // depends on what surfaced the term, so an absent match type is no longer a reason to drop it.
+    if (discovery && !discovery.has(String(r.matchType || "").toUpperCase())) continue;
     const key = `${cid}|${agid}|${term.toLowerCase()}`;
     const o = agg.get(key) ?? { cid, agid, term, cost: 0, sales: 0, orders: 0 };
     o.cost += r.cost ?? 0; o.sales += r.sales14d ?? 0; o.orders += r.purchases14d ?? 0;
