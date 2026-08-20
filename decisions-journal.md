@@ -1906,3 +1906,89 @@ final click was handed back to William rather than done here.
 outstanding and still showing red at last check. Every other account-health metric spotless: ODR 0%
 of 157 orders, Policy Compliance Healthy, rating 216, all issues zero. August stands at 87 units and
 $989.94 against $553.01 of ad spend, which is 133% ACOS on a 52% break-even.
+
+---
+
+## 2026-08-19 — The spend tripled and bought a quarter more units, and the fields we thought weren't ours were
+
+**Context.** The morning review asked whether spend was following the engine. It was not: three
+Sponsored Products bid decisions in thirty hours, zero on three of 08-18's four runs, and no run row
+at all for 08-19 00:0x. Underneath that, 223 unanswered $0.85 ceiling asks since 08-14 with only 2
+ever answered, and 377 enabled keywords parked at the ceiling where the engine's only legal move is
+to ask permission. William then asked the question that governed the rest of the day: overall
+marketing cost against overall sales, versus ad cost against ad sales, day by day. Later the work
+turned to Megan's finalised listing copy, and to Canada, which he had just seen reactivate.
+
+**Options considered.** For the spend question: (a) report ACOS as usual, (b) build the TACOS series
+properly from three ad products plus true product sales. For the $4 rule he asked to run hourly:
+(a) hourly full engine, (b) hourly kill-only watchdog, (c) kill-only plus a budget-usage tripwire,
+(d) Marketing Stream, (e) cap campaign budgets and change nothing in code. For the listing copy:
+accept the 08-17 conclusion that the fields belong to Amazon's catalogue, or probe each field
+individually. For compatibility: hand-click 68 models in Seller Central as William proposed, write
+tokens by API, or a hybrid.
+
+**Decision.** (b) for the measurement. (e) then (c) for the spend brake, sequenced, and explicitly
+NOT (a). Probe each field individually, which reversed the 08-17 finding. Hybrid for compatibility,
+which turned out to need no clicking at all.
+
+**Reasoning.** The TACOS series is what made the month legible. Splitting August at 08-14 gives
+$18.94/day of ad spend buying $51.68/day of sales before, and $69.50/day buying $70.14/day after:
+spend up 3.67x, units up 1.26x, so the incremental $50.56/day returns about $6 of contribution and
+loses roughly $44. The diagnostic that settles it is that ACOS and TACOS rose *together*, 37% to 99%,
+where the published signature of healthy growth is rising ACOS with falling TACOS. We bought
+impressions, not rank.
+
+On the hourly rule I argued against the shape William asked for, and the arithmetic is why: an hourly
+check catches a keyword at $4.01 rather than $8, but August's damage was 120 keywords each spending
+their own $4 allowance for $307.03 of the $471.87, and 2,238 enabled keywords times $4 permits about
+$9,000 a month with no account-level ceiling at all. A budget cap is the only control that works while
+the engine is making three decisions a day, because it does not care whether the cron fired.
+
+The listing reversal came from distrusting a convenient reading. `GET` returns the copy attributes as
+ABSENT, which means we never supplied a value rather than that we cannot; and a validation patch
+carrying an obviously fake title returns 8541 "different from what's already in the Amazon catalog",
+which reads exactly like a permission refusal until you submit a plausible title and watch the error
+change to a content rule.
+
+Compatibility followed the same pattern one level down. The controlled field rejected every
+human-readable name including "Apple iPhone 16", which was live on our own listing, and "Apple iPhone
+15 Pro", the schema's own documented example. A field refusing its own stored value is not enforcing
+permissions, it is telling you the wire format differs from the display format. Reading our own ASINs
+through the Catalog Items API showed snake_case tokens, and 66 of 68 models then went in by script.
+
+**Industry source.** ACOS manages campaigns and TACOS judges strategy; healthy TACOS is 10-15%, and
+rising ACOS with falling TACOS is healthy growth while both rising together means ads are buying
+volume that is not compounding into organic rank (Clickstera, Daniks.AI, Keywords.am, Trellis 2026
+benchmarks). Amazon cut product titles to 75 characters on 2026-07-27 in every category except media,
+adding a 125-character Item Highlights field indexed equally for search, enforced by replacing long
+titles with AI-generated ones on 14 days' notice (Amalytix, EcommerceBytes). Manage Your Experiments
+needs Brand Registry plus roughly 1,000 views per variant, runs 4-10 weeks and calls a winner at 95%.
+`compatible_cellular_phone_models` is a structured filter attribute, not an indexed keyword field.
+Amazon Marketing Stream pushes hourly sp-traffic and sp-conversion data and is entitled but unused.
+
+**Trade-offs accepted.** The traffic figure underpinning the A/B analysis is derived from
+ad-attributed share rather than measured, because `GET_SALES_AND_TRAFFIC_REPORT` still 403s; that is
+named rather than smoothed over. Canadian repricing targets assume 1.38 CAD/USD and move about 1.4%
+per cent of drift. The 2-Pack and 3-Pack return almost the same Canadian fee as the Single, CAD 8.50
+against 8.67 despite being two and three units, so those two targets are held until confirmed against
+a real order. Extending Canada properly needs a profile column on eleven tables and was deliberately
+sequenced *after* the merge queue rather than added to it.
+
+**Status.** Live on all four listings and verified by read-back, not by submission status: product
+descriptions (1,631 to 1,753 chars, all previously absent), `compatible_phone_models`, and
+`compatible_cellular_phone_models` at 27/27/27/58 of 60. That last clears a real defect, the 2-Pack
+and 3-Pack were advertising an iPhone SE discontinued in 2018 and Pro matched nothing. Five RBBs
+written: TACOS and the hourly guard, A/B testing, Canada engine coverage, the compatibility field,
+and compatibility breadth. Two artifacts published for William. Titles, bullets and search terms are
+validated and deliberately unwritten. **Nothing was pushed: the push was blocked by the permission
+classifier and every commit is local.**
+
+**Corrections.** Five, four mine. The 08-17 "the fields are not ours" conclusion was wrong and the
+memory carrying it is rewritten. My own morning title rewrites were as non-compliant as Megan's,
+157-159 characters against a 75 cap, because I validated against a Definitions API that still reports
+200 and is behind the policy. I told William `compatible_phone_models` required one of 8 enum values;
+the live page disproved it within minutes, since the pre-existing catalogue value is free text in
+exactly the shape I had already written. I nearly reported Canadian inventory from an endpoint
+returning US data, caught only because identical figures across two marketplaces is a red flag rather
+than a finding. And two self-inflicted tooling faults: a 49-day report window against a 31-day cap,
+and an overspend sweep that exited 0 having completed only its first section.
