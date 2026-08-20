@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { warmReports, summarizeWarm } from "@/lib/amazon/report-warm";
 
-// Requests every report the ad engines will need, 40 minutes before they need it.
+// Requests every report the ad engines will need, 40 minutes before they need it, every hour.
 // Read-only with respect to the ad account: it asks Amazon to build reports and nothing else.
 // See report-warm.ts for why this exists (9-15 minute report latency vs a 6-hourly cron).
 //
@@ -16,8 +16,12 @@ import { warmReports, summarizeWarm } from "@/lib/amazon/report-warm";
 //
 // Both crons must stay in the SAME UTC hour block. The report cache key ends with the end date,
 // which is iso(now) in UTC, so a warm at 23:40 and an engine at 00:00 compute different keys and
-// the warm-up is wasted. That is why this is "0 */6" + "40 */6" and not "40 5,11,17,23" + "0 */6".
-// cron-ordering.test.ts pins the invariant.
+// the warm-up is wasted. That is why this is "0 * * * *" + "40 * * * *" and not a pair of
+// schedules that can straddle midnight. cron-ordering.test.ts pins the invariant.
+//
+// BOTH ARE NOW HOURLY (William 2026-08-20). The engine still cannot move a keyword's bid more often
+// than BID_COOLDOWN_HOURS; what runs 24 times a day instead of 4 is the $4 kill check and the
+// search-term harvest.
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;

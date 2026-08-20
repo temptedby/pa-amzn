@@ -9,15 +9,21 @@
 //
 // THE FIX. Ask for the reports before anybody needs them. This job requests every report the
 // engines will look for, and does nothing else — it never decides, never writes to the account.
-// Running it ~20 minutes ahead of the engine slots means each engine finds its reports already
-// COMPLETED and acts immediately, on roughly 20-minute-old data rather than 6-hour-old data.
+// Running it ahead of the engine slots means each engine finds its reports already COMPLETED and
+// acts immediately, on data tens of minutes old rather than hours old.
 //
-// Schedule (all offsets from the same hour, every 6 hours):
-//     :40   report-warm      <- requests everything
-//     :00   ad-engine        (20 min later)
-//     :15   sb-engine        (35 min later)
-//     :30   ad-engine-reintroduce (50 min)
-//     :45   sd-engine        (65 min)
+// Schedule (William 2026-08-20: "the engine every hour not every six hours"):
+//     :00   report-warm      <- requests everything, EVERY HOUR
+//     :40   ad-engine        (40 min later, EVERY HOUR)
+//   and still six-hourly, unchanged:
+//     :15   sb-engine     :30 ad-engine-reintroduce     :45 sd-engine
+//
+// 40 minutes is the lead, not 20: the slowest report queue ever measured on this account is 31.5
+// minutes (12-13Z). See cron-ordering.test.ts, which fails if that gap is ever narrowed.
+//
+// WARM NEVER WAITS. Each getReport below is called with inlineWaitMs 0, so it asks Amazon and moves
+// on. With the 90-second default, five specs is a 450s worst case against a 300s function budget,
+// and the specs at the end of the list would silently never be requested.
 //
 // Sponsored Brands is deliberately NOT warmed here. It does not use the v3 async queue at all —
 // sb-v2.ts pulls legacy /v2/hsa day reports, roughly a minute each, synchronously, and the SB
@@ -50,7 +56,7 @@ export async function warmReports(): Promise<WarmResult> {
     try {
       // getReport requests when there is nothing cached, and reports its state otherwise. Calling it
       // is the whole job: we never read the rows here, we only make sure they will exist.
-      const r = await getReport(cfg, token, spec);
+      const r = await getReport(cfg, token, spec, new Date().toISOString(), { inlineWaitMs: 0 });
       if (r.state === "ready") out.ready.push(spec.purpose);
       else if (r.state === "requested") out.requested.push(spec.purpose);
       else out.pending.push(spec.purpose);
