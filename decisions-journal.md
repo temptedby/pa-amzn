@@ -1992,3 +1992,112 @@ exactly the shape I had already written. I nearly reported Canadian inventory fr
 returning US data, caught only because identical figures across two marketplaces is a red flag rather
 than a finding. And two self-inflicted tooling faults: a 49-day report window against a 31-day cap,
 and an overspend sweep that exited 0 having completed only its first section.
+
+---
+
+## 2026-08-20 — The engine was never quiet, and the rule that cuts winners
+
+### Context
+
+The 08-19 review concluded the ad engine had stopped acting: "three decisions in thirty hours."
+That reading came from `ad_engine_log`. Checked against Amazon this morning, it was wrong. The engine
+had paused six keywords and moved 43 bids in the previous 36 hours, all verified by reading
+`lastUpdateDateTime` back from the Ads API. What stopped on 18 August was the logbook.
+
+William then asked three things in sequence: are keywords being turned off, are converting search
+terms being added, and if a term converts at 8x should we not be raising its bid to take the volume.
+The first two were yes. The third exposed a rule doing the opposite of what he expected.
+
+### Options
+
+On the dead log:
+1. Leave it. The engine works; the log is only an audit trail.
+2. Find why the run dies and fix it.
+3. Move logging before the bid apply so it always lands.
+
+On hourly (William: "the engine every hour not every six hours"):
+1. Change the cron alone.
+2. Change the cron and make the run survive being called 24 times a day.
+3. Split a cheap hourly kill job from the six-hourly bid job.
+
+On the no-clicks raise:
+1. Leave it.
+2. A flat impressions bar before a missing click may raise a bid.
+3. A bar that varies with the keyword's current bid.
+
+### Decision
+
+**Log: option 2.** `kw_perf_snapshot` was written with one awaited INSERT per keyword, 327 sequential
+round trips to Turso, sitting between the bid apply and `persistLog`. Batched, 200 rows per
+transaction.
+
+**Hourly: option 2.** `report-warm "0 * * * *"` and `ad-engine "40 * * * *"`, plus the snapshot fix
+and a non-blocking `report-warm`. Shipped as PR #11.
+
+**No-clicks raise: option 2.** `NO_CLICK_MIN_IMPRESSIONS = 150`. Shipped as PR #12.
+
+**Harvest: applied 14 keywords live** under PR #8's rule, which William approved, using the real
+`harvestCandidates()` rather than a hand-rolled copy. HTTP 207, 14 succeeded, 0 rejected, all 14 read
+back from Amazon as ENABLED at $0.50.
+
+**Winners-raise rule: NOT built.** Recommended and left for a decision.
+
+### Reasoning
+
+The log fix is the one that unlocks the rest. The snapshot table records its own truncation: 315 rows
+written at 08-19T06:04, then 75 at 08-20T00:05. Everything downstream of that loop is lost, including
+`kw_kill_ledger`, which the in-month revival at 2.0x reads. A kill recorded nowhere can never be
+revived, so this is not only an audit problem.
+
+Hourly is about the gap between checks, not the number of them. A keyword went $0.75 to $4.72 between
+two runs on 18 August, crossing the $4 bar during the evening peak with the next check hours away.
+Fifteen kills have averaged $8.04 against a $4 bar. Hourly does not mean bidding hourly, because
+`BID_COOLDOWN_HOURS` still refuses to move a keyword whose last change is younger than the cooldown.
+What multiplies is the kill and the harvest, and both are strictly safer more often: the kill can only
+pause something that has already spent $4, and the harvest only adds a term that already converted at
+2x or better.
+
+The impressions bar rests on one measurement. Of 852 bid moves since 14 August, 674 were raises and
+652 came from the "shown, never clicked" branch, on a median of 2 impressions. Account CTR is 0.595%,
+one click per 168 impressions, so two impressions without a click is the most ordinary event in the
+account. Option 3 was rejected as complexity that would be hard to reason about later; the flat bar
+leaves the no-impressions branch alone, which is the escape from the $0.10 floor trap, and holding is
+a delay rather than a freeze because impressions keep accumulating while the bid sits still.
+
+On William's question about raising winners, he is right and the code says otherwise. Above 2x the
+engine shaves 2 cents, hunting the cheapest bid that still converts. That is his own 10 August
+instruction implemented literally. The case for changing it: 12 keywords at 2x or better cost $29.02
+and returned $137.88, which is 44% of ad sales on 5% of spend, and break-even is 1.92x against their
+4.8x. The case for not changing it today: a second gate, `SEARCH_MIN_CLICKS = 3`, means most of these
+never reach a ROAS branch at all, so the shave is rarely what is holding them back. Both need
+deciding together, which is why it was recommended rather than built.
+
+### Industry source
+
+The bar is set by the rule of three: with zero events in n trials, the 95% upper bound on the rate is
+about 3/n. At 150 impressions that bounds CTR at 2%, more than three times the account average, so
+150 is generous rather than strict. Amazon's own guidance on bid optimisation is to move bids on
+conversion data and to treat impression-level signals as diagnostic rather than as a bid trigger.
+
+### Trade-offs accepted
+
+- The 14 new keywords each rest on a single order. Worst case across all of them is about $56,
+  bounded by the $4 kill.
+- Hourly multiplies report requests roughly threefold. Affordable because `DATA_STALE_HOURS` is 2, so
+  a cached report still serves most runs.
+- The impressions bar will hold some keywords that a raise would genuinely have helped. Accepted: at
+  a median of 2 impressions the branch cannot tell those apart from noise.
+- PR #11 is stacked on PR #7 rather than rebased onto main, so #7 must be closed rather than merged.
+
+### Status
+
+PR #11 and PR #12 open, 427 tests, tsc clean. 14 keywords live and verified. Merge order recommended
+as #11, then #8, then #12.
+
+Open and blocking: the $0.85 ceiling, 190 asks and none answered. Raising it before #12 deploys would
+fund the noise-raise leak rather than the winners, so the sequence matters. INFORM and the deposit
+Assign click are due 2026-08-21.
+
+Three corrections taken today, all the same mistake in different clothes: trusting our own record over
+Amazon's. The engine "going quiet", "no kill since 08-16", and a `creationDate` field that is actually
+`creationDateTime`, which made me report zero keywords created in August when the engine had made 16.
