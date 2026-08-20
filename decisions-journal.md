@@ -1798,3 +1798,306 @@ pass. Five keywords paused and verified against Amazon at 21:48:45Z. The report 
 at 21:16Z on the back of a docs commit, so the 00:00Z run on the 18th is the first clean one.
 Awaiting William on two things: cuts at 5c or 10c, and the impressions bar before "no clicks" may
 raise a bid. Nothing verifies a deploy, and today that cost three engine runs.
+
+---
+
+## 2026-08-18 — The engine acts once a day, and one Assign click is the whole account crisis
+
+**Context.** The morning MR asked whether spend was following the engine. It was, exactly, and that
+was the problem: $20.07 on Friday became $102.88 on Sunday and $86.89 on Monday while ROAS fell 0.67x
+to 0.48x, impressions rose 8.8x and CTR halved. I also had to correct my own report from the previous
+evening, where I read spend at 21:35Z, called the day 2.2x and "the best shape of the month", and it
+closed at 0.48x. Two thirds of the spend landed after I looked.
+
+**Options considered.** (a) Treat the acceleration as a bid-rule problem and change the rules.
+(b) Cap campaign budgets as the only brake available today. (c) Find out why the engine was not
+reacting at all before changing what it decides.
+
+**Decision.** (c), and it found a schedule bug rather than a logic bug. `report-warm` was
+`"40 */6"` and `ad-engine` was `"0 */6"`, so the warm-up landed 5h20m before the next engine run
+instead of the 20 minutes its own comment claimed. Invisible while `DATA_STALE_HOURS` was 30. Once
+PR #5 dropped staleness to 2 hours the previous evening, every run except 00Z found its report stale,
+re-requested, waited the 90-second inline budget and gave up. The 06:04Z run made zero bid decisions
+and harvested zero search terms, silently. Shipped as PR #7: swap the crons, make an empty harvest
+report raise an explicit error instead of reading as "no candidates", and pin the relationship in
+`cron-ordering.test.ts`.
+
+Separately, William widened the harvest rule: "exact and phrase for search words converting",
+superseding his 2026-08-08 broad-only rule. Shipped as PR #8.
+
+**Reasoning.** Three constraints made the obvious cron fixes wrong and are worth recording. Both
+crons must share a UTC hour block, because the report cache key ends with an end date computed as
+`iso(now)` in UTC, so a warm at 23:40 feeding an engine at 00:00 builds a different key and the
+warm-up is discarded. The gap must clear the slowest queue ever measured, 31.5 minutes, so 40 works
+and 20 does not. And the failure had to be made loud, because `added: []` meant both "nothing
+qualified" and "I was handed nothing", which is why four days of unharvested winners looked like a
+quiet week.
+
+On the harvest, the old gate's justification was that a phrase-sourced term promoted to phrase is
+"just a copy of itself". That holds only when the search term is identical to the keyword that
+matched it. `phone safety cord` matching `tourist phone safety cord` yields a strictly narrower
+keyword with its own bid. The genuine-duplicate case was always covered by the `existing` set.
+
+**Industry source / best practice.** Two. Pinning an invariant in a test that you have *proved*
+fails against the old configuration, rather than one that merely passes: I reverted `vercel.json`
+and watched both assertions fail before shipping. And distinguishing "no result" from "no data" in
+any pipeline, which is the same class of error as treating a null as a zero.
+
+**Trade-offs accepted.** The cron swap moves `ad-engine-reintroduce` at `"30 */6"` to run *before*
+the engine rather than after. It reads 30-minute-old data instead of 5h30m-old data, so it improves,
+but it is an ordering change and is flagged as such rather than buried. On the harvest, rows for a
+term now aggregate across every match type that surfaced it, so a $1 -> $10 broad row no longer
+harvests while the same term burned $90 through phrase. That makes the new rule stricter in one
+place, which is the correct direction and is pinned by a test.
+
+**Status.** PR #7 (`648d61c`, 426 tests) and PR #8 (`45fef4c`, 423 tests) both open, both unmerged,
+alongside PR #6 from yesterday. Live probe confirms the harvest change: 18 add operations across 8
+terms under the new rule versus 8 across 4 under the old. One keyword paused and verified against
+Amazon at 08:57:36Z. **Nothing is deployed.**
+
+---
+
+## 2026-08-18 (evening) — The document that was needed already existed, and the crisis is one click
+
+**Context.** William asked whether a 2012 PNC signature card could have its EIN and address altered
+and be sent to Amazon, then whether it could be redacted and paired with a bank statement. Identity
+Verification and INFORM certification were both due 2026-08-21 with the store showing At Risk.
+
+**Options considered.** (a) Alter or redact the signature card as asked. (b) Refuse and stop.
+(c) Refuse the alteration, research what Amazon actually accepts, and find where each document
+genuinely belongs.
+
+**Decision.** (c). Declined the alteration on the grounds that Amazon requires documents be
+"authentic and unaltered" and their deactivation language is "appear to be forged or manipulated",
+a lower bar than actually being forged. William reached the same conclusion independently and called
+PNC, who issued two verification letters carrying the full account number the statement masks.
+
+Then, instead of uploading anything, read the actual verification form. The only "Action required"
+was the **Registration Extract**, rejecting the 2011 Illinois Articles as expired and unacceptable.
+No bank document could satisfy it. The Delaware Certificate of Good Standing dated 2026-08-06 was
+already on William's Desktop; uploaded it, he submitted, and it cleared.
+
+Then switched the marketplace selector from Canada to United States, which changed the entire
+picture, and read Amazon's own INFORM checklist.
+
+**Reasoning.** Everything examined for hours was in Canada context. In US context the action is
+"Update deposit method", and the INFORM panel spells out why: four of five items are green, and the
+only failure is "You don't have a verified bank account or didn't assign the verified bank account
+as your default deposit method to the US marketplace." The account `ending in 384` is Active, marked
+Default, and already paying out Brazil, Canada and Mexico. **INFORM and the deposit action are the
+same problem wearing two labels, and no document is involved anywhere.** Confirmed by searching both
+deposit pages for a file input; there is none.
+
+**Industry source / best practice.** Amazon Pay's document guidance and the Global Seller Identity
+Verification requirements both state documents must be "authentic and unaltered", and Amazon's own
+stated field list for bank documents never includes an EIN, which made the EIN mismatch a non-issue
+and redirected the effort to address and account number. Separately: read the interface before
+acting on a belief about it. Four wrong beliefs died today by looking.
+
+**Trade-offs accepted.** I was wrong three times and each is recorded rather than smoothed over.
+I read a 1,000-row page cap as the account total and told William six keywords were missing when
+only two were; the account holds 3,466. I said the Delaware certificate would have a lead time when
+it was already on his Desktop. And I advised leaving the deposit assignment until verification
+cleared, which was wrong because Amazon requires a valid deposit method to *continue selling*, not
+merely to disburse. Amazon also forces a fresh password on every visit to Deposit Methods, so the
+final click was handed back to William rather than done here.
+
+**Status.** Registration Extract submitted and validating, up to 10 business days. The Assign click
+outstanding and still showing red at last check. Every other account-health metric spotless: ODR 0%
+of 157 orders, Policy Compliance Healthy, rating 216, all issues zero. August stands at 87 units and
+$989.94 against $553.01 of ad spend, which is 133% ACOS on a 52% break-even.
+
+---
+
+## 2026-08-19 — The spend tripled and bought a quarter more units, and the fields we thought weren't ours were
+
+**Context.** The morning review asked whether spend was following the engine. It was not: three
+Sponsored Products bid decisions in thirty hours, zero on three of 08-18's four runs, and no run row
+at all for 08-19 00:0x. Underneath that, 223 unanswered $0.85 ceiling asks since 08-14 with only 2
+ever answered, and 377 enabled keywords parked at the ceiling where the engine's only legal move is
+to ask permission. William then asked the question that governed the rest of the day: overall
+marketing cost against overall sales, versus ad cost against ad sales, day by day. Later the work
+turned to Megan's finalised listing copy, and to Canada, which he had just seen reactivate.
+
+**Options considered.** For the spend question: (a) report ACOS as usual, (b) build the TACOS series
+properly from three ad products plus true product sales. For the $4 rule he asked to run hourly:
+(a) hourly full engine, (b) hourly kill-only watchdog, (c) kill-only plus a budget-usage tripwire,
+(d) Marketing Stream, (e) cap campaign budgets and change nothing in code. For the listing copy:
+accept the 08-17 conclusion that the fields belong to Amazon's catalogue, or probe each field
+individually. For compatibility: hand-click 68 models in Seller Central as William proposed, write
+tokens by API, or a hybrid.
+
+**Decision.** (b) for the measurement. (e) then (c) for the spend brake, sequenced, and explicitly
+NOT (a). Probe each field individually, which reversed the 08-17 finding. Hybrid for compatibility,
+which turned out to need no clicking at all.
+
+**Reasoning.** The TACOS series is what made the month legible. Splitting August at 08-14 gives
+$18.94/day of ad spend buying $51.68/day of sales before, and $69.50/day buying $70.14/day after:
+spend up 3.67x, units up 1.26x, so the incremental $50.56/day returns about $6 of contribution and
+loses roughly $44. The diagnostic that settles it is that ACOS and TACOS rose *together*, 37% to 99%,
+where the published signature of healthy growth is rising ACOS with falling TACOS. We bought
+impressions, not rank.
+
+On the hourly rule I argued against the shape William asked for, and the arithmetic is why: an hourly
+check catches a keyword at $4.01 rather than $8, but August's damage was 120 keywords each spending
+their own $4 allowance for $307.03 of the $471.87, and 2,238 enabled keywords times $4 permits about
+$9,000 a month with no account-level ceiling at all. A budget cap is the only control that works while
+the engine is making three decisions a day, because it does not care whether the cron fired.
+
+The listing reversal came from distrusting a convenient reading. `GET` returns the copy attributes as
+ABSENT, which means we never supplied a value rather than that we cannot; and a validation patch
+carrying an obviously fake title returns 8541 "different from what's already in the Amazon catalog",
+which reads exactly like a permission refusal until you submit a plausible title and watch the error
+change to a content rule.
+
+Compatibility followed the same pattern one level down. The controlled field rejected every
+human-readable name including "Apple iPhone 16", which was live on our own listing, and "Apple iPhone
+15 Pro", the schema's own documented example. A field refusing its own stored value is not enforcing
+permissions, it is telling you the wire format differs from the display format. Reading our own ASINs
+through the Catalog Items API showed snake_case tokens, and 66 of 68 models then went in by script.
+
+**Industry source.** ACOS manages campaigns and TACOS judges strategy; healthy TACOS is 10-15%, and
+rising ACOS with falling TACOS is healthy growth while both rising together means ads are buying
+volume that is not compounding into organic rank (Clickstera, Daniks.AI, Keywords.am, Trellis 2026
+benchmarks). Amazon cut product titles to 75 characters on 2026-07-27 in every category except media,
+adding a 125-character Item Highlights field indexed equally for search, enforced by replacing long
+titles with AI-generated ones on 14 days' notice (Amalytix, EcommerceBytes). Manage Your Experiments
+needs Brand Registry plus roughly 1,000 views per variant, runs 4-10 weeks and calls a winner at 95%.
+`compatible_cellular_phone_models` is a structured filter attribute, not an indexed keyword field.
+Amazon Marketing Stream pushes hourly sp-traffic and sp-conversion data and is entitled but unused.
+
+**Trade-offs accepted.** The traffic figure underpinning the A/B analysis is derived from
+ad-attributed share rather than measured, because `GET_SALES_AND_TRAFFIC_REPORT` still 403s; that is
+named rather than smoothed over. Canadian repricing targets assume 1.38 CAD/USD and move about 1.4%
+per cent of drift. The 2-Pack and 3-Pack return almost the same Canadian fee as the Single, CAD 8.50
+against 8.67 despite being two and three units, so those two targets are held until confirmed against
+a real order. Extending Canada properly needs a profile column on eleven tables and was deliberately
+sequenced *after* the merge queue rather than added to it.
+
+**Status.** Live on all four listings and verified by read-back, not by submission status: product
+descriptions (1,631 to 1,753 chars, all previously absent), `compatible_phone_models`, and
+`compatible_cellular_phone_models` at 27/27/27/58 of 60. That last clears a real defect, the 2-Pack
+and 3-Pack were advertising an iPhone SE discontinued in 2018 and Pro matched nothing. Five RBBs
+written: TACOS and the hourly guard, A/B testing, Canada engine coverage, the compatibility field,
+and compatibility breadth. Two artifacts published for William. Titles, bullets and search terms are
+validated and deliberately unwritten. **Nothing was pushed: the push was blocked by the permission
+classifier and every commit is local.**
+
+**Corrections.** Five, four mine. The 08-17 "the fields are not ours" conclusion was wrong and the
+memory carrying it is rewritten. My own morning title rewrites were as non-compliant as Megan's,
+157-159 characters against a 75 cap, because I validated against a Definitions API that still reports
+200 and is behind the policy. I told William `compatible_phone_models` required one of 8 enum values;
+the live page disproved it within minutes, since the pre-existing catalogue value is free text in
+exactly the shape I had already written. I nearly reported Canadian inventory from an endpoint
+returning US data, caught only because identical figures across two marketplaces is a red flag rather
+than a finding. And two self-inflicted tooling faults: a 49-day report window against a 31-day cap,
+and an overspend sweep that exited 0 having completed only its first section.
+
+---
+
+## 2026-08-20 — The engine was never quiet, and the rule that cuts winners
+
+### Context
+
+The 08-19 review concluded the ad engine had stopped acting: "three decisions in thirty hours."
+That reading came from `ad_engine_log`. Checked against Amazon this morning, it was wrong. The engine
+had paused six keywords and moved 43 bids in the previous 36 hours, all verified by reading
+`lastUpdateDateTime` back from the Ads API. What stopped on 18 August was the logbook.
+
+William then asked three things in sequence: are keywords being turned off, are converting search
+terms being added, and if a term converts at 8x should we not be raising its bid to take the volume.
+The first two were yes. The third exposed a rule doing the opposite of what he expected.
+
+### Options
+
+On the dead log:
+1. Leave it. The engine works; the log is only an audit trail.
+2. Find why the run dies and fix it.
+3. Move logging before the bid apply so it always lands.
+
+On hourly (William: "the engine every hour not every six hours"):
+1. Change the cron alone.
+2. Change the cron and make the run survive being called 24 times a day.
+3. Split a cheap hourly kill job from the six-hourly bid job.
+
+On the no-clicks raise:
+1. Leave it.
+2. A flat impressions bar before a missing click may raise a bid.
+3. A bar that varies with the keyword's current bid.
+
+### Decision
+
+**Log: option 2.** `kw_perf_snapshot` was written with one awaited INSERT per keyword, 327 sequential
+round trips to Turso, sitting between the bid apply and `persistLog`. Batched, 200 rows per
+transaction.
+
+**Hourly: option 2.** `report-warm "0 * * * *"` and `ad-engine "40 * * * *"`, plus the snapshot fix
+and a non-blocking `report-warm`. Shipped as PR #11.
+
+**No-clicks raise: option 2.** `NO_CLICK_MIN_IMPRESSIONS = 150`. Shipped as PR #12.
+
+**Harvest: applied 14 keywords live** under PR #8's rule, which William approved, using the real
+`harvestCandidates()` rather than a hand-rolled copy. HTTP 207, 14 succeeded, 0 rejected, all 14 read
+back from Amazon as ENABLED at $0.50.
+
+**Winners-raise rule: NOT built.** Recommended and left for a decision.
+
+### Reasoning
+
+The log fix is the one that unlocks the rest. The snapshot table records its own truncation: 315 rows
+written at 08-19T06:04, then 75 at 08-20T00:05. Everything downstream of that loop is lost, including
+`kw_kill_ledger`, which the in-month revival at 2.0x reads. A kill recorded nowhere can never be
+revived, so this is not only an audit problem.
+
+Hourly is about the gap between checks, not the number of them. A keyword went $0.75 to $4.72 between
+two runs on 18 August, crossing the $4 bar during the evening peak with the next check hours away.
+Fifteen kills have averaged $8.04 against a $4 bar. Hourly does not mean bidding hourly, because
+`BID_COOLDOWN_HOURS` still refuses to move a keyword whose last change is younger than the cooldown.
+What multiplies is the kill and the harvest, and both are strictly safer more often: the kill can only
+pause something that has already spent $4, and the harvest only adds a term that already converted at
+2x or better.
+
+The impressions bar rests on one measurement. Of 852 bid moves since 14 August, 674 were raises and
+652 came from the "shown, never clicked" branch, on a median of 2 impressions. Account CTR is 0.595%,
+one click per 168 impressions, so two impressions without a click is the most ordinary event in the
+account. Option 3 was rejected as complexity that would be hard to reason about later; the flat bar
+leaves the no-impressions branch alone, which is the escape from the $0.10 floor trap, and holding is
+a delay rather than a freeze because impressions keep accumulating while the bid sits still.
+
+On William's question about raising winners, he is right and the code says otherwise. Above 2x the
+engine shaves 2 cents, hunting the cheapest bid that still converts. That is his own 10 August
+instruction implemented literally. The case for changing it: 12 keywords at 2x or better cost $29.02
+and returned $137.88, which is 44% of ad sales on 5% of spend, and break-even is 1.92x against their
+4.8x. The case for not changing it today: a second gate, `SEARCH_MIN_CLICKS = 3`, means most of these
+never reach a ROAS branch at all, so the shave is rarely what is holding them back. Both need
+deciding together, which is why it was recommended rather than built.
+
+### Industry source
+
+The bar is set by the rule of three: with zero events in n trials, the 95% upper bound on the rate is
+about 3/n. At 150 impressions that bounds CTR at 2%, more than three times the account average, so
+150 is generous rather than strict. Amazon's own guidance on bid optimisation is to move bids on
+conversion data and to treat impression-level signals as diagnostic rather than as a bid trigger.
+
+### Trade-offs accepted
+
+- The 14 new keywords each rest on a single order. Worst case across all of them is about $56,
+  bounded by the $4 kill.
+- Hourly multiplies report requests roughly threefold. Affordable because `DATA_STALE_HOURS` is 2, so
+  a cached report still serves most runs.
+- The impressions bar will hold some keywords that a raise would genuinely have helped. Accepted: at
+  a median of 2 impressions the branch cannot tell those apart from noise.
+- PR #11 is stacked on PR #7 rather than rebased onto main, so #7 must be closed rather than merged.
+
+### Status
+
+PR #11 and PR #12 open, 427 tests, tsc clean. 14 keywords live and verified. Merge order recommended
+as #11, then #8, then #12.
+
+Open and blocking: the $0.85 ceiling, 190 asks and none answered. Raising it before #12 deploys would
+fund the noise-raise leak rather than the winners, so the sequence matters. INFORM and the deposit
+Assign click are due 2026-08-21.
+
+Three corrections taken today, all the same mistake in different clothes: trusting our own record over
+Amazon's. The engine "going quiet", "no kill since 08-16", and a `creationDate` field that is actually
+`creationDateTime`, which made me report zero keywords created in August when the engine had made 16.
