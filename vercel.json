@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/report-warm",
-      "schedule": "0 */6 * * *"
+      "schedule": "0 * * * *"
     },
     {
       "path": "/api/cron/daily-sync",
@@ -10,7 +10,7 @@
     },
     {
       "path": "/api/cron/ad-engine",
-      "schedule": "40 */6 * * *"
+      "schedule": "40 * * * *"
     },
     {
       "path": "/api/cron/inbox-agent",
