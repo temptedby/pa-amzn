@@ -94,3 +94,38 @@ describe("duplicateReportId", () => {
     expect(duplicateReportId("error code deadbeef")).toBeNull();
   });
 });
+
+// 2026-08-21: Canada became the second advertising account. Ads reports are scoped to one profile,
+// so the same purpose/product/date range is a DIFFERENT report per marketplace. Before this, the
+// key omitted the profile, so the Canadian engine would have collected the US account's rows and
+// judged Canadian keywords against them. It fails silently, which is the worst kind.
+describe("reportKey is scoped per advertising profile", () => {
+  const spec: ReportSpec = {
+    purpose: "engine-mtd", adProduct: "SPONSORED_PRODUCTS", reportTypeId: "spTargeting",
+    groupBy: ["targeting"], columns: ["cost", "sales14d"],
+    startDate: "2026-08-01", endDate: "2026-08-21",
+  };
+
+  it("gives two profiles two different keys for an identical spec", () => {
+    const us = reportKey(spec, "527401661118587");
+    const ca = reportKey(spec, "2269012516456949");
+    expect(us).not.toBe(ca);
+  });
+
+  it("is still stable for the same profile", () => {
+    expect(reportKey(spec, "527401661118587")).toBe(reportKey(spec, "527401661118587"));
+  });
+
+  it("prefers an explicit argument over the spec's own profileId", () => {
+    const withProfile = { ...spec, profileId: "2269012516456949" };
+    expect(reportKey(withProfile, "527401661118587")).toContain("527401661118587");
+    expect(reportKey(withProfile)).toContain("2269012516456949");
+  });
+
+  it("still carries everything the old key carried", () => {
+    const k = reportKey(spec, "527401661118587");
+    for (const part of ["engine-mtd", "SPONSORED_PRODUCTS", "spTargeting", "2026-08-01", "2026-08-21"]) {
+      expect(k).toContain(part);
+    }
+  });
+});

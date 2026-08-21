@@ -97,6 +97,19 @@ export interface AdEngineResult {
   errors: string[]; durationMs: number; reason?: string;
 }
 
+/** Point an otherwise-identical Ads config at a different advertising account.
+ *
+ *  One set of ADS_* credentials covers every profile on the account, so switching marketplace is
+ *  only a change of scope header. Canada is profile 2269012516456949, the US 527401661118587.
+ *  Runs stay SEPARATE per country (William 2026-08-21) rather than one run looping both: a 300s
+ *  function budget is per country, a failure in one cannot take the other down, and each country's
+ *  decisions land in the log under their own run.
+ */
+export function withProfile(cfg: AdsConfig | null, profileId?: string): AdsConfig | null {
+  if (!cfg) return null;
+  return profileId ? { ...cfg, profileId } : cfg;
+}
+
 async function ads(cfg: AdsConfig, token: string, path: string, method: string, body: unknown, ct = "application/json") {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -157,7 +170,10 @@ async function deferredRows(
   cfg: AdsConfig, token: string, notes: string[],
   purpose: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string,
 ): Promise<{ rows: Row[]; ready: boolean }> {
-  const spec: ReportSpec = spSpec(purpose, reportTypeId, groupBy, columns, sd, ed);
+  // The profile goes ON THE SPEC, not left to reportKey's env fallback. When runAdEngine is asked
+  // for a non-default account, cfg carries the override but process.env does not, so a spec without
+  // it would resolve to the US key and Canada would read the US account's rows. 2026-08-21.
+  const spec: ReportSpec = { ...spSpec(purpose, reportTypeId, groupBy, columns, sd, ed), profileId: cfg.profileId };
   const r = await getReport<Row>(cfg, token, spec);
   if (r.state === "ready") { notes.push(`${purpose}: ready (${r.rows.length} rows, ${r.ageHours}h old)`); return { rows: r.rows, ready: true }; }
   if (r.state === "failed") { notes.push(`${purpose}: FAILED — ${r.reason}`); return { rows: [], ready: false }; }
@@ -607,11 +623,11 @@ async function perfSinceChange(
   return out;
 }
 
-export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
+export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
   const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], needsConfirm: [], revived: [], added: [], notes: [], errors: [], durationMs: 0 };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 
@@ -1059,14 +1075,14 @@ async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
 }
 
 /** Bring floored keywords back, throttled. dryRun previews the exact batch without applying. */
-export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promise<ReintroRunResult> {
+export async function runReintroduction(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<ReintroRunResult> {
   const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
   const start = Date.now();
   const out: ReintroRunResult = {
     ok: false, dryRun, promoted: [], laddered: [], escalated: [], eligible: 0, blockedBy: [],
     state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, notes: [], errors: [], durationMs: 0,
   };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 
@@ -1306,11 +1322,11 @@ export function summarizeReintroduction(r: ReintroRunResult): string {
 // (which runs every 6h): this is invoked once a month. Lists PAUSED keywords, pulls their trailing
 // 65d performance (chunked into <=31d Ads-API reports), and re-enables any that recovered to the
 // >= $4 spend / ACOS <= 50% winner bar. dryRun previews without applying. Idempotent.
-export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): Promise<ReactivationResult> {
+export async function runMonthlyReactivation(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<ReactivationResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
   const out: ReactivationResult = { ok: false, dryRun, reactivated: [], notes: [], errors: [], durationMs: 0 };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 
