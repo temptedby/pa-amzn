@@ -400,10 +400,16 @@ export function killPlan(
 // 3rd sat dark for four weeks. This re-checks every 6h and switches it back on as soon as the credit
 // lands.
 //
-// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below the 52% ACOS pivot,
-// which is 1.923x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
-// and revived by the same data. The 1.923x-2.0x band is deliberately dead space.
-export const REVIVE_MIN_ROAS = 2.0;
+// NO FLAPPING, by arithmetic rather than by a cooldown. A keyword must not be able to sit in both
+// the kill window and the revive window on one reading, or it oscillates every run.
+//
+// WAS 2.0x against a 1.0x kill. Now 2.15x against a 1.5x kill, William 2026-08-21: revive at 2.25x
+// with a 5% buffer beneath it, "so if roas reaches 2.15 then we turn it on". 2.15 is used rather
+// than the arithmetic 2.1375 because it is his stated number and marginally the stricter of the two.
+//
+// The dead band is 1.5x to 2.15x, 0.65 wide. Narrower than the old 1.0x-2.0x gap and still far
+// wider than any single day's movement, so nothing can be killed and revived by the same data.
+export const REVIVE_MIN_ROAS = 2.15;
 
 /** One keyword the $4 kill paused, with the month it happened in. */
 export interface KillLedgerRow { keywordId: string; word: string; matchType: string; month: string }

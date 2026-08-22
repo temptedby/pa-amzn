@@ -61,12 +61,20 @@ export function killSpendFor(currency: string | undefined): number {
 // - $1.42 referral - $2.52 FBA = $4.93 contribution; 4.93/9.49 = 0.519. At or above it we lose money.
 // William 2026-08-02 chose the true break-even over a rounded 50%/55%.
 export const ACOS_PIVOT = 0.52;
-// The line a CONVERTING word is switched off at (William 2026-08-13: "once they're below 1x, we got
-// to turn them off"). Deliberately NOT the 1.923x break-even: between 1x and break-even the word is
-// losing money but still returning cash, and William's instruction is to cut its bid and try to
-// recover it rather than pause it. Below 1x the ads cost more than the sales they produced and no
-// bid fixes that. Kept separate from ACOS_PIVOT, which still steers the direction of the bid step.
-export const KILL_MIN_ROAS = 1.0;
+// The line a CONVERTING word is switched off at.
+//
+// WAS 1.0x (William 2026-08-13: "once they're below 1x, we got to turn them off"). Raised to 1.5x
+// on 2026-08-21, "just moving the boundaries a little bit to improve roas", after we established
+// the real all-in unit cost is $2.00 rather than the $0.62 raw cost. At 1.0x a converting word
+// returns exactly what the ads cost and loses the whole product cost on top.
+//
+// Still deliberately BELOW break-even, which is 2.45x blended. Between 1.5x and 2.45x a word is
+// losing money but still returning cash, and the instruction there is to cut its bid and try to
+// recover it rather than pause it. This bar is where no bid can rescue it.
+//
+// On the live account the day it changed: 4 keywords, $61.49 of August spend, losing $28.89
+// between them, the largest being `retractable phone tether` at 1.34x.
+export const KILL_MIN_ROAS = 1.5;
 // A FLAT TEN CENTS per run, in BOTH directions. William asked for this on 2026-08-07 ("i asked
 // raising by .10 not 10%") and again on 2026-08-13 for the cut: "dont lower 10% just .10 because
 // 10% will drop quick and the word might not have that much search in that time".
