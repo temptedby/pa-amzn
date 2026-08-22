@@ -10,8 +10,7 @@ import {
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
-  lifetimeOnlyPool, SD_BID_FLOOR,
-} from "./ad-rules";
+  lifetimeOnlyPool, SD_BID_FLOOR, killSpendFor } from "./ad-rules";
 
 // William's spec (2026-08-02), written up in .agent/ad-engine-rules-2026-08-02.md:
 // $4 MTD + bad ACOS -> kill for the month; ±10% bid step at the 52% break-even pivot;
@@ -1292,5 +1291,36 @@ describe("Display raises only when it is genuinely absent from the auction (revi
     const p = planBids([t({ id: "b", impressions: 0, clicks: 0 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
     expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+  });
+});
+
+// 2026-08-21. KILL_SPEND is a bare 4. Correct in the US, nonsense in Mexico, where MXN 4 is about
+// USD 0.24 and would have killed every keyword that spent a quarter. Found while building the
+// Mexican campaign, before any engine ran there.
+describe("the kill bar is denominated in the marketplace's own currency", () => {
+  it("is USD 4 in the US", () => {
+    expect(killSpendFor("USD")).toBe(4);
+  });
+
+  it("is not 4 in Mexico, where 4 pesos is a quarter of a dollar", () => {
+    expect(killSpendFor("MXN")).toBeGreaterThan(50);
+  });
+
+  it("is worth roughly USD 4 in every marketplace, within 10%", () => {
+    const usdPer = { USD: 1, CAD: 1.3781, MXN: 16.9586, BRL: 5.1901 };
+    for (const [ccy, rate] of Object.entries(usdPer)) {
+      const inUsd = killSpendFor(ccy) / rate;
+      expect(inUsd).toBeGreaterThan(3.6);
+      expect(inUsd).toBeLessThan(4.4);
+    }
+  });
+
+  it("falls back to the US bar for an unknown currency rather than to zero", () => {
+    expect(killSpendFor("XYZ")).toBe(KILL_SPEND);
+    expect(killSpendFor(undefined)).toBe(4);
+  });
+
+  it("is case-insensitive, because report rows are not consistent", () => {
+    expect(killSpendFor("mxn")).toBe(killSpendFor("MXN"));
   });
 });

@@ -28,6 +28,35 @@
 // product's own entity endpoints.
 
 export const KILL_SPEND = 4;      // $ month-to-date before the kill bar applies
+
+/**
+ * The kill bar in each marketplace's OWN currency.
+ *
+ * KILL_SPEND is a bare 4 with no currency attached, which is correct in the US and nonsense
+ * everywhere else. Caught 2026-08-21 while building the Mexican campaign: MXN 4 is about USD 0.24,
+ * so a Mexican engine run would have killed every keyword that spent a quarter without an order and
+ * emptied the campaign inside a day. CAD 4 is USD 2.90, a 27% tighter bar than the US rather than
+ * the same one.
+ *
+ * These are USD 4 converted at the rates on 2026-08-21 and then rounded to something a human would
+ * choose, then FROZEN. A live FX lookup is deliberately not used: the bar is a policy, and a policy
+ * that drifts with the exchange rate cannot be reasoned about or tested.
+ *
+ *   1 USD = 1.3781 CAD -> 5.51 -> 5.50
+ *   1 USD = 16.959 MXN -> 67.8 -> 68
+ *   1 USD = 5.1901 BRL -> 20.8 -> 21
+ */
+export const KILL_SPEND_BY_CURRENCY: Record<string, number> = {
+  USD: 4,
+  CAD: 5.5,
+  MXN: 68,
+  BRL: 21,
+};
+
+/** The kill bar for a currency, falling back to the US number rather than to something dangerous. */
+export function killSpendFor(currency: string | undefined): number {
+  return KILL_SPEND_BY_CURRENCY[String(currency ?? "USD").toUpperCase()] ?? KILL_SPEND;
+}
 // 52% = VALIDATED break-even on the Single via SP-API getMyFeesEstimate: $9.49 price - $0.62 COGS
 // - $1.42 referral - $2.52 FBA = $4.93 contribution; 4.93/9.49 = 0.519. At or above it we lose money.
 // William 2026-08-02 chose the true break-even over a rounded 50%/55%.

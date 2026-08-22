@@ -17,6 +17,10 @@
       "schedule": "55 */6 * * *"
     },
     {
+      "path": "/api/cron/ad-engine-mx",
+      "schedule": "50 */6 * * *"
+    },
+    {
       "path": "/api/cron/inbox-agent",
       "schedule": "0 * * * *"
     },
