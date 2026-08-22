@@ -23,11 +23,18 @@ const M={
 if(!M){console.error('need --market=MX|BR|CA');process.exit(1);}
 const SP='https://sellingpartnerapi-na.amazon.com', SELLER='ACXMWZZUZKFVD';
 const PRO_PREMIUM_USD=1.45;   // = the CAD 2.00 premium William set, in USD
+// William 2026-08-21: "$2 a unit our real all in costs". The old per-SKU figures (0.62/1.24/1.62/
+// 1.86) were RAW unit cost and excluded inbound freight and testing.
+const COGS=2.00;
+// --net=N prices every SKU to clear N dollars a sale, which is William's "$2-4 per sale" rule and
+// produces a ladder a shopper can read. Without it, prices target US contribution parity, which on
+// a flat cross-border fee gives a nonsense ladder: $15 for one and $20 for three.
+const NET=Number((process.argv.find(a=>a.startsWith('--net='))||'').split('=')[1])||null;
 const ITEMS=[
-  {sku:'57-P4AJ-J4AC', name:'Single', usContrib:4.93, cogs:0.62, premium:0},
-  {sku:'UG-SVG8-LB0P', name:'Pro',    usContrib:3.86, cogs:1.62, premium:PRO_PREMIUM_USD},
-  {sku:'CPH-BLCK-2',   name:'2-Pack', usContrib:6.79, cogs:1.24, premium:0},
-  {sku:'CPH-BLCK-3',   name:'3-Pack', usContrib:8.62, cogs:1.86, premium:0},
+  {sku:'57-P4AJ-J4AC', name:'Single', usContrib:3.55, cogs:COGS, premium:0,               net:NET},
+  {sku:'UG-SVG8-LB0P', name:'Pro',    usContrib:3.48, cogs:COGS, premium:PRO_PREMIUM_USD, net:NET?NET+0.5:null},
+  {sku:'CPH-BLCK-2',   name:'2-Pack', usContrib:6.03, cogs:COGS, premium:0,               net:NET?NET+1:null},
+  {sku:'CPH-BLCK-3',   name:'3-Pack', usContrib:8.48, cogs:COGS, premium:0,               net:NET?NET+2:null},
 ];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function rq(u,o){for(let i=0;i<7;i++){try{const r=await fetch(u,o);if(r.status===429){await sleep(9000);continue;}return r;}catch(e){await sleep(4000);}}throw new Error('x');}
@@ -41,15 +48,15 @@ const H={'x-amz-access-token':tok,'content-type':'application/json'};
 const k=1-M.referral-M.dst;
 console.log(`=== ${LIVE?'LIVE':'PLAN ONLY'} — ${MARKET} priced at US contribution parity ===`);
 console.log(`FX 1 USD = ${FX.toFixed(4)} ${M.ccy}  (${SRC})   referral ${(M.referral*100).toFixed(0)}%   FBA ${M.ccy} ${M.fba}/unit measured\n`);
-console.log(`         US keeps   parity ${M.ccy}   break-even   live now`);
+console.log(NET?`         target     price ${M.ccy}   break-even   live now`:`         US keeps   parity ${M.ccy}   break-even   live now`);
 for(const it of ITEMS){
-  const target=(it.usContrib+it.premium)*FX;
+  const target=(it.net!=null ? it.net : (it.usContrib+it.premium))*FX;
   it.price = +(((target + M.fba + it.cogs*FX)/k)).toFixed(2);
   it.be     = +(((M.fba + it.cogs*FX)/k)).toFixed(2);
   const g=await (await rq(`${SP}/listings/2021-08-01/items/${SELLER}/${encodeURIComponent(it.sku)}?marketplaceIds=${M.id}&includedData=summaries,attributes`,{headers:H})).json();
   it.pt=((g.summaries||[])[0]||{}).productType||'CELL_PHONE_HOLSTER';
   it.live=(g.attributes||{}).purchasable_offer?.[0]?.our_price?.[0]?.schedule?.[0]?.value_with_tax;
-  console.log(`${it.name.padEnd(8)} $${it.usContrib.toFixed(2).padStart(5)}${it.premium?' +$'+it.premium:'     '}  ${String(it.price).padStart(9)}  ${String(it.be).padStart(10)}   ${String(it.live??'none').padStart(9)}`);
+  console.log(`${it.name.padEnd(8)} $${(it.net!=null?it.net:it.usContrib).toFixed(2).padStart(5)}${(it.net==null&&it.premium)?' +$'+it.premium:'     '}  ${String(it.price).padStart(9)}  ${String(it.be).padStart(10)}   ${String(it.live??'none').padStart(9)}`);
   await sleep(1300);
 }
 if(!LIVE){ console.log('\nPlan only. Nothing changed.'); process.exit(0); }

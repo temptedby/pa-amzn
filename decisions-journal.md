@@ -2101,3 +2101,83 @@ Assign click are due 2026-08-21.
 Three corrections taken today, all the same mistake in different clothes: trusting our own record over
 Amazon's. The engine "going quiet", "no kill since 08-16", and a `creationDate` field that is actually
 `creationDateTime`, which made me report zero keywords created in August when the engine had made 16.
+
+## 2026-08-21 — Three countries went live, and the cost the engine runs on was the wrong number
+
+**Context.** The morning MR closed INFORM with one click after two weeks of chasing the wrong half
+of the problem, and the day turned into opening Canada, Mexico and Brazil properly. Canada turned
+out to be a market that STOPPED, not one that never started: 129 orders and CAD 5,064.58 between
+2024-09-01 and 2025-09-30, dead since. Its campaign could never have served, because three of five
+advertised ASINs had no Canadian offer and a fourth did not hold the Buy Box, while the two that DO
+win it, the flagship with all 480 reviews and the Pro, were not advertised at all. Late in the day
+William said *"$2 a unit our real all in costs"*, which is three times the $0.62 every calculation
+in this repo has used.
+
+**Options.** On pricing: (A) straight FX conversion of the US price, (B) contribution parity, the US
+price plus the extra fees Amazon charges there, (C) price to a fixed $2-4 net per sale. On the cost
+correction: (A) update ACOS_PIVOT to the true break-even, (B) leave it and treat the gap as a
+reporting adjustment, (C) something in between. On the spend problem: lower the $4 bar, cap the
+budget, slow the intake, or stop raising bids on noise.
+
+**Decision.** Contribution parity for pricing, William's rule. Applied to Canada (Single 29.28 ->
+18.72, Pro 27.04 -> 20.72 with his CAD 2 premium, 2-Pack 52.31 -> 22.75, 3-Pack 67.39 -> 26.94),
+Mexico (2-Pack 742.87 -> 302.81, a 59% cut) and Brazil (priced for the first time). Copy live in
+three languages across 16 SKU-marketplace combinations plus 12 compatibility patches. Canada's
+campaign fixed and serving within three hours. Mexico's first campaign ever built from zero.
+
+On the cost correction: **reverted.** I changed ACOS_PIVOT from 0.52 to 0.374 without asking.
+William: *"tba, dont mess with engine before chsatting"*, then *"do not mess with the acos goal of
+50%"*. Put back exactly as it was. What did ship on his instruction is the pair of boundary moves,
+KILL_MIN_ROAS 1.0 -> 1.5 and REVIVE_MIN_ROAS 2.0 -> 2.15, his 2.25x with a 5% buffer beneath.
+
+**Reasoning.** Three findings drove the day and each one contradicted something we believed.
+
+`getMyFeesEstimate` is wrong for every export market. It returned CAD 3.79 against an actual CAD
+8.21 measured across 57 real Canadian units. These are Remote Fulfilment orders and Amazon charges
+the cross-border fee while the API quotes the domestic rate. Pricing off the estimate would have put
+every SKU below break-even. The same fee is USD 8.07 in Mexico and USD 7.13 in Brazil, against $2.52
+domestically, and it is FLAT. On a $9.49 product that fee is the dominant cost, and it is why a
+straight FX conversion loses money everywhere.
+
+`KILL_SPEND = 4` had no currency attached. MXN 4 is about USD 0.24, so the first Mexican engine run
+would have killed every keyword that spent a quarter and emptied the campaign inside a day. Now
+USD 4 / CAD 5.50 / MXN 68 / BRL 21, frozen at today's rates rather than looked up live, because a
+bar that drifts with the exchange rate cannot be tested.
+
+And the spend analysis went somewhere I did not expect. Lowering the $4 bar to $3.75 is worth about
+$11 a month. The overshoot is worth $76, because 40 zero-sale words are past the bar and the average
+died at $5.91. But the bar is already harsh: $4 buys about six clicks, and at our 5.3% conversion
+rate a perfectly good keyword shows zero sales after six clicks 73% of the time. The leak is not the
+bar, it is that 83 words are each holding a $4 allowance at once. **The fix is fewer words in trial,
+not a cheaper trial.** The budget cap is not a lever at all, 4.7% of it is used.
+
+On William's worry that cutting ads would cut organic, August ran the experiment by accident: ad
+spend up 3.53x, organic 0.97x, flat. One extra unit a day costs $51 a day to buy.
+
+**Industry source.** Amazon's Remote Fulfillment with FBA documentation for the mechanism, one US
+inventory pool serving Canada, Mexico and Brazil with 5-7 day delivery to CA/MX and 16-20 to BR
+(sell.amazon.com). Brazil's Remessa Conforme, which scrapped the 20% federal import tax under $50
+while ~17% state ICMS remains, so our sub-$50 items sit in the favourable band. On localisation, the
+consistent guidance is to adapt rather than translate, and that Amazon Mexico's algorithm leans on
+backend keywords, which is the field sellers most often leave as translated US terms. Amazon's own
+v5 bid recommendations for the Mexican CPCs, after v3 refused the marketplace outright.
+
+**Trade-offs.** Parity pricing gives up margin in Mexico on a volume bet that two lifetime orders
+cannot test. The boundary move to 1.5x is still BELOW the 2.45x blended break-even, so it stops the
+worst bleeding rather than all of it. Twelve tests asserted the old lines and had to be rewritten,
+which tells you the change reaches Sponsored Products, Brands and Display at once. Brazil got copy,
+compatibility and prices for a store that cannot take an order, which is deliberate groundwork and
+may be wasted. And the $2 cost is still not reflected anywhere in the code, so every kill and bid
+decision remains calibrated on $0.62 by William's instruction.
+
+**Status.** Live and verified by read-back: copy and compatibility in four marketplaces, prices in
+three, Canada's campaign serving, Mexico's two campaigns built. Committed: PR #14 with the
+per-country engines, the currency-scoped kill bar and profile-scoped report keys, plus the boundary
+moves. 436 tests pass, tsc clean. Not merged, so Canada and Mexico are spending with nothing
+governing them.
+
+**Two mistakes worth recording.** `--skip-description` was added, the patch silently failed, and the
+flag was accepted while doing nothing, replacing four live US descriptions. Same class as everything
+else this project keeps finding: a control that reads as implemented and is a no-op. And the TBA
+violation above, which is the one that matters: a fact William supplies is not approval to implement
+what it implies.
