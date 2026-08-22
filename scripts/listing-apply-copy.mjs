@@ -20,6 +20,11 @@ const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function rq(u,o){for(let i=0;i<6;i++){try{const r=await fetch(u,o);if(r.status===429){await sleep(9000);continue;}return r;}catch(e){await sleep(4000);}}throw new Error('connect failed');}
 let tok;for(let i=0;i<6;i++){try{const j=await (await rq('https://api.amazon.com/auth/o2/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:process.env.SP_API_REFRESH_TOKEN,client_id:process.env.SP_API_CLIENT_ID,client_secret:process.env.SP_API_CLIENT_SECRET})})).json();tok=j.access_token;if(tok)break;}catch(e){}await sleep(3000);}
 const H={'x-amz-access-token':tok,'content-type':'application/json'};
+// --skip-description adds only what is empty and leaves a live description alone.
+// 2026-08-21: this flag was added once, the patch silently failed, and the flag was accepted on the
+// command line while doing nothing. Four live US descriptions were replaced as a result. Asserted
+// below so it can never be a no-op again.
+const SKIP_DESC=process.argv.includes('--skip-description');
 const copy=JSON.parse(readFileSync(COPY,'utf8'));
 
 console.log(`=== ${LIVE?'LIVE WRITE':'VALIDATION ONLY'} — ${MARKET} (${MKT}) — from ${COPY} ===\n`);
@@ -31,7 +36,7 @@ for(const [name,rec] of Object.entries(copy)){
   const bullets=(rec.bullets||[]).map(b=>b.headline?`${b.headline}: ${b.body}`:b.body).filter(Boolean);
   const patches=[];
   if(bullets.length) patches.push({op:'replace',path:'/attributes/bullet_point',value:bullets.map(v=>({value:v,marketplace_id:MKT}))});
-  if(rec.description) patches.push({op:'replace',path:'/attributes/product_description',value:[{value:rec.description,marketplace_id:MKT}]});
+  if(rec.description && !SKIP_DESC) patches.push({op:'replace',path:'/attributes/product_description',value:[{value:rec.description,marketplace_id:MKT}]});
   if(rec.search_terms) patches.push({op:'replace',path:'/attributes/generic_keyword',value:[{value:rec.search_terms,marketplace_id:MKT}]});
   const over=bullets.filter(b=>b.length>500).length;
   const stBytes=Buffer.byteLength(rec.search_terms||'');
@@ -40,7 +45,7 @@ for(const [name,rec] of Object.entries(copy)){
   const res=await rq(`${SP}/listings/2021-08-01/items/${SELLER}/${encodeURIComponent(sku)}?marketplaceIds=${MKT}${mode}`,{method:'PATCH',headers:H,body:JSON.stringify({productType:pt,patches})});
   const j=await res.json().catch(()=>({}));
   const errs=(j.issues||[]).filter(i=>i.severity==='ERROR');
-  console.log(`${name.padEnd(7)} ${sku.padEnd(14)} ${bullets.length} bullets, desc ${rec.description?.length||0}, terms ${stBytes}b   HTTP ${res.status} status=${j.status||'-'} ${errs.length?'ERRORS':'clean'}`);
+  console.log(`${name.padEnd(7)} ${sku.padEnd(14)} ${bullets.length} bullets, desc ${SKIP_DESC?'SKIPPED':(rec.description?.length||0)}, terms ${stBytes}b   HTTP ${res.status} status=${j.status||'-'} ${errs.length?'ERRORS':'clean'}`);
   for(const i of (j.issues||[])) console.log(`    [${i.severity}] ${i.code}: ${(i.message||'').slice(0,150)}`);
   results.push({name,sku,bullets:bullets.length,ok:!errs.length});
   await sleep(1500);

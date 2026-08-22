@@ -1,4 +1,12 @@
-/** VALIDATION ONLY. Can we create the Mexican offer for the flagship? Writes NOTHING. */
+/** Creates the Mexican offer for the FLAGSHIP, the ASIN carrying all 480 reviews, which had no
+ *  listing in Mexico at all while five other sellers competed on it unopposed.
+ *
+ *  Price MXN 256.60 is US-contribution parity using the MEASURED Mexican fees (referral 10%, FBA
+ *  MXN 136.84 per unit from settlement), not getMyFeesEstimate, which understates Remote Fulfilment.
+ *
+ *  RUN: node scripts/mx-create-flagship-offer.mjs --dry    validate, write nothing
+ *       node scripts/mx-create-flagship-offer.mjs          create, then read back
+ */
 import { readFileSync } from 'node:fs';
 for(const l of readFileSync(new URL('../.env.local',import.meta.url),'utf8').split('\n')){const m=l.match(/^([A-Z0-9_]+)=(.*)$/);if(m&&!(m[1]in process.env))process.env[m[1]]=m[2].trim();}
 const SP='https://sellingpartnerapi-na.amazon.com', SELLER='ACXMWZZUZKFVD';
@@ -37,9 +45,21 @@ if(caDg){
   patches.push({op:'replace', path:'/attributes/supplier_declared_dg_hz_regulation',
     value: caDg.map(v=>({...v, marketplace_id:MX}))});
 } else console.log('  !! CA has no supplier_declared_dg_hz_regulation to copy');
-const res=await rq(`${SP}/listings/2021-08-01/items/${SELLER}/${encodeURIComponent(SKU)}?marketplaceIds=${MX}&mode=VALIDATION_PREVIEW`,
+const DRY=process.argv.includes('--dry');
+const res=await rq(`${SP}/listings/2021-08-01/items/${SELLER}/${encodeURIComponent(SKU)}?marketplaceIds=${MX}${DRY?'&mode=VALIDATION_PREVIEW':''}`,
   {method:'PATCH',headers:H,body:JSON.stringify({productType:pt,patches})});
 const j=await res.json().catch(()=>({}));
-console.log(`\nVALIDATION at MXN ${PRICE}:  HTTP ${res.status}  status=${j.status||'-'}  issues=${(j.issues||[]).length}`);
+console.log(`\n${DRY?'VALIDATION':'LIVE WRITE'} at MXN ${PRICE}:  HTTP ${res.status}  status=${j.status||'-'}  issues=${(j.issues||[]).length}`);
 for(const i of (j.issues||[])) console.log(`  [${i.severity}] ${i.code}: ${(i.message||'').slice(0,170)}`);
-console.log('\nNothing was written.');
+if(DRY){ console.log('\nNothing was written.'); process.exit(0); }
+console.log('\n=== READ-BACK FROM AMAZON (60s settle) ===');
+await sleep(60000);
+const back=await (await rq(`${SP}/listings/2021-08-01/items/${SELLER}/${encodeURIComponent(SKU)}?marketplaceIds=${MX}&includedData=summaries,offers,fulfillmentAvailability`,{headers:H})).json();
+const bs=(back.summaries||[])[0]||{};
+console.log(`  status  ${(bs.status||[]).join('/')||'NONE'}`);
+console.log(`  offer   ${JSON.stringify((back.offers||[]).map(o=>o.price?.amount+' '+o.price?.currencyCode))}`);
+console.log(`  fulfil  ${JSON.stringify((back.fulfillmentAvailability||[]).map(f=>f.fulfillmentChannelCode))}`);
+const pr=await (await rq(`${SP}/products/pricing/v0/items/B07Y5GZP1T/offers?MarketplaceId=${MX}&ItemCondition=New`,{headers:H})).json();
+const offers=pr.payload?.Offers||[];
+const mine=offers.find(o=>o.MyOffer===true||o.SellerId===SELLER);
+console.log(`  BUYER SIDE: ${offers.length} offers on the ASIN, ours ${mine?`${mine.ListingPrice?.Amount} MXN buyBox=${!!mine.IsBuyBoxWinner}`:'NOT VISIBLE YET (catalogue can lag)'}`);
