@@ -11,6 +11,7 @@ import {
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   lifetimeOnlyPool,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
+  killSpendFor,
 } from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
@@ -360,6 +361,9 @@ export function killPlan(
   rows: { keywordId?: string | number | null; cost?: number; purchases14d?: number; sales14d?: number }[],
   byId: Map<string, { keywordText: string; matchType: string; state: string; bid?: number | null }>,
   newKwBid = NEW_KW_BID,
+  // The report's numbers are in the marketplace's own currency, so the bar has to be too. A bare 4
+  // means MXN 4, about USD 0.24, which would kill a Mexican keyword after a single click.
+  killSpend = KILL_SPEND,
 ): KillPick[] {
   const out: KillPick[] = [];
   const seen = new Set<string>();
@@ -370,7 +374,7 @@ export function killPlan(
     const k = byId.get(id);
     if (!k || k.state !== "ENABLED") continue;               // already off, or gone from the account
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
-    if (decide(k.bid || newKwBid, perf).action !== "kill") continue;
+    if (decide(k.bid || newKwBid, perf, { killSpend }).action !== "kill") continue;
     seen.add(id);
     out.push({ keywordId: id, text: k.keywordText, matchType: k.matchType, spend: +perf.spend.toFixed(2) });
   }
@@ -623,7 +627,7 @@ async function perfSinceChange(
   return out;
 }
 
-export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<AdEngineResult> {
+export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; currency?: string } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
   const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], needsConfirm: [], revived: [], added: [], notes: [], errors: [], durationMs: 0 };
@@ -682,7 +686,7 @@ export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string }
   // the same text are separate keywords with separate bids, so they are separate decisions.
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   const killedAt = new Map<number, number>();   // kill-op index -> index into out.killed
-  for (const p of killPlan(kt, byId)) {
+  for (const p of killPlan(kt, byId, NEW_KW_BID, killSpendFor(opts.currency))) {
     killedAt.set(killOps.length, out.killed.length);
     killOps.push({ keywordId: p.keywordId, state: "PAUSED" });
     out.killed.push({ text: p.text, matchType: p.matchType, spend: p.spend, keywordId: p.keywordId });
@@ -1050,7 +1054,8 @@ async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
 }
 
 /** Bring floored keywords back, throttled. dryRun previews the exact batch without applying. */
-export async function runReintroduction(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<ReintroRunResult> {
+export async function runReintroduction(opts: { dryRun?: boolean; profileId?: string; currency?: string } = {}): Promise<ReintroRunResult> {
+  const killBar = killSpendFor(opts.currency);   // the trial rope, in this marketplace's currency
   const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
   const start = Date.now();
   const out: ReintroRunResult = {
@@ -1129,7 +1134,7 @@ export async function runReintroduction(opts: { dryRun?: boolean; profileId?: st
       const m = mtd.get(id);
       if (!m) { inTrial++; continue; }                       // promoted, no spend yet -> still on trial
       cohortMonthSpend += m.cost;
-      if (m.cost < KILL_SPEND && m.orders === 0) inTrial++;  // rope not yet used up
+      if (m.cost < killBar && m.orders === 0) inTrial++;      // rope not yet used up
     }
     // Today's cohort spend drives the circuit breaker. Amazon's account day resets at 07:00 UTC.
     // Preferred source is kw_daily (our own history). If it has not been written for today yet, fall
@@ -1281,7 +1286,7 @@ export async function runReintroduction(opts: { dryRun?: boolean; profileId?: st
 export function summarizeReintroduction(r: ReintroRunResult): string {
   const lines = [
     `Reintroduction ${r.dryRun ? "(preview)" : "ran"} — ${r.promoted.length} promoted of ${r.eligible} eligible. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
-    `Gate: ${r.state.introducedToday}/${REINTRO_PER_DAY} promoted today. Reported only: ${r.state.inTrial} unproven in flight (~$${(r.state.inTrial * KILL_SPEND).toFixed(2)} at risk), cohort spend MTD $${r.state.cohortMonthSpend}.`,
+    `Gate: ${r.state.introducedToday}/${REINTRO_PER_DAY} promoted today. Reported only: ${r.state.inTrial} unproven in flight (~${(r.state.inTrial * KILL_SPEND).toFixed(2)} at risk), cohort spend MTD $${r.state.cohortMonthSpend}.`,
     r.blockedBy.length ? `Stopped by: ${r.blockedBy.join(", ")}.` : "",
     r.laddered.length ? `Bid ladder: ${r.laddered.length} stepped up.\n` + r.laddered.map((l) => `  $${l.from.toFixed(2)} -> $${l.to.toFixed(2)}  ${l.keywordText}`).join("\n") : "",
     r.escalated.length ? `NEEDS YOU: ${r.escalated.length} at the $0.85 ceiling and still not spending.\n` + r.escalated.map((e) => `  ${e.keywordText}`).join("\n") : "",

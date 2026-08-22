@@ -1,7 +1,7 @@
 /** Runs the REAL runAdEngine() against the Canadian profile, dryRun. Applies nothing. */
 import { readFileSync } from 'node:fs';
 for(const l of readFileSync('.env.local','utf8').split('\n')){const m=l.match(/^([A-Z0-9_]+)=(.*)$/);if(m&&!(m[1]in process.env))process.env[m[1]]=m[2].trim();}
-const { runAdEngine, summarizeAdEngine } = await import('../src/lib/amazon/ad-engine.ts');
+const { runAdEngine, summarizeAdEngine } = await import('../src/lib/amazon/ad-engine.js');
 const profileId = process.env.ADS_PROFILE_ID_CA!;
 console.log(`running the engine against CA profile ${profileId}, dryRun\n`);
 const r = await runAdEngine({ dryRun: true, profileId });
