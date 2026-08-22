@@ -79,11 +79,12 @@ if(DRY){ console.log('\nDry run. Nothing created.'); process.exit(0); }
 
 const cr=await rq(`${A}/sp/campaigns`,{method:'POST',headers:H(CT.c),body:JSON.stringify({campaigns:[{
   name:'Phone Assured MX - SP - Manual', targetingType:'MANUAL', state:'ENABLED',
-  budget:{budget:BUDGET,budgetType:'DAILY'}, startDate:new Date().toISOString().slice(0,10).replace(/-/g,''),
+  budget:{budget:BUDGET,budgetType:'DAILY'}, startDate:new Date().toISOString().slice(0,10),
   dynamicBidding:{strategy:'LEGACY_FOR_SALES'}}]})});
 const cj=await cr.json().catch(()=>({}));
 const campaignId=(cj.campaigns?.success||[])[0]?.campaignId;
-console.log(`\n1. campaign  HTTP ${cr.status}  id=${campaignId||'FAILED'}  ${JSON.stringify(cj.campaigns?.error||[]).slice(0,200)}`);
+console.log(`\n1. campaign  HTTP ${cr.status}  id=${campaignId||'FAILED'}`);
+if(!campaignId) console.log('   raw:', JSON.stringify(cj).slice(0,600));
 if(!campaignId) process.exit(1);
 await sleep(2000);
 const gr=await rq(`${A}/sp/adGroups`,{method:'POST',headers:H(CT.g),body:JSON.stringify({adGroups:[{
