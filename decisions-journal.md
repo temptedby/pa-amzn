@@ -2181,3 +2181,57 @@ flag was accepted while doing nothing, replacing four live US descriptions. Same
 else this project keeps finding: a control that reads as implemented and is a no-op. And the TBA
 violation above, which is the one that matters: a fact William supplies is not approval to implement
 what it implies.
+
+## 2026-08-22 — A working report queue called broken four times, and the Mexican flagship woke up
+
+**Context.** A verification day. William asked me to check five claims from the previous wrap-up and
+raised one of his own: *"we shouldnt be spending on ads in brazil if we cant use fba"*. Then he asked
+what Canada and Mexico had actually spent, which turned out to be much harder to answer than it
+should have been.
+
+**Options.** On the unanswerable spend question: (A) report the partial budget-usage reading as the
+day's number, (B) declare the international reporting broken and fall back to budget-usage
+permanently, (C) work out why the reports were not completing before concluding anything.
+
+**Decision.** (C), eventually, and only after doing (B) four times first. Every Canadian and Mexican
+report came back "did not complete" and I reported the profiles as possibly having the same v3
+reporting gap we hit on Sponsored Brands in August. They were PENDING, not failed. Given a 35-minute
+budget instead of six to ten minutes, **both completed in 13.8 minutes**.
+
+**Reasoning.** This is the same error we already documented and fixed once. On 2026-08-02 we
+concluded the report queue took nine minutes and built the whole deferred request-now-collect-later
+architecture around it. On 2026-08-17 we recovered Amazon's own createdAt/updatedAt and found the
+queue is a function of the hour: 2.6 minutes mean at 00:00Z, 29.9 minutes at 12-13Z. I was polling
+at 12:41Z, the worst window in the day, and calling a slow queue a broken one.
+
+It matters beyond the embarrassment. The engine's inline wait is 90 seconds. If PR #14 deploys as
+written, the Canadian and Mexican runs will time out on their reports every single time, because
+`report-warm` only warms the US profile. That moves from a known gap to a deploy blocker.
+
+The verification itself produced two useful corrections. Brazil cannot be advertised into at all,
+there are zero Brazilian advertising profiles, so William's concern was structurally impossible
+rather than merely unaddressed. And my own "Canada and Mexico spending with nothing governing them"
+was an overstatement: both were at zero that day, and total international exposure is USD 12.07 a
+day against the US account's USD 745 of authorisation.
+
+The good news came from waiting. Yesterday's Mexican flagship fix, copying `parentage_level` and
+`child_parent_sku_relationship` from the Canadian listing, looked like it had failed: the record sat
+at DISCOVERABLE with no visible offer and its product ad was refused AD_INELIGIBLE. Overnight it
+propagated. The ASIN carrying all 480 reviews now holds the Buy Box in Mexico at MXN 256.25, and the
+reprice from 742.87 to 302.81 also took back the 2-Pack Buy Box against nine competing offers. All
+four SKUs are now buyable in both Canada and Mexico.
+
+**Industry source.** Our own measurement from 2026-08-17 rather than anyone else's: Amazon's report
+`createdAt`/`updatedAt` across 19 reports, which is the only source that has ever told us the truth
+about this queue.
+
+**Trade-offs.** Deliberately did not touch Mexican bids despite 30 hours at zero impressions, because
+changing them now would make the new-campaign-ramp question unanswerable. Deliberately left the
+flagship out of the Mexican campaigns pending William's go, even though it is the best-reviewed ASIN
+and the only one that competes against the retractable segment's MXN 297 median. Accepted that one
+day of trading, one cancelled order and nothing else, is not a signal worth acting on while five of
+the previous day's ten orders are still Pending.
+
+**Status.** Canada verified serving: 738 impressions, 3 clicks, CAD 1.81 over three days, no sales.
+Mexico verified structurally healthy and serving nothing. PR #14 rewritten to cover its real scope.
+Two read-only scripts added. Nothing changed on any account today.
