@@ -10,7 +10,8 @@ import {
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
-  lifetimeOnlyPool, SD_BID_FLOOR, KILL_MIN_ROAS } from "./ad-rules";
+  lifetimeOnlyPool, SD_BID_FLOOR, KILL_MIN_ROAS,
+  isReintroWindow, REINTRO_WINDOW_DAYS } from "./ad-rules";
 
 // William's spec (2026-08-02), written up in .agent/ad-engine-rules-2026-08-02.md:
 // $4 MTD + bad ACOS -> kill for the month; ±10% bid step at the 52% break-even pivot;
@@ -1329,5 +1330,67 @@ describe("the moved ROAS boundaries", () => {
     // The kill line moved and the revive line did NOT. Recorded because it drifted to 2.15 once.
     expect(2.0).toBe(2.0);
     expect(KILL_MIN_ROAS).toBe(1.5);
+  });
+});
+
+// 2026-08-23. William, after finding that 410 distinct words were promoted in August on lifetime
+// evidence, each carrying a fresh $4: "it's not lifetime Roaz, it's only this month is what we
+// qualify. Whether this month they achieve over a 2x ROAS with the attribution. If not, it stays
+// off this month. Then at the start of next month, we bring these keywords back live again if they
+// have a lifetime ROAS over 2X. But that doesn't kick back off ... not within the same month."
+describe("lifetime evidence reopens a word only at the start of a month", () => {
+  const day = (n: number) => new Date(Date.UTC(2026, 8, n, 12, 0, 0));
+
+  it("opens on the 1st", () => {
+    expect(isReintroWindow(day(1))).toBe(true);
+  });
+
+  it("is shut for the whole rest of the month", () => {
+    for (const d of [2, 3, 7, 15, 22, 28, 30]) {
+      expect(isReintroWindow(day(d))).toBe(false);
+    }
+  });
+
+  it("is shut on the day William asked for this, the 23rd", () => {
+    expect(isReintroWindow(new Date("2026-08-23T13:00:00Z"))).toBe(false);
+  });
+
+  it("reads the UTC date, not the local one, because the crons are UTC", () => {
+    // 23:30 on the 1st in UTC is already the 2nd in +01:00. The cron fires on UTC, so the window
+    // has to be judged the same way or the last run of the day is silently skipped.
+    expect(isReintroWindow(new Date("2026-09-01T23:30:00Z"))).toBe(true);
+  });
+
+  it("accepts a millisecond timestamp as well as a Date", () => {
+    expect(isReintroWindow(Date.UTC(2026, 8, 1, 6, 0, 0))).toBe(true);
+    expect(isReintroWindow(Date.UTC(2026, 8, 12, 6, 0, 0))).toBe(false);
+  });
+
+  it("the window can be widened by argument, but defaults to one day", () => {
+    expect(REINTRO_WINDOW_DAYS).toBe(1);
+    expect(isReintroWindow(day(2), 2)).toBe(true);
+    expect(isReintroWindow(day(3), 2)).toBe(false);
+  });
+});
+
+// The tombstone rule this connects to. isPermanentlyDead() has been correct and unused: nothing
+// wrote to kw_tombstone, so the table was empty on 2026-08-23 while 49 August words qualified.
+describe("a word that burned the bar and never converted is dead for good", () => {
+  it("retires $4 with zero orders", () => {
+    expect(isPermanentlyDead({ spend: 4, orders: 0, sales: 0 })).toBe(true);
+    expect(isPermanentlyDead({ spend: 11.87, orders: 0, sales: 0 })).toBe(true);
+  });
+
+  it("does NOT retire a word that converted badly — that is a monthly pause, not a burial", () => {
+    expect(isPermanentlyDead({ spend: 10, orders: 1, sales: 9.49 })).toBe(false);
+  });
+
+  it("does NOT retire a word still under the bar", () => {
+    expect(isPermanentlyDead({ spend: 3.99, orders: 0, sales: 0 })).toBe(false);
+  });
+
+  it("keys on text and match type together, so one copy dying does not bury the others", () => {
+    expect(deadKey("phone tether", "BROAD")).not.toBe(deadKey("phone tether", "EXACT"));
+    expect(deadKey("Phone  Tether ", "broad")).toBe(deadKey("phone tether", "BROAD"));
   });
 });

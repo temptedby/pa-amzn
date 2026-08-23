@@ -90,6 +90,30 @@ export const REINTRO_MAX_ACOS = 0.50;   // William: eligible if never spent, or 
 export const REINTRO_START_BID = 0.25;  // William 2026-08-05: enter LOW, climb only if it fails to spend
 export const REINTRO_LIFETIME_ROAS_MIN = 2.0;  // William 2026-08-05: "past 2x roas or more ... need to reset each month"
 export const REINTRO_LIFETIME_MIN_ORDERS = 2;  // one order is an anecdote, not a ROAS
+// Reintroduction promotes on LIFETIME evidence, so it may only run at the START of a month.
+//
+// William 2026-08-23: "at the start of next month, we bring these keywords back live again if they
+// have a lifetime ROAS over 2X. But that doesn't kick back off ... not within the same month. You
+// look back, oh the lifetime is over 2x ROAS so we're gonna put it live again. That doesn't work.
+// Only this month does the attribution get the ROAS over 2x, then you make it live again this
+// month. Only then."
+//
+// Two different questions, and they were being answered by the same evidence:
+//   WITHIN a month  — only this month's attributed ROAS decides. Off under 1.5x, back on over 2.0x.
+//                     inMonthRevivals() already reads month-to-date and nothing else.
+//   START of a month — lifetime ROAS over 2x brings a floor-parked word back for a fresh look.
+//
+// Running the lifetime rule 6-hourly meant 410 distinct words were promoted in August, each with a
+// fresh $4 of rope. That is $1,640 of authorised spend handed out one drip at a time, and it is the
+// mechanism behind $456.59 of zero-sale spend in a $726.82 month.
+export const REINTRO_WINDOW_DAYS = 1;          // day 1 of the month only
+
+/** Is `now` inside the start-of-month window in which lifetime evidence may promote a keyword? */
+export function isReintroWindow(now: Date | number, days = REINTRO_WINDOW_DAYS): boolean {
+  const d = typeof now === "number" ? new Date(now) : now;
+  return d.getUTCDate() <= days;
+}
+
 export const REINTRO_PER_RUN = 10;             // William 2026-08-06: launch every 6h, ~40/day, all 176 live in ~4.5 days
 export const REINTRO_COHORT_DAILY_CAP = 25;    // $/day across the reintroduced cohort. Amazon's budgets do not
                                                // constrain this account (0.3% used), so the ceiling has to be ours.
