@@ -21,7 +21,7 @@ for(const [cc,pid,ccy] of [['CANADA',process.env.ADS_PROFILE_ID_CA,'CAD'],['MEXI
   let rid=cr.reportId; if(!rid){const m=String(cr.detail||'').match(/([0-9a-f-]{36})/); if(m)rid=m[1];}
   if(!rid){console.log(`\n${cc}: cannot create report — ${JSON.stringify(cr).slice(0,160)}`);continue;}
   let url=null;
-  for(let i=0;i<45;i++){ await sleep(8000);
+  for(let i=0;i<180;i++){ await sleep(8000);
     const s=await (await rq(`${A}/reporting/reports/${rid}`,{headers:H})).json();
     if(s.status==='COMPLETED'){url=s.url;break;} if(s.status==='FAILURE'){break;} }
   console.log(`\n===== ${cc} (${ccy}) ${START} to ${END} =====`);
