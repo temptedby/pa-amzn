@@ -9,7 +9,8 @@ const envtxt=readFileSync('.env.local','utf8');
 for(const l of envtxt.split('\n')){const m=l.match(/^([A-Z0-9_]+)=(.*)$/);if(m&&!(m[1]in process.env))process.env[m[1]]=m[2];}
 const A='https://advertising-api.amazon.com', SP='https://sellingpartnerapi-na.amazon.com', MKT='ATVPDKIKX0DER';
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-const START='2026-08-01', END='2026-08-19';
+const arg=n=>(process.argv.find(a=>a.startsWith('--'+n+'='))||'').split('=')[1];
+const START=arg('start')||'2026-08-01', END=arg('end')||new Date(Date.now()-864e5).toISOString().slice(0,10);
 
 const adTok=(await (await fetch('https://api.amazon.com/auth/o2/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:process.env.ADS_REFRESH_TOKEN,client_id:process.env.ADS_CLIENT_ID,client_secret:process.env.ADS_CLIENT_SECRET})})).json()).access_token;
 const AH=ct=>({Authorization:`Bearer ${adTok}`,'Amazon-Advertising-API-ClientId':process.env.ADS_CLIENT_ID,'Amazon-Advertising-API-Scope':process.env.ADS_PROFILE_ID,'Content-Type':ct,'Accept':ct});
@@ -45,7 +46,7 @@ async function sbDay(day){
 const spTok=(await (await fetch('https://api.amazon.com/auth/o2/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({grant_type:'refresh_token',refresh_token:process.env.SP_API_REFRESH_TOKEN,client_id:process.env.SP_API_CLIENT_ID,client_secret:process.env.SP_API_CLIENT_SECRET})})).json()).access_token;
 const spf=async(p,init)=>{const r=await fetch(`${SP}${p}`,{...init,headers:{'x-amz-access-token':spTok,'content-type':'application/json',...(init?.headers||{})}});const t=await r.text();return{ok:r.ok,status:r.status,json:t?JSON.parse(t):null,text:t};};
 async function allOrders(){
-  const body={reportType:'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',marketplaceIds:[MKT],dataStartTime:'2026-07-31T00:00:00Z',dataEndTime:'2026-08-20T00:00:00Z'};
+  const body={reportType:'GET_FLAT_FILE_ALL_ORDERS_DATA_BY_ORDER_DATE_GENERAL',marketplaceIds:[MKT],dataStartTime:START+'T00:00:00Z',dataEndTime:new Date(new Date(END+'T00:00:00Z').getTime()+864e5).toISOString()};
   const cr=await spf('/reports/2021-06-30/reports',{method:'POST',body:JSON.stringify(body)});
   if(!cr.ok){console.error('orders create',cr.status,cr.text.slice(0,150));return null;}
   const rid=cr.json.reportId; let docId,status;

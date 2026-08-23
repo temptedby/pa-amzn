@@ -1,6 +1,12 @@
 /** READ-ONLY. The whole month at the REAL $2.00 all-in unit cost: every unit sold, ad and organic,
  *  what Amazon took, what we kept, and whether the month is actually up or down.
  *  William 2026-08-21: "$2 a unit our real all in costs". */
+// Ad spend is NOT computed here. It is measured by scripts/tacos.mjs and passed in.
+// A hardcoded default went stale on 2026-08-23 and understated the month's loss by $129.
+const AD_ARG=(process.argv.find(a=>a.startsWith('--ad='))||'').split('=')[1];
+if(!AD_ARG){console.log('\n  NO --ad= GIVEN. Run `node scripts/tacos.mjs` first, then pass its month ad spend:\n  node scripts/business-pnl.mjs --ad=868.21\n');process.exit(1);}
+const AD=Number(AD_ARG);
+
 import { readFileSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 for(const l of readFileSync(new URL('../.env.local',import.meta.url),'utf8').split('\n')){const m=l.match(/^([A-Z0-9_]+)=(.*)$/);if(m&&!(m[1]in process.env))process.env[m[1]]=m[2].trim();}
@@ -51,7 +57,6 @@ for(const [sku,q] of Object.entries(tally)){
 }
 console.log(`${'TOTAL'.padEnd(8)} ${String(U).padStart(6)}  ${R.toFixed(2).padStart(9)}  ${''.padStart(11)}  ${''.padStart(9)}  ${C.toFixed(2).padStart(12)}`);
 console.log(`\nblended break-even ACOS ${(100*C/R).toFixed(1)}%   (ROAS ${(R/C).toFixed(2)}x)`);
-const AD=739.08;  // SP+SB+SD month to date, from scripts/tacos.mjs
 console.log(`\nad spend so far          $${AD.toFixed(2)}`);
 console.log(`contribution on ALL units $${C.toFixed(2)}   (ad-driven AND organic)`);
 console.log(`MONTH SO FAR              $${(C-AD).toFixed(2)}  ${C-AD<0?'DOWN':'UP'}`);
