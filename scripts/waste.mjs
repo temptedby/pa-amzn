@@ -25,3 +25,36 @@ console.log(`\nSP total spend                      $${tot.toFixed(2)}`);
 console.log(`spend that should be OFF today      $${waste.toFixed(2)}   ${(100*waste/tot).toFixed(1)}%   (zero sales, or under the 1.5x line)`);
 console.log(`spend that LOST money               $${loss.toFixed(2)}   ${(100*loss/tot).toFixed(1)}%   (everything under break-even)`);
 console.log(`spend that made money               $${B.profitable[0].toFixed(2)}   ${(100*B.profitable[0]/tot).toFixed(1)}%`);
+
+// ---------------------------------------------------------------------------
+// WHAT IS ACTUALLY RECOVERABLE, which is not the same as what was wasted.
+//
+// William 2026-08-23 sketched it as "$500 of ad spend off, so our ROAS would be 1.4x". The
+// direction is right and the amount is not, for one reason: you cannot cut zero-sale spend in
+// ADVANCE. A word is only known to be a loser after it has spent. What can be cut is the OVERSHOOT
+// past the bar, the words that convert badly, and the repeat of the same lesson next month.
+//
+// Cutting a losing word also removes the sales it did make, so the honest unit is CONTRIBUTION, not
+// spend. At the blended 40.84% contribution rate: cutting a word that spent $10 and sold $9.49
+// saves $10 and costs $3.88, a net gain of $6.12, not $10.
+// ---------------------------------------------------------------------------
+const CONTRIB = 0.4084;
+const net = (spend, sales) => spend - sales * CONTRIB;
+console.log('\n\nWHAT IS RECOVERABLE, in net contribution rather than gross spend\n');
+const bar = 4;
+const zeroRows = rows.filter(r => (+r.cost||0) > 0 && (+r.sales14d||0) === 0);
+const overBar  = zeroRows.filter(r => +r.cost >= bar);
+const overshoot = overBar.reduce((t,r)=>t+(+r.cost - bar), 0);
+const underBar  = zeroRows.filter(r => +r.cost < bar).reduce((t,r)=>t+ +r.cost, 0);
+const R=(what,amount,how)=>console.log(`  ${what.padEnd(46)} $${amount.toFixed(2).padStart(7)}   ${how}`);
+R('overshoot past the $4 bar, zero-sale words', overshoot, 'run the engine hourly, not 6-hourly');
+R('words under 1.0x', net(B.under1[0], B.under1[1]), 'already the live rule, enforced faster');
+R('words 1.0x to 1.5x', net(B.under15[0], B.under15[1]), 'the new 1.5x kill line');
+const addressable = overshoot + net(B.under1[0],B.under1[1]) + net(B.under15[0],B.under15[1]);
+console.log(`  ${'ADDRESSABLE THIS MONTH'.padEnd(46)} $${addressable.toFixed(2).padStart(7)}`);
+console.log('');
+R('zero-sale words that never reached $4', underBar, 'ONLY by promoting fewer words. Not a rule fix.');
+R('the same words re-tried in ~95 days', overBar.reduce((t,r)=>t+ +r.cost,0), 'the tombstone, which had no writer');
+console.log(`\n  Cutting everything under 1.5x leaves SP at $${(B.underBE[0]+B.profitable[0]).toFixed(2)} spend and`);
+console.log(`  $${(B.underBE[1]+B.profitable[1]).toFixed(2)} sales, a ${((B.underBE[1]+B.profitable[1])/(B.underBE[0]+B.profitable[0])).toFixed(2)}x ROAS. That is the ceiling of this exercise,`);
+console.log(`  and it is above the 2.45x break-even. The catch is that it is ${(100*(B.underBE[0]+B.profitable[0])/tot).toFixed(0)}% of current volume.`);
