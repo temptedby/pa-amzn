@@ -50,12 +50,12 @@ describe("shouldKill — $4 MTD + not profitable", () => {
     expect(shouldKill({ spend: 4.5, orders: 3, sales: 20 })).toBe(false); // 4.4x
     expect(shouldKill({ spend: 5.1, orders: 2, sales: 10 })).toBe(false); // 1.96x
   });
-  // The no-flapping guarantee, restated for the 2026-08-21 lines. Killing needs < 1.5x, reviving
-  // needs 2.15x, so nothing in the 0.65-wide band between them can be both.
+  // The no-flapping guarantee. Killing needs < 1.5x, reviving needs 2.0x, so nothing in the
+  // 0.5-wide band between them can be both.
   it("cannot flap: nothing is both killable and revivable", () => {
-    for (const roas of [1.5, 1.63, 1.75, 1.92, 1.99, 2.1]) {
+    for (const roas of [1.5, 1.63, 1.75, 1.92, 1.99]) {
       expect(shouldKill({ spend: 10, orders: 1, sales: 10 * roas })).toBe(false);
-      expect(roas >= 2.15).toBe(false);
+      expect(roas >= 2.0).toBe(false);
     }
   });
 });
@@ -1297,9 +1297,10 @@ describe("Display raises only when it is genuinely absent from the auction (revi
   });
 });
 
-// 2026-08-21. William: "just moving the boundaries a little bit to improve roas". Kill line 1.0x ->
-// 1.5x, revive 2.0x -> 2.15x (his 2.25x with a 5% buffer beneath: "so if roas reaches 2.15 then we
-// turn it on"). The pair has to stay non-overlapping or a keyword oscillates every run.
+// 2026-08-23. William: "ROAS below 1.5, we turn it off ... you wait for it to be above two again
+// with the attribution". Kill line 1.0x -> 1.5x. The REVIVE bar stays at 2.0x: he corrected an
+// attempt to lift it to 2.15 with "i didnt ask min roas to increase to 2.15, go back to 2x roas to
+// make the word visible again". The pair has to stay non-overlapping or a keyword oscillates.
 describe("the moved ROAS boundaries", () => {
   it("switches off below 1.5x", () => {
     expect(KILL_MIN_ROAS).toBe(1.5);
@@ -1318,13 +1319,15 @@ describe("the moved ROAS boundaries", () => {
   });
 
   it("cannot flap: nothing is both killable and revivable on one reading", () => {
-    const REVIVE = 2.15;
+    const REVIVE = 2.0;
     expect(KILL_MIN_ROAS).toBeLessThan(REVIVE);
     // the dead band has to be wide enough that a day's noise cannot cross it
     expect(REVIVE - KILL_MIN_ROAS).toBeGreaterThanOrEqual(0.5);
   });
 
-  it("uses William's 2.15 rather than the arithmetic 2.1375, the stricter of the two", () => {
-    expect(2.15).toBeGreaterThan(2.25 * 0.95);
+  it("does not raise the revive bar as a side effect of lowering the kill bar", () => {
+    // The kill line moved and the revive line did NOT. Recorded because it drifted to 2.15 once.
+    expect(2.0).toBe(2.0);
+    expect(KILL_MIN_ROAS).toBe(1.5);
   });
 });
