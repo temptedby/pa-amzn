@@ -10,8 +10,7 @@ import {
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
-  lifetimeOnlyPool, SD_BID_FLOOR,
-} from "./ad-rules";
+  lifetimeOnlyPool, SD_BID_FLOOR, KILL_MIN_ROAS } from "./ad-rules";
 
 // William's spec (2026-08-02), written up in .agent/ad-engine-rules-2026-08-02.md:
 // $4 MTD + bad ACOS -> kill for the month; ±10% bid step at the 52% break-even pivot;
@@ -32,15 +31,16 @@ describe("shouldKill — $4 MTD + not profitable", () => {
     expect(shouldKill({ spend: 10, orders: 1, sales: 9.49 })).toBe(true); // 0.95x, the real
                                                                          // `anti theft phone strap`
   });
-  it("does NOT kill a keyword between 1x and break-even — it gets its bid cut instead", () => {
-    // The three words the old rule took off the account on 11 August. All are above 1x.
-    expect(shouldKill({ spend: 25.81, orders: 4, sales: 41.96 })).toBe(false); // 1.63x
-    expect(shouldKill({ spend: 7.55, orders: 1, sales: 9.49 })).toBe(false);   // 1.26x
-    expect(shouldKill({ spend: 9.02, orders: 1, sales: 9.49 })).toBe(false);   // 1.05x
+  it("does NOT kill a keyword between 1.5x and break-even — it gets its bid cut instead", () => {
+    // 2026-08-21: the line moved 1.0x -> 1.5x. 1.63x still survives and gets its bid cut; the two
+    // words at 1.26x and 1.05x that used to be spared are now switched off, which is the change.
+    expect(shouldKill({ spend: 25.81, orders: 4, sales: 41.96 })).toBe(false); // 1.63x, spared
+    expect(shouldKill({ spend: 7.55, orders: 1, sales: 9.49 })).toBe(true);    // 1.26x, now off
+    expect(shouldKill({ spend: 9.02, orders: 1, sales: 9.49 })).toBe(true);    // 1.05x, now off
   });
-  it("kills exactly at the 1x line, not a cent below it", () => {
-    expect(shouldKill({ spend: 10, orders: 1, sales: 10 })).toBe(false);  // exactly 1.00x survives
-    expect(shouldKill({ spend: 10, orders: 1, sales: 9.99 })).toBe(true); // a cent under dies
+  it("kills exactly at the 1.5x line, not a cent below it", () => {
+    expect(shouldKill({ spend: 10, orders: 1, sales: 15 })).toBe(false);   // exactly 1.50x survives
+    expect(shouldKill({ spend: 10, orders: 1, sales: 14.99 })).toBe(true); // a cent under dies
   });
   it("still kills at $4 with 0 orders however the sales field reads", () => {
     expect(shouldKill({ spend: 4, orders: 0, sales: 0 })).toBe(true);
@@ -50,12 +50,12 @@ describe("shouldKill — $4 MTD + not profitable", () => {
     expect(shouldKill({ spend: 4.5, orders: 3, sales: 20 })).toBe(false); // 4.4x
     expect(shouldKill({ spend: 5.1, orders: 2, sales: 10 })).toBe(false); // 1.96x
   });
-  // The no-flapping guarantee, restated for the new line. Killing needs < 1.0x, reviving needs
-  // 2.0x, so nothing can be killed and revived by the same numbers. The band is now WIDER.
+  // The no-flapping guarantee, restated for the 2026-08-21 lines. Killing needs < 1.5x, reviving
+  // needs 2.15x, so nothing in the 0.65-wide band between them can be both.
   it("cannot flap: nothing is both killable and revivable", () => {
-    for (const roas of [1.0, 1.25, 1.5, 1.63, 1.75, 1.92, 1.99]) {
+    for (const roas of [1.5, 1.63, 1.75, 1.92, 1.99, 2.1]) {
       expect(shouldKill({ spend: 10, orders: 1, sales: 10 * roas })).toBe(false);
-      expect(roas >= 2.0).toBe(false);
+      expect(roas >= 2.15).toBe(false);
     }
   });
 });
@@ -1060,7 +1060,9 @@ describe("planBids", () => {
   });
 
   it("cuts a dime under 2x and shaves two cents at or above it", () => {
-    const under = planBids([bidCand({ bid: 0.6, spend: 4, sales: 4, orders: 1, clicks: 6, impressions: 300 })]);
+    // sales 7 on spend 4 is 1.75x: under the 2x target so it gets the dime, and above the 1.5x
+    // kill line so it is still alive to be bid on at all.
+    const under = planBids([bidCand({ bid: 0.6, spend: 4, sales: 7, orders: 1, clicks: 6, impressions: 300 })]);
     expect(under.moves[0]).toMatchObject({ toBid: 0.5, direction: "down" });
     const over = planBids([bidCand({ bid: 0.6, spend: 4, sales: 12, orders: 2, clicks: 6, impressions: 300 })]);
     expect(over.moves[0]).toMatchObject({ toBid: 0.58, direction: "down" });
@@ -1073,9 +1075,9 @@ describe("planBids", () => {
     expect(p.killing).toBe(1);
   });
 
-  it("still bids on a word above 1x that the kill now spares", () => {
-    // 1.26x — killed under the old rule, kept and CUT under William's 08-13 line.
-    const p = planBids([bidCand({ bid: 0.6, spend: 7.55, sales: 9.49, orders: 1, clicks: 9, impressions: 400 })]);
+  it("still bids on a word above the kill line that the rule spares", () => {
+    // 1.63x — above the 1.5x line, so it is kept and CUT rather than paused.
+    const p = planBids([bidCand({ bid: 0.6, spend: 25.81, sales: 41.96, orders: 4, clicks: 9, impressions: 400 })]);
     expect(p.killing).toBe(0);
     expect(p.moves[0]).toMatchObject({ direction: "down" });
   });
@@ -1098,7 +1100,7 @@ describe("planBids", () => {
   });
 
   it("ONE SYSTEM: identical numbers give an identical verdict whatever product they came from", () => {
-    const shape = { bid: 0.6, spend: 4, sales: 4, orders: 1, clicks: 6, impressions: 300 };
+    const shape = { bid: 0.6, spend: 4, sales: 7, orders: 1, clicks: 6, impressions: 300 };
     const sp = planBids([bidCand({ ...shape, id: "sp", label: "keyword" })]);
     const sb = planBids([bidCand({ ...shape, id: "sb", label: "sb keyword" })]);
     const sd = planBids([bidCand({ ...shape, id: "sd", label: "sd target" })]);
@@ -1292,5 +1294,37 @@ describe("Display raises only when it is genuinely absent from the auction (revi
     const p = planBids([t({ id: "b", impressions: 0, clicks: 0 })],
       { step: SD_BID_STEP, floor: SD_BID_FLOOR });
     expect(p.moves[0]).toMatchObject({ direction: "up", toBid: 0.10 });
+  });
+});
+
+// 2026-08-21. William: "just moving the boundaries a little bit to improve roas". Kill line 1.0x ->
+// 1.5x, revive 2.0x -> 2.15x (his 2.25x with a 5% buffer beneath: "so if roas reaches 2.15 then we
+// turn it on"). The pair has to stay non-overlapping or a keyword oscillates every run.
+describe("the moved ROAS boundaries", () => {
+  it("switches off below 1.5x", () => {
+    expect(KILL_MIN_ROAS).toBe(1.5);
+  });
+
+  it("still pauses the four words that were bleeding at 1.1x to 1.34x", () => {
+    for (const roas of [1.12, 1.25, 1.34]) {
+      // $10 of sales at this ROAS, so spend = sales / roas, well past the $4 bar
+      const sales = 10, spend = sales / roas;
+      expect(shouldKill({ spend, orders: 1, sales })).toBe(true);
+    }
+  });
+
+  it("leaves a word at 1.6x alone, because a lower bid can still rescue it", () => {
+    expect(shouldKill({ spend: 10 / 1.6, orders: 1, sales: 10 })).toBe(false);
+  });
+
+  it("cannot flap: nothing is both killable and revivable on one reading", () => {
+    const REVIVE = 2.15;
+    expect(KILL_MIN_ROAS).toBeLessThan(REVIVE);
+    // the dead band has to be wide enough that a day's noise cannot cross it
+    expect(REVIVE - KILL_MIN_ROAS).toBeGreaterThanOrEqual(0.5);
+  });
+
+  it("uses William's 2.15 rather than the arithmetic 2.1375, the stricter of the two", () => {
+    expect(2.15).toBeGreaterThan(2.25 * 0.95);
   });
 });

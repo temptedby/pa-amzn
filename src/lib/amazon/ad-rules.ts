@@ -32,12 +32,20 @@ export const KILL_SPEND = 4;      // $ month-to-date before the kill bar applies
 // - $1.42 referral - $2.52 FBA = $4.93 contribution; 4.93/9.49 = 0.519. At or above it we lose money.
 // William 2026-08-02 chose the true break-even over a rounded 50%/55%.
 export const ACOS_PIVOT = 0.52;
-// The line a CONVERTING word is switched off at (William 2026-08-13: "once they're below 1x, we got
-// to turn them off"). Deliberately NOT the 1.923x break-even: between 1x and break-even the word is
-// losing money but still returning cash, and William's instruction is to cut its bid and try to
-// recover it rather than pause it. Below 1x the ads cost more than the sales they produced and no
-// bid fixes that. Kept separate from ACOS_PIVOT, which still steers the direction of the bid step.
-export const KILL_MIN_ROAS = 1.0;
+// The line a CONVERTING word is switched off at. Was 1.0 from William 2026-08-13 ("once they're
+// below 1x, we got to turn them off"); raised to 1.5 on 2026-08-23: "ROAS below 1.5, we turn it
+// off. We can't be having these words crush us ... you can lower the bids, but once it spins and
+// it's not [above 1.5], you wait for it to be above two again with the attribution, or you leave
+// it off."
+//
+// Why the old 1.0 was too generous. Between 1.0x and the 2.45x blended break-even a word returns
+// cash and still loses money, and the previous rule kept it running on the theory that a bid cut
+// could recover it. August measured that theory: at 1.0x, 68 words cleared the $4 bar and burned
+// $520 of $727 Sponsored Products spend at an account ROAS of 0.59. The bid cut is still tried
+// first via nextBid(); 1.5 is the point at which trying stops.
+//
+// Kept separate from ACOS_PIVOT, which still steers the direction of the bid step and stays 0.52.
+export const KILL_MIN_ROAS = 1.5;
 // A FLAT TEN CENTS per run, in BOTH directions. William asked for this on 2026-08-07 ("i asked
 // raising by .10 not 10%") and again on 2026-08-13 for the cut: "dont lower 10% just .10 because
 // 10% will drop quick and the word might not have that much search in that time".
@@ -212,7 +220,7 @@ export function shouldKill(
 ): boolean {
   if (p.spend < killSpend) return false;
   if (p.orders <= 0 || p.sales <= 0) return true;   // never converted — no bid rescues that
-  return p.sales / p.spend < killMinRoas;           // converted, but below 1x — off
+  return p.sales / p.spend < killMinRoas;           // converted, but under the bar — off
 }
 
 /** ±$0.10 flat at the pivot. Below pivot raise, at/above lower; hold if no ACOS signal.

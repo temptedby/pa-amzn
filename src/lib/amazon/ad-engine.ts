@@ -380,10 +380,15 @@ export function killPlan(
 // 3rd sat dark for four weeks. This re-checks every 6h and switches it back on as soon as the credit
 // lands.
 //
-// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below the 52% ACOS pivot,
-// which is 1.923x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
-// and revived by the same data. The 1.923x-2.0x band is deliberately dead space.
-export const REVIVE_MIN_ROAS = 2.0;
+// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below KILL_MIN_ROAS,
+// which is 1.5x; revival needs 2.15x. Nothing sits in both windows, so a keyword cannot be killed
+// and revived by the same data. The 1.5x-2.15x band is deliberately dead space, and it is wider
+// than the old 1.923x-2.0x gap, so a word has to earn its way back rather than drift back.
+//
+// 2.15 is William's number from 2026-08-21: a buffer above 2.0 so a word that lands on 2.0 exactly
+// does not switch straight back on. Restated 2026-08-23: "you wait for it to be above two again
+// with the attribution, or you leave it off."
+export const REVIVE_MIN_ROAS = 2.15;
 
 /** One keyword the $4 kill paused, with the month it happened in. */
 export interface KillLedgerRow { keywordId: string; word: string; matchType: string; month: string }
