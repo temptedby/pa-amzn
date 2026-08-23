@@ -2235,3 +2235,79 @@ the previous day's ten orders are still Pending.
 **Status.** Canada verified serving: 738 impressions, 3 clicks, CAD 1.81 over three days, no sales.
 Mexico verified structurally healthy and serving nothing. PR #14 rewritten to cover its real scope.
 Two read-only scripts added. Nothing changed on any account today.
+
+## 2026-08-23 — the numbers were wrong in five places, and the business has 301 units left
+
+**Context.** A morning review that William interrupted twice, correctly, because the data I was
+giving him did not survive contact with his own Seller Central screen. He quoted $69.84 for 08-22
+against my $70.34, $879 for the month against my $868.21, and said: *"You keep on making errors here
+and giving me poor data ... We need an auditing system, a second brain for you to get your data
+right. Garbage in, garbage out."* By the end of the day the review had become an audit of how the
+numbers are produced, and then a question about whether producing them is worth anything.
+
+**Options.** On the data problem: (A) fix each wrong number as he catches it, (B) re-derive
+everything from scratch each time, (C) find the shape common to the errors and make the failure mode
+structurally impossible. On the business: (1) keep tuning the ad rules, (2) stop and ask whether the
+inventory justifies the spend at all.
+
+**Decision.** (C) and (2).
+
+**Reasoning.** The errors were not independent. Every one was **something that read as complete and
+was not**:
+
+  - `business-pnl.mjs` printed an ad-spend figure that looked computed and was a hardcoded constant
+    four days stale, understating the month's loss by $129.
+  - `tacos.mjs` printed "SB days not returned: 08-12, 08-21" four lines above a month total it had
+    computed over those gaps anyway. I quoted the total and dropped the caveat. $10.79 light.
+  - My own kill-verification reported `0 of 8 proven` while all eight writes had landed, because
+    `/sp/keywords/list` does not return `extendedData` unless asked, so it compared `undefined` to
+    `undefined` and called that a proof.
+  - `kw_tombstone` has been in the schema since it was designed and is read on every reintroduction
+    run. **Nothing had ever written to it.** Empty, while 49 August words had spent $4+ with zero
+    orders.
+  - `shouldRetirePermanently()`, William's three-strikes rule, is defined, unit-tested, and called
+    from nowhere.
+  - And while fixing that: the archive script matched its own table definitions with an anchored
+    `/^CREATE/` against a file where every statement sits under a comment block, created no tables,
+    and failed on first insert.
+
+So the fix could not be diligence. `audit-spend.mjs` now **refuses to print a total when any day is
+missing** and exits non-zero. `business-pnl.mjs` requires `--ad=`. `attribution-rise.mjs` discards a
+day whose month-to-date reading is below the previous day's, because a month-to-date total cannot
+fall and a reading that violates the invariant is a partial run, not data. That last one took three
+attempts: taking the last snapshot of the day gave a fake 191.5% attribution rise, taking the max
+within the day gave the same fake, because BOTH of that day's pulls were short.
+
+On the business. The engine work was real and the ground under it was not. FBA holds **301 units**,
+not the ~2,000 in the wind-down plan: about $3,300 of revenue and $1,350 of contribution if every
+unit sells at full price with no advertising at all. Current spend is $70/day, so nineteen days of
+advertising consumes the entire remaining value of the stock. And the advertising is not what moves
+it: between Aug 1-14 and Aug 15-21 ad spend rose 264% while organic rose 31%, and that 31% is
+overstated because ad sales lag up to fourteen days and are counted as organic until they land.
+Organic sits near $31/day whether we spend $20 or $74. Meanwhile only **$22.37 of $726.82** of
+Sponsored Products spend returned better than break-even, 3.1%.
+
+William's own words at the end were *"i feel its all going in circles"*, and he was right about why:
+I had been tuning the rules that decide HOW to spend when the open question was WHETHER to.
+
+**Industry source.** Our own measurements rather than anyone else's, which is the point. Amazon's
+report retention measured at 96 days by asking for progressively older windows until it refused,
+against the 65 days we had been quoting. The 14-day attribution window confirmed empirically by
+watching figures 5 to 9 days old still rise 18% to 54%.
+
+**Trade-offs.** The audit is slower: Sponsored Brands is one API call per day, retried four times,
+so a month takes twenty minutes rather than five. Refusing to total over gaps means sometimes
+returning nothing where a slightly-wrong number would have been available, which is the correct
+trade and will occasionally be annoying. The history backfill spent four report calls on data with
+no immediate use, justified only because Amazon was about to delete it. Cutting ad spend risks
+organic rank; measured as small, not zero. And the recommendation to stop optimising and start
+winding down is the opposite of what most of this month's engineering assumed.
+
+**Status.** Eight keywords paused and proven by timestamp, $115.50 of August spend. Four months of
+per-keyword history backfilled and owned, 5,889 keyword-days, so the three-month rule can fire on 1
+September instead of October. PR #15 (kill under 1.5x, revive at 2.0x after William corrected my
+2.15) and PR #16 (monthly reintroduction, tombstone writer) open and unmerged; #11, the hourly
+check, still open since 08-20. I am blocked by the permission classifier from merging any of them.
+443 tests pass, tsc clean. August stands at roughly -$320 with seven days to run, and the only lever
+with time to act in seven days is a spend decision, because the attribution window alone is
+fourteen.
