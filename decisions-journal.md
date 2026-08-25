@@ -2311,3 +2311,66 @@ check, still open since 08-20. I am blocked by the permission classifier from me
 443 tests pass, tsc clean. August stands at roughly -$320 with seven days to run, and the only lever
 with time to act in seven days is a spend decision, because the attribution window alone is
 fourteen.
+
+---
+
+## 2026-08-24 — Every rule we argued about works, and the job nobody watched has never run
+
+**Context.** Morning review across two weeks of summaries and journal entries, then a live
+verification pass. Going in, the working theory from three weeks of sessions was that our thresholds
+were wrong: the kill bar, the revive bar, the ACOS pivot, the reintroduction rate. Every session
+since 08-05 has moved a number. Today's live reads say the thresholds are not the problem any more.
+Four of 3,486 targets are misbehaving. The $4 kill fires, the 1.5x judgement holds, the in-month
+revival fired on its own overnight for the first time (`cellphone leash`, killed 08-23 at $4.66,
+back ENABLED at 00:01:30 today on 2.04x). Meanwhile `ad_engine_log` has zero rows with
+`action = 'reactivate'` going back to 2026-06-18, and a live dry run of that job says it would
+re-enable 141 keywords holding $52,215 of lifetime sales.
+
+**Options.**
+1. Run the reactivation today. Rejected on sight: cross-checked against `kw_kill_ledger`, it would
+   reverse 8 of this month's 25 kills. William ruled that out explicitly on 08-23.
+2. Wait for 1 September and let the cron do its job. Rejected: it has had two chances and taken
+   neither, and as written it would fire two $102 bids when it did.
+3. Fix the selector only (cap bids, include ARCHIVED, lift the floor). Incomplete: a correct selector
+   behind a schedule that never fires changes nothing.
+4. Report the finding, name the three defects and the schedule question separately, and ask before
+   touching production code. Chosen.
+
+**Decision.** Nothing was changed. The MR reported the finding, quantified it against live Amazon,
+and put one question to William: fix the reactivation before 1 September so it caps restored bids at
+$0.85, includes archived winners, and lifts the floor-bid ones off $0.10. Held there pending his
+answer, and separately flagged that the schedule itself is unproven and needs answering first.
+
+**Reasoning.** The claim "the monthly reset has never run" is not something a log absence can carry
+on its own, because `persistReactivation()` only writes when candidates exist. So the log alone
+proves nothing. What upgrades it to a finding is the dry run: 141 candidates exist right now, which
+means a run on 1 August would have had candidates, would have applied them, and would have logged.
+It did not. That is the CBC discipline paying off on a negative rather than a positive: the runtime
+call is what separates "the table is empty" from "the job did nothing".
+
+The three defects were found the same way. The $102 bids did not come from reading the reactivation
+code, which looks perfectly reasonable; they came from pulling the live paused keywords and joining
+them to the candidate list. `reactivationCandidates()` sets `state` and never touches `bid`, and
+nothing in the code says otherwise, because nothing in the code is wrong. The bid is wrong, and it
+has been sitting there wrong on a paused keyword where it costs nothing until the day something
+switches it on.
+
+**Industry source.** This is the standard argument for smoke-testing scheduled jobs rather than
+trusting their schedule: a cron that never fires and a cron that fires and finds nothing are
+indistinguishable from the outside, and the usual remedy is a heartbeat that records the RUN, not
+just the OUTCOME. Dead Man's Snitch and Cronitor both exist for exactly this failure mode, and it is
+the same lesson as the 08-18 finding that `ad_engine_log` recorded actions but not runs.
+
+**Trade-offs accepted.** Eight days of runway on the biggest lever we have found, spent waiting for
+an answer rather than acting. Taken deliberately: William's 08-23 rule about in-month revival is
+recent and specific, and the last three days have all included a correction where I widened a stated
+rule rather than implementing it literally. The archived winners in particular are a judgement call
+about what "bring these keywords back live again" covers, and that is his to make, not mine.
+
+Also accepted: no live reading on account health today. `sc-account-status.mjs` returned nothing and
+its run was stopped. Reported as unknown rather than carried forward from 08-21.
+
+**Status.** Nothing shipped. Nothing changed in production. 12 PRs still open, none merged since
+08-17, so the 1.5x bar, the impressions bar, warm-before-engine, the hourly engine and the tombstone
+writer are all still written and unshipped. Month to 08-23: $925.64 spent, $646.40 in ad sales,
+0.70x, 292 units left. Awaiting one answer on the reactivation fix.
