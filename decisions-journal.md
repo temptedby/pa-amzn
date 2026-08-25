@@ -2374,3 +2374,64 @@ its run was stopped. Reported as unknown rather than carried forward from 08-21.
 08-17, so the 1.5x bar, the impressions bar, warm-before-engine, the hourly engine and the tombstone
 writer are all still written and unshipped. Month to 08-23: $925.64 spent, $646.40 in ad sales,
 0.70x, 292 units left. Awaiting one answer on the reactivation fix.
+
+## 2026-08-25 — The engine obeys the rule, and the rule cannot reach the money
+
+**Context.** Morning review became a compliance audit after William asked a precise question: is the
+engine actually following the $4 and 1.5x rules on everything that spends? Three weeks of work has
+gone into the rules that switch words off, and the month is still at 0.69x and -$408.32. Either the
+rules were being ignored, or the rules were not the constraint. That had to be settled with live
+reads, not by reading code.
+
+**Options.** (1) Keep tuning thresholds, which is what the last three weeks did. (2) Read
+`ad_engine_log` and declare compliance from it, which records intent and has already lied once when
+Amazon refused a write. (3) Build a standing compliance check: every entity that spent this month,
+in every ad product and marketplace, month-to-date spend from Amazon joined to a live state
+read-back, naming anything still ENABLED that the rule says should be off. (4) Turn spend off
+outright and argue afterwards.
+
+**Decision.** Option 3, built as `scripts/rule-compliance.mjs`, read-only. It prints two columns,
+what `origin/main` runs today (1.0x) and what William stated on 08-23 (1.5x), so unshipped work
+never reads as a broken engine. A report that will not answer is reported as unread, never as zero.
+No production write was made, because William's instruction to "turn this off immediately" did not
+say which channel and Sponsored Brands at 1.49x is the only one above water.
+
+**Reasoning.** The audit answered the question and then dissolved it. The engine is obeyed: 70 of 70
+qualifying Sponsored Products entities were off on the morning run, Display's one qualifier was off,
+and both Sponsored Brands qualifiers were off. What the audit surfaced instead is that the rule
+cannot reach the money. 119 of 206 spending entities sit under the $4 bar with $209.21 between them,
+untouchable by construction. The words that do cross are stopped at $9.21 on average, not $4,
+because the engine judges on one report snapshot a day. And 50 of the 69 rows that reached $4 never
+converted at all, so no ROAS bar touches them; moving 1.0 to 1.5 catches 7 words worth $97.08.
+
+The real mechanism is a treadmill. 430 words were promoted into the auction in August against 31
+killed, fourteen in for every one out, and those promoted words are 60.9% of Sponsored Products
+spend at 0.48x against 0.75x for the standing account. I had recommended on 08-24 that the intake be
+repointed from untested words to proven lifetime winners. That recommendation is withdrawn: split by
+source, lifetime-promoted words return 0.53x and untested 0.44x. Both are well below the standing
+account, so reaiming the job does not repair the return.
+
+Underneath all of it is an arithmetic no keyword list fixes: 592 clicks bought 26 orders in nine
+days, about 23 clicks per order at $0.96 a click, so roughly $22 of advertising per order against
+$4.55 of contribution. Units are settled order counts, so attribution cannot rescue that number.
+
+**Industry source.** The compliance check follows the control-audit pattern used in configuration
+management: assert the desired state, read the actual state from the system of record, and report
+drift by name rather than by count. AWS Config rules and Chef InSpec both work this way, and both
+treat an unresolvable resource as non-compliant rather than compliant, which is exactly the
+correction William made when he said "could not find is violation".
+
+**Trade-offs accepted.** The check is slow, twenty-five day-calls for Sponsored Brands plus five v3
+reports, and Amazon's queue exceeded 49 minutes twice today. It is a deliberate audit tool rather
+than something on a cron. It also judges against month-to-date, which understates recent sales
+inside the 14-day attribution window, so it can name an entity that is about to convert. That errs
+toward flagging, which is the safer direction for an audit.
+
+**Status.** Built and run twice. Three of my own bugs found and fixed before anything was quoted as
+fact: 18-digit `keywordId` rounded by a bare `JSON.parse` so both Sponsored Brands entities read as
+"not found"; a single access token minted at startup so Mexico died on `Invalid token` after an hour;
+and "not found" counted as a pass. Three live violations stand as of 21:53Z, all zero-sale, all
+having crossed $4 during the day. Canada and Mexico are ungoverned, proven by live HTTP against
+production rather than by reading the git tree: `/api/cron/ad-engine-ca` and `/api/cron/ad-engine-mx`
+both return 404 while every deployed cron returns 401. Four costed shutdown options are with William
+and unanswered.
