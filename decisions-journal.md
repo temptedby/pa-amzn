@@ -2599,3 +2599,84 @@ Summary corrected from "not yet applied" and pushed as `9441524`. `scripts/spend
 running at 50 minutes and has voided its Sponsored Brands section on a single failed day, so the
 no-floor version of the same two questions remains unanswered for that ad product. PR #15 and PR #11
 remain the actual fix and remain unmerged.
+
+## 2026-08-26 (fourth entry) — The price halved, and no keyword rule was ever going to cover that
+
+**Context.** The afternoon began as ordinary delivery: extend PR #15 across all ad products, build
+the 80% cut William asked for, make the hourly check cover Brands and Display. It ended somewhere
+else. Looking for "our top performing keywords" to export to Canada, I deduplicated `kw_lifetime`
+and found the account's whole history sitting at **$19.83 per order** against August's **$11.03**.
+`$19.95` recurs as an exact per-order figure dozens of times. The product used to sell at $19.95
+and now sells at $9.49.
+
+**Options.** (1) Report the keyword list he asked for and move on. (2) Report the list and flag the
+price gap as an aside. (3) Stop, quantify what the price change alone did to ROAS, and put it in
+front of him ahead of the thing he actually asked for. (4) Recommend a price rise.
+
+**Decision.** Option 3, and deliberately not 4. The counterfactual was computed and reported:
+price August exactly as it happened, same clicks, same conversions, same spend, at $19.83 per order
+instead of $11.03, and ad sales go $551 -> $992, ROAS 0.63x -> 1.13x. No keyword changes. Nothing
+was applied to any price. Separately: Mexican ads paused (verified), 100 proven winners added to
+Canada (verified), and three PRs advanced.
+
+**Reasoning.** Three weeks of sessions have moved thresholds: the kill bar, the revive bar, the ACOS
+pivot, the intake rate, and today the 80% cut. Every one was real work on a real defect. None of
+them could have closed this gap, because the gap is not in the rules. A rule decides *which* clicks
+to buy; it cannot change what a converted click is worth.
+
+The same arithmetic then explained the export markets, which is what made it more than a curiosity.
+Break-even ROAS is price divided by contribution, so a thin margin sets a high bar mechanically:
+
+    US       $9.49    keep $3.55    needs 2.67x
+    Canada  $13.59    keep $3.59    needs 3.78x
+    Mexico  $15.11    keep $3.53    needs 4.28x
+
+against a best-ever, measured across 108 proven words, of 2.90x. Only the US is winnable, and only
+just. The cause is one measured line: cross-border FBA is $2.52 in the US, $5.96 in Canada and
+$8.07 in Mexico, because every export unit ships from a US warehouse while the sellers beating us
+hold stock in-country. Canada's own 08-21 reprice, CAD 29.28 -> 18.72, moved its break-even from
+2.10x to 3.78x. Contribution parity with the US worked exactly as designed; the US margin is itself
+too thin to advertise on.
+
+The second finding of the day is smaller and sharper. `scripts/bar-latency.mjs` replays August day
+by day and says $267.46 was spent past a bar that had already been crossed, **92% of it inside the
+qualifying day**. That reverses my own morning ranking: PR #11, the hourly check, is worth more than
+PR #15, the 1.5x bar. Latency, not judgement.
+
+**Industry source.** Unit-economics-before-channel-optimisation is the standard order of operations
+in retail and in performance marketing: contribution margin sets the maximum affordable acquisition
+cost, and no bidding strategy can beat a CAC ceiling that the price has already fixed. Amazon's own
+Remote Fulfilment documentation is explicit that the cross-border fee replaces the domestic rate,
+which is why `getMyFeesEstimate` has been wrong for every export market we have priced.
+
+**Trade-offs accepted.** The lifetime history carries no click counts, so conversion rate across the
+price change is unproven; only revenue per order is measured, and a price cut that doubled
+conversion would tell a different story. Reporting a pricing finding when a keyword list was asked
+for spends the user's attention on something he did not request. Pausing Mexico forfeits any organic
+Mexican order, which two lifetime orders says is small but not zero. And the 100 Canadian keywords
+went live into a market whose kill rule returns 404 in production, bounded only by a CAD 15/day
+budget cap.
+
+**Six corrections, and the pattern in them.** Refunds were 11 / USD 120.88, not 14 / $151.24 / CAD
+26.94, and there is no Canadian refund at all. The `kw_lifetime` totals I first quoted were inflated
+by ~20 overlapping CSV exports. I narrowed William's own rule by dropping the $4 floor from its ROAS
+clause, and he corrected it. I called Mexico's listings inactive off a Seller Central label while the
+Listings API said `DISCOVERABLE, BUYABLE`. I said listing costs nothing, then found a MXN 344/month
+charge, then found it is not separable because the Americas plan is one regional subscription. And I
+framed "raise the bid 10 cents when a word is not spending" as a defect when it is William's own
+rule from 08-05, working as designed; his actual worry, that the $4 kill arrives late, is the
+correct one and is exactly what the latency measurement found.
+
+Five of the six are the same error: **trusting a label, a summary or my own earlier sentence over a
+live read.** The sixth is the opposite failure and the more expensive one, because narrowing a
+stated rule is as quiet as widening it.
+
+**Status.** Applied and verified: Mexican campaigns paused (2 of 2, state and timestamp), 100
+Canadian keywords created (100 of 100, fresh read). Pushed: PR #15 extended, PR #17 opened, PR #11
+extended. Test-merged locally, #15/#11/#12/#8/#16/#6 all clean into main, 467 tests, tsc clean; only
+#14 conflicts. Nothing merged, so none of it is live. New read-only tools: `bar-latency.mjs`,
+`dupe-twins.mjs`, `intl-orders.mjs`, `mx-price-scenarios.mjs`, `ca-price-breakeven.mjs`.
+
+Open and William's: merge #11 then #15 then #17; two `vercel env add` commands; whether to raise
+Canada's price or pause its advertising too. And the number that should shape the week, from the new
+baseline: **87 of 138 US orders last month were organic. We spent $911 to buy the other 51.**
