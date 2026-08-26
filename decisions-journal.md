@@ -2541,3 +2541,61 @@ $18.98 of sales, 0.82x.
 `scripts/spend-truth.mjs` refused its whole Sponsored Brands section after one v2 HSA day failed to
 report, which is the not-found-is-a-violation rule working as intended but leaves the no-floor
 answer for Sponsored Brands unproven until the per-day retry is fixed.
+
+## 2026-08-26 (third entry) — Enforcing a rule by hand proves the rule, not the system
+
+**Context.** Earlier today I reported two keywords converting under 1.5x ROAS as `unshipped`, on the
+grounds that the 1.5 bar lives on PR #15 and `origin/main` still carries `KILL_MIN_ROAS = 1.0`.
+William's reply was "this is untrue question B they should be turned off they are under 1.5roas",
+then "wasting money". Four keywords were live and out of policy: `phone tethered` EXACT at 1.26x,
+`holdmate pro retractable phone holder` EXACT at 1.33x, and two zero-sale words over the $4 bar,
+`retractable cell phone lanyard` PHRASE and `advanced anti-theft phone tether` BROAD. Together
+$23.16 spent this month against $18.98 of sales, 0.82x.
+
+**Options.** (1) Wait for PR #15 to merge and let the engine do it. Rejected: 12 PRs are open and
+nothing has merged since #5 on 08-17, so the wait has no known end while the spend continues.
+(2) Write a one-off script that pauses the four by keywordId. Rejected on a specific mechanism, not
+on taste: `openKills()` reads `kw_kill_ledger` keyed `(keyword_id, month)`, so a kill made outside
+that table can never be revived in-month. Two of the four have already converted once. Killing them
+without a ledger row would convert a reversible pause into a permanent one by accident.
+(3) Run `scripts/kill-below-roas.mjs --roas=1.5 --bar=4`, which already implements William's literal
+rule, pauses, verifies twice and ledgers. Chosen. (4) Merge PR #15 first. Not available to me; the
+push-to-main path requires William.
+
+**Decision.** Ran option 3 dry against a cached report, confirmed the pick list was exactly those
+four and nothing else, then re-ran with `--live` against the same cache.
+
+```
+PUT 207: 4 accepted, 0 refused
+VERIFIED PAUSED (state changed AND lastUpdateDateTime moved): 4 of 4
+ledgered for 2026-08: 4
+```
+
+**Reasoning.** Two parts. First, the verification: a 207 is Amazon accepting the request, and a
+state read-back showing PAUSED cannot distinguish a write that landed from one that landed and was
+reverted. `lastUpdateDateTime` moving is the only evidence that this run changed this keyword, which
+is why the script reads it with `includeExtendedDataFields:true` and compares before and after.
+Second, the ledger: the kill and the revival are one mechanism, not two. Recording the kill is what
+makes it undoable, so a script that pauses without ledgering is not a cheaper version of the rule,
+it is a different and worse rule.
+
+**Industry source.** Same principle as the second entry, seen from the operator's side rather than
+the platform's: in control theory and in on-call practice, the manual override exists so the system
+can be brought back into policy while the durable fix ships, and every use of it is logged as an
+incident rather than as a success. Google's SRE material is explicit that toil is work that is
+manual, repetitive and automatable, and that its correct treatment is to count it and eliminate it,
+not to get good at it. Four keywords paused by hand is toil by that definition. It is the right
+action today and the wrong steady state.
+
+**Trade-offs accepted.** The account is now in a state no deployed code produced, which means the
+live account and `origin/main` disagree about what the bar is. If the engine's own 1.0x logic runs
+before PR #15 merges it will not re-enable these, because it only pauses, but any future reasoning
+that reads main as the source of truth about the account will be wrong. Noted here so it is not
+rediscovered as a mystery. Also accepted: this fixes today's four and nothing structural. The $1,212
+of unspent $4 rope on the 430 ladder words is untouched and is the larger number by fifty times.
+
+**Status.** Applied and verified 2026-08-26. All four PAUSED, all four ledgered for 2026-08.
+Summary corrected from "not yet applied" and pushed as `9441524`. `scripts/spend-truth.mjs` is still
+running at 50 minutes and has voided its Sponsored Brands section on a single failed day, so the
+no-floor version of the same two questions remains unanswered for that ad product. PR #15 and PR #11
+remain the actual fix and remain unmerged.
