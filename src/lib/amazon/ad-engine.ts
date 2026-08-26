@@ -11,6 +11,8 @@ import {
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   lifetimeOnlyPool,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
+  emergencyCuts, overlapKey, killedWordsThisMonth, EMERGENCY_CUT,
+  type EmergencyCandidate,
 } from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
@@ -678,6 +680,37 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     out.killed.push({ text: p.text, matchType: p.matchType, spend: p.spend, keywordId: p.keywordId });
   }
   const killIds = new Set(out.killed.map((k) => k.keywordId));
+
+  // ---- EMERGENCY 80% CUT (William 2026-08-26) --------------------------------------------
+  // "if we're not turning off the keywords, we're lowering the bids by 80%."
+  //
+  // Two populations, one write. A word that earned the kill but is not being switched off, and
+  // every ENABLED copy of a word that IS switched off. The second is the bigger of the two: on
+  // 2026-08-26, 33 of the month's 35 kills still had a live keyword carrying the same text.
+  //
+  // `killedWords` spans the whole month, not just this run, because a twin left running on the 12th
+  // is still taking the same shopper's click today. openKills() is this month's kills that have not
+  // been revived, which is exactly the set whose copies should still be suppressed.
+  const killedWords = new Set<string>(out.killed.map((k) => overlapKey(k.text)));
+  try {
+    await ensureKillLedger();
+    for (const row of await openKills(month)) killedWords.add(overlapKey(row.word));
+  } catch (e) {
+    // A ledger read failure must not silence the rule for THIS run's kills, which are in hand.
+    out.errors.push("emergency overlap ledger: " + (e instanceof Error ? e.message : String(e)));
+  }
+  const emCandidates: EmergencyCandidate[] = [];
+  for (const r of kt) {
+    const k = byId.get(String(r.keywordId));
+    if (!k || k.state !== "ENABLED") continue;
+    emCandidates.push({
+      id: String(k.keywordId), label: k.keywordText, word: k.keywordText,
+      bid: k.bid ?? null,
+      spend: r.cost ?? 0, sales: r.sales14d ?? 0, orders: r.purchases14d ?? 0,
+    });
+  }
+  const emPlan = emergencyCuts(emCandidates, killIds, killedWords, { killSpend: KILL_SPEND });
+  const emIds = new Set(emPlan.cuts.map((c) => c.id));
   // The bids this month's search has already proven a keyword needs. Read once; the loop below
   // never cuts at or below one of these. See ensureBidMemory() for why this table exists.
   const floors = await foundFloors(month);
@@ -700,6 +733,10 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     });
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
     if (killIds.has(String(k.keywordId))) continue;   // paused this run; no bid decision on a dead word
+    // The emergency cut has already decided this one. It deliberately overrides the cooldown, the
+    // found-floor memory and the 14-day shield, so it must not be second-guessed by the ordinary
+    // rules below, and it must not produce a second write on the same keyword in one run.
+    if (emIds.has(String(k.keywordId))) continue;
     {
       // Bid decisions go through memory: cooldown first, then roll back a raise that hurt, then
       // the ordinary +-10% step. Without the cooldown this ran four times a day and compounded.
@@ -742,6 +779,24 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
       });
     }
   }
+  for (const c of emPlan.cuts) {
+    const ev = since.get(c.id);
+    bidOps.push({ keywordId: c.id, bid: c.toBid });
+    out.bids.push({
+      text: c.label, from: c.fromBid, to: c.toBid, acos: 0,
+      reason: c.reason, keywordId: c.id,
+      roasBefore: ev && ev.spend > 0 ? ev.sales / ev.spend : null,
+      impressionsBefore: ev?.impressions ?? 0, clicksBefore: ev?.clicks ?? 0, salesBefore: ev?.sales ?? 0,
+    });
+  }
+  if (emPlan.cuts.length) {
+    const q = emPlan.cuts.filter((c) => c.trigger === "qualified").length;
+    out.notes.push(`emergency ${Math.round(EMERGENCY_CUT * 100)}% cut on ${emPlan.cuts.length} keyword(s): `
+      + `${q} qualified for the kill and were not switched off, ${emPlan.cuts.length - q} overlap a killed word`);
+  }
+  if (emPlan.atFloor) out.notes.push(`${emPlan.atFloor} emergency cut(s) skipped: already at the bid floor`);
+  if (emPlan.blocked) out.notes.push(`${emPlan.blocked} emergency cut(s) blocked: entity or campaign not ENABLED`);
+
   // Observe every bid level even when nothing moved this run. A level only reveals what it
   // produced by being watched while it sits there, so the runs that change nothing are the ones
   // that fill the history in.
@@ -1094,6 +1149,13 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
       const id = String(r.keywordId ?? "");
       if (id) mtd.set(id, { cost: r.cost ?? 0, orders: r.purchases14d ?? 0 });
     }
+    // Words that have earned a switch-off this month. The ladder below must not raise a silent copy
+    // of one of these: the main engine cuts it 80% at :00 and the ladder would walk it back up at
+    // :30, on the same day, having measured nothing. See emergencyCuts() for the rule this defends.
+    const laddersuppressed = killedWordsThisMonth(mtdOut.rows.map((r) => ({
+      text: String((r as { keyword?: string }).keyword ?? ""),
+      spend: r.cost ?? 0, sales: r.sales14d ?? 0, orders: r.purchases14d ?? 0,
+    })));   // USD here; PR #14 carries the currency-scoped bar into this function
 
     // REPORTS PENDING NO LONGER STOPS THE LAUNCH (William 2026-08-08: "we need 40 a day not 20").
     //
@@ -1216,6 +1278,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
             "SELECT keyword_id, word, match_type, current_bid, last_bid_change_at, escalated_at FROM kw_bid_state WHERE ladder_active = 1")
         : { rows: [] as Record<string, unknown>[] };
       const ladderOps: { keywordId: string; bid: number }[] = [];
+      let ladderHeld = 0;
       for (const row of st.rows) {
         const id = String(row.keyword_id);
         const k = byIdRe.get(id);
@@ -1226,6 +1289,11 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
         // double what William specified. So the ladder takes only the keywords the main engine
         // cannot see: the truly silent ones, with no report row at all.
         if (mtd.has(id)) continue;
+        // A silent copy of a word that has earned a switch-off is not "untested and needs a higher
+        // bid". It is a word we are actively suppressing, so the ladder leaves it where the cut put
+        // it. Without this, 37 of the 107 cuts measured on 2026-08-26 would be undone within the
+        // hour, because a cut word stops spending, and not spending is the ladder's only trigger.
+        if (laddersuppressed.has(overlapKey(k.keywordText))) { ladderHeld++; continue; }
         const changedAt = Date.parse(String(row.last_bid_change_at ?? "")) || 0;
         const v = ladderVerdict({
           bid: Number(row.current_bid ?? k.bid ?? 0),
@@ -1239,6 +1307,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
           out.escalated.push({ keywordId: id, keywordText: k.keywordText, bid: v.bid });
         }
       }
+      if (ladderHeld) out.notes.push(`ladder held ${ladderHeld} keyword(s): a copy of the word has earned a switch-off`);
       if (!dryRun && ladderOps.length) {
         const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: ladderOps }, KW_CT);
         if (!r.ok) { out.errors.push(`ladder: ${r.status}`); out.laddered = []; }
