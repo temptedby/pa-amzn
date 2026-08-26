@@ -258,6 +258,184 @@ export function nextBid(
   return bidC / 100;
 }
 
+// ---------------------------------------------------------------------------
+// EMERGENCY BID CUT (William 2026-08-26)
+// ---------------------------------------------------------------------------
+//
+// "if we're not turning off the keywords, we're lowering the bids by 80%. As soon as they get
+//  below 1.5 ROAS or keywords spend $4 without converting."
+//
+// The gap this closes was measured on 2026-08-26. Two separate leaks, one answer.
+//
+// LEAK 1, the overlap. 33 of August's 35 kills still had an ENABLED keyword with the SAME TEXT
+// somewhere else in the account, and 17 of those matched on match type as well. `holdmate pro
+// retractable phone holder` EXACT was paused at 10:20Z while an identical EXACT in another campaign
+// kept running and had been re-bid UP by the engine ten hours earlier. The kill judges a keyword
+// id; the shopper types a word. Pausing one id does not stop the word, it just moves the spend to a
+// sibling that has not personally crossed $4 yet, so no rule reaches it.
+//
+// LEAK 2, the qualifying word we cannot switch off. Three ways that happens. A pause into a
+// non-ENABLED campaign comes back 207 and changes nothing. A bar that has not shipped yet cannot
+// fire at all. And, the big one, emergencyQualifies() is deliberately WIDER than shouldKill(): a
+// word converting under 1.5x is cut at any spend, while the kill still waits for $4. So the cut
+// reaches words the pause is not entitled to touch yet, which is the whole point of it.
+//
+// WHY A CUT RATHER THAN ANOTHER PAUSE. A pause is the thing we already cannot land in these cases.
+// A bid is a different write on a different field, and where the pause is refused for campaign
+// state the cut is refused too, which is reported rather than assumed. Where it CAN land, an 80%
+// cut takes a $0.85 word to $0.17 and its share of the auction with it.
+//
+// WHAT IT DELIBERATELY OVERRIDES. This cut ignores BID_COOLDOWN_HOURS, the found-floor memory and
+// the 14-day attribution shield, all three of which exist to stop the engine cutting a word that
+// might still be working. A word that has taken $4 with no sale, or is converting under 1.5x, is
+// not that word. William asked for "immediately" and these three are the only things that could
+// make it later.
+//
+// IT REPEATS. A word still qualifying on the next run is cut again, so a bid walks to the floor in
+// two or three runs and stays there until the pause lands or the word recovers. That is the point:
+// "save some money on the bids until the keywords are actually turned off." The floor clamp bounds
+// it, so this can never produce a bid Amazon rejects.
+export const EMERGENCY_CUT = 0.80;
+
+export interface EmergencyCandidate {
+  id: string;
+  /** display name for the log and the email */
+  label: string;
+  /** the keyword TEXT, which is what overlaps. Match type is deliberately not part of the key:
+   *  a PHRASE copy of a killed EXACT word answers the same shopper query. */
+  word: string;
+  bid: number | null;
+  spend: number; sales: number; orders: number;
+  /** false when the entity or its campaign is not ENABLED, so Amazon would answer 207 and
+   *  change nothing. Reported rather than silently attempted. */
+  writable?: boolean;
+}
+
+export interface EmergencyCut {
+  id: string; label: string; word: string;
+  fromBid: number; toBid: number;
+  /** "qualified" = this entity earned the kill itself. "overlap" = a copy of it is being killed. */
+  trigger: "qualified" | "overlap";
+  reason: string;
+}
+
+export interface EmergencyPlan {
+  cuts: EmergencyCut[];
+  /** wanted a cut but the entity or its campaign is not ENABLED */
+  blocked: number;
+  /** wanted a cut and is already at or below where the cut would land */
+  atFloor: number;
+}
+
+/**
+ * The words that have earned being switched off this month, whatever their state is right now.
+ *
+ * Derived from the month's own report rather than from a kill log, deliberately. A word killed on
+ * the 12th is PAUSED today, so it contributes no new kill row on the 20th, and a set built from
+ * "what did we pause this run" would stop suppressing its live copies the moment the original went
+ * quiet. Its month-to-date numbers still satisfy shouldKill, so this set does not forget.
+ *
+ * State is not consulted at all: this answers "should this word be off", not "is it off".
+ */
+export function killedWordsThisMonth(
+  rows: { text: string; spend: number; sales: number; orders: number }[],
+  opts: { killSpend?: number; killMinRoas?: number } = {},
+): Set<string> {
+  const out = new Set<string>();
+  for (const r of rows) {
+    if (!r.text) continue;
+    if (shouldKill({ spend: r.spend, orders: r.orders, sales: r.sales }, opts.killSpend, opts.killMinRoas))
+      out.add(overlapKey(r.text));
+  }
+  return out;
+}
+
+/**
+ * Does this entity earn the 80% cut on its OWN numbers?
+ *
+ * William 2026-08-26, and the two clauses are separate on purpose: "As soon as they get below 1.5
+ * ROAS OR keywords spend $4 without converting."
+ *
+ *   converted, under KILL_MIN_ROAS  -> cut, at ANY spend
+ *   never converted, past KILL_SPEND -> cut
+ *
+ * This is NOT shouldKill(). shouldKill() requires $4 on both paths, so a word converting at 1.2x on
+ * $2 is invisible to it and keeps its bid. That word is the reason this predicate has no spend floor
+ * on the converting path: he asked for the cut when the ROAS is seen, not when the spend is.
+ *
+ * I built it gated on $4 first and he had already ruled that out in the same sentence. Written down
+ * because narrowing a stated rule spends money exactly as quietly as widening one.
+ */
+export function emergencyQualifies(
+  p: Perf,
+  killSpend = KILL_SPEND,
+  killMinRoas = KILL_MIN_ROAS,
+): boolean {
+  if (p.orders > 0 && p.sales > 0) return p.sales / p.spend < killMinRoas;
+  return p.spend >= killSpend;
+}
+
+/** Where an 80% cut lands, in whole cents, never below the floor Amazon will accept. */
+export function emergencyBid(currentBid: number, floor = BID_FLOOR): number {
+  const floorC = Math.round(floor * 100);
+  const baseC = Math.max(floorC, Math.round((currentBid > 0 ? currentBid : floor) * 100));
+  return Math.max(floorC, Math.round(baseC * (1 - EMERGENCY_CUT))) / 100;
+}
+
+/** Normalised overlap key. Amazon matches keyword text case-insensitively and collapses runs of
+ *  whitespace, so "Phone  Tether" and "phone tether" are the same word to a shopper. */
+export function overlapKey(word: string): string {
+  return String(word ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+/**
+ * Every ENABLED entity whose bid must be slashed this run, for either reason.
+ *
+ * PURE. It takes the ids being paused this run and the words already off, and returns the cuts.
+ * Nothing here talks to Amazon or to the database, so every branch is unit-testable.
+ *
+ * `killedNow` are ids the pause is being applied to in THIS run: they are being turned off, so they
+ * get no bid write. Two writes on one entity in one run is how a log ends up contradicting itself.
+ */
+export function emergencyCuts(
+  live: EmergencyCandidate[],
+  killedNow: Set<string>,
+  killedWords: Set<string>,
+  opts: { killSpend?: number; killMinRoas?: number; floor?: number } = {},
+): EmergencyPlan {
+  const floor = opts.floor ?? BID_FLOOR;
+  const words = new Set([...killedWords].map(overlapKey));
+  const out: EmergencyPlan = { cuts: [], blocked: 0, atFloor: 0 };
+
+  for (const c of live) {
+    if (killedNow.has(String(c.id))) continue;            // being switched off; the kill owns it
+
+    const perf: Perf = { spend: c.spend, orders: c.orders, sales: c.sales };
+    const qualified = emergencyQualifies(perf, opts.killSpend, opts.killMinRoas);
+    const overlaps = words.has(overlapKey(c.word));
+    if (!qualified && !overlaps) continue;
+
+    const from = c.bid && c.bid > 0 ? c.bid : floor;
+    const to = emergencyBid(from, floor);
+    if (to >= from) { out.atFloor++; continue; }           // nothing left to cut
+    if (c.writable === false) { out.blocked++; continue; }
+
+    const roas = c.spend > 0 ? c.sales / c.spend : 0;
+    out.cuts.push({
+      id: String(c.id), label: c.label, word: c.word, fromBid: from, toBid: to,
+      trigger: qualified ? "qualified" : "overlap",
+      reason: qualified
+        ? (c.orders <= 0 || c.sales <= 0
+            ? `emergency: $${c.spend.toFixed(2)} spent, no sale, and not being switched off`
+            : `emergency: ${roas.toFixed(2)}x on $${c.spend.toFixed(2)}, and not being switched off`)
+        : `emergency: overlaps "${c.word}", which is switched off`,
+    });
+  }
+  // Biggest cut first, so a truncated email leads with the most expensive word.
+  out.cuts.sort((a, b) => (b.fromBid - b.toBid) - (a.fromBid - a.toBid));
+  return out;
+}
+
 export type Verdict =
   | { action: "kill" }
   | { action: "bid"; bid: number }
@@ -1248,6 +1426,10 @@ export interface BidCandidate {
   id: string;
   /** display name for logs and Telegram; never used in a decision */
   label: string;
+  /** the keyword TEXT, used ONLY by the emergency overlap cut. Absent for entities that have no
+   *  text to overlap on, such as a Display audience, which can then only be cut on its own
+   *  numbers. Never used by the ordinary bid rules. */
+  word?: string;
   bid: number | null;
   spend: number; sales: number; orders: number; clicks: number; impressions?: number;
   /** false when the entity, or the campaign holding it, is not ENABLED. Amazon answers 207 and
@@ -1275,6 +1457,8 @@ export interface BidPlan {
   blocked: number;
   /** the $4 rule owns these; the planner never bids on something being switched off */
   killing: number;
+  /** slashed 80% because a copy of the word is being switched off (William 2026-08-26) */
+  emergency: number;
 }
 
 /**
@@ -1288,6 +1472,9 @@ export function planBids(
   candidates: BidCandidate[],
   opts: {
     defaultBid?: number; killSpend?: number; killMinRoas?: number;
+    /** lowercased texts of entities being switched off, so their live copies are cut 80% rather
+     *  than left bidding. Omit and the overlap half of the emergency rule simply does not fire. */
+    killedWords?: Set<string>;
     /** step size per move. Sponsored Display uses SD_BID_STEP (5c); the others use a flat dime. */
     step?: number;
     /** lowest bid a cut may reach. Display goes to SD_BID_FLOOR ($0.02, Amazon's own limit);
@@ -1298,11 +1485,44 @@ export function planBids(
 ): BidPlan {
   const defaultBid = opts.defaultBid ?? BID_FLOOR;
   const floor = opts.floor ?? BID_FLOOR;
-  const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0 };
+  const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0, emergency: 0 };
+  const killedWords = new Set([...(opts.killedWords ?? [])].map(overlapKey));
 
   for (const c of candidates) {
     const perf: Perf = { spend: c.spend, orders: c.orders, sales: c.sales };
     if (shouldKill(perf, opts.killSpend, opts.killMinRoas)) { out.killing++; continue; }
+
+    // EMERGENCY 80% CUT (William 2026-08-26). Checked BEFORE searchStep, and it overrides the
+    // ceiling, the shave and the ordinary dime, because this is not a search for the right bid. It
+    // is suppression until the entity can be switched off.
+    //
+    // Two ways in, and they reach different entities:
+    //   qualified — its own numbers earn the cut. WIDER than the shouldKill() line above, which
+    //               needs $4 on both paths, so a target converting at 1.2x on $2 lands here.
+    //   overlap   — a copy of this word is being switched off. The shopper types a word; the kill
+    //               pauses an id. Without this the spend just moves to the sibling.
+    const emQualified = emergencyQualifies(perf, opts.killSpend, opts.killMinRoas);
+    const emOverlap = !!c.word && killedWords.has(overlapKey(c.word));
+    if (emQualified || emOverlap) {
+      const from = c.bid && c.bid > 0 ? c.bid : (opts.defaultBid ?? BID_FLOOR);
+      const to = emergencyBid(from, floor);
+      if (to < from) {
+        if (c.writable === false) { out.blocked++; continue; }
+        const roas = c.spend > 0 ? c.sales / c.spend : 0;
+        out.emergency++;
+        out.moves.push({
+          id: c.id, label: c.label, fromBid: from, toBid: to, direction: "down",
+          reason: emQualified
+            ? (c.orders <= 0 || c.sales <= 0
+                ? `emergency: $${c.spend.toFixed(2)} spent, no sale, and not being switched off`
+                : `emergency: ${roas.toFixed(2)}x, and not being switched off`)
+            : `emergency: overlaps "${c.word}", which is switched off`,
+        });
+        continue;
+      }
+      // Already at or below where the cut would land. Fall through: searchStep may still hold it,
+      // and there is nothing here worth a second write.
+    }
 
     const base = c.bid && c.bid > 0 ? c.bid : defaultBid;
     const since: SinceChange = {

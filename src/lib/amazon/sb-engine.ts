@@ -31,7 +31,7 @@ import {
   type SbKeyword,
 } from "./sb-v2";
 import {
-  shouldKill, KILL_SPEND, KILL_MIN_ROAS, planBids,
+  shouldKill, KILL_SPEND, KILL_MIN_ROAS, planBids, killedWordsThisMonth,
   type Perf, type BidCandidate, type BidPlan,
 } from "./ad-rules";
 
@@ -204,14 +204,14 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
     const k = byId.get(keywordId);
     if (!k || k.state !== "ENABLED") continue;
     candidates.push({
-      id: keywordId, label: `${p.text} (${p.match})`, bid: k.bid ?? null,
+      id: keywordId, label: `${p.text} (${p.match})`, word: p.text, bid: k.bid ?? null,
       spend: p.spend, sales: p.sales, orders: p.orders, clicks: p.clicks,
       writable: camps.get(k.campaignId)?.state === "ENABLED",
     });
   }
   const ceilings = await approvedCeilings("SPONSORED_BRANDS");
   for (const c of candidates) c.approvedCeiling = ceilings.get(c.id) ?? null;
-  const bidPlan = planBids(candidates);
+  const bidPlan = planBids(candidates, { killedWords: killedWordsThisMonth([...perf.values()]) });
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
     entityId: c.id, label: c.label, bid: c.bid ?? 0,
