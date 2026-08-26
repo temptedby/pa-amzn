@@ -32,12 +32,20 @@ export const KILL_SPEND = 4;      // $ month-to-date before the kill bar applies
 // - $1.42 referral - $2.52 FBA = $4.93 contribution; 4.93/9.49 = 0.519. At or above it we lose money.
 // William 2026-08-02 chose the true break-even over a rounded 50%/55%.
 export const ACOS_PIVOT = 0.52;
-// The line a CONVERTING word is switched off at (William 2026-08-13: "once they're below 1x, we got
-// to turn them off"). Deliberately NOT the 1.923x break-even: between 1x and break-even the word is
-// losing money but still returning cash, and William's instruction is to cut its bid and try to
-// recover it rather than pause it. Below 1x the ads cost more than the sales they produced and no
-// bid fixes that. Kept separate from ACOS_PIVOT, which still steers the direction of the bid step.
-export const KILL_MIN_ROAS = 1.0;
+// The line a CONVERTING word is switched off at. Was 1.0 from William 2026-08-13 ("once they're
+// below 1x, we got to turn them off"); raised to 1.5 on 2026-08-23: "ROAS below 1.5, we turn it
+// off. We can't be having these words crush us ... you can lower the bids, but once it spins and
+// it's not [above 1.5], you wait for it to be above two again with the attribution, or you leave
+// it off."
+//
+// Why the old 1.0 was too generous. Between 1.0x and the 2.45x blended break-even a word returns
+// cash and still loses money, and the previous rule kept it running on the theory that a bid cut
+// could recover it. August measured that theory: at 1.0x, 68 words cleared the $4 bar and burned
+// $520 of $727 Sponsored Products spend at an account ROAS of 0.59. The bid cut is still tried
+// first via nextBid(); 1.5 is the point at which trying stops.
+//
+// Kept separate from ACOS_PIVOT, which still steers the direction of the bid step and stays 0.52.
+export const KILL_MIN_ROAS = 1.5;
 // A FLAT TEN CENTS per run, in BOTH directions. William asked for this on 2026-08-07 ("i asked
 // raising by .10 not 10%") and again on 2026-08-13 for the cut: "dont lower 10% just .10 because
 // 10% will drop quick and the word might not have that much search in that time".
@@ -193,26 +201,38 @@ export function acosOf(p: Perf): number | null {
  * below 2x. This function simply stops overruling them with a pause.
  *
  * The exit still exists, it just runs through the bid now. A word being cut every 6 hours either
- * recovers as the cheaper clicks lift its ROAS, or keeps failing and falls under 1.0x, where this
- * rule takes it off. Below 1x we get back less cash than the ads cost, before a penny of product
- * cost, so there is nothing left for a cheaper bid to rescue.
+ * recovers as the cheaper clicks lift its ROAS, or keeps failing and falls under KILL_MIN_ROAS,
+ * where this rule takes it off. William moved that line from 1.0x to 1.5x on 2026-08-23: between
+ * 1.0x and 1.5x a word returns cash and still loses money on every unit, and August measured what
+ * waiting for the bid cut costs.
  *
  * `orders === 0` is untouched and still an immediate kill: a word with no conversion at all has
  * never proved it can work, so there is no bid at which it is known to be worth buying.
  *
- * NO FLAPPING, still by arithmetic rather than a timer. This kills below 1.0x; REVIVE_MIN_ROAS
- * brings a word back at 2.0x. The 1.0x-2.0x band is dead space owned by the bid rules, and it is
- * WIDER than the 1.923x-2.0x band it replaces, so that guarantee is stronger than before.
+ * ONE BAR, EVERY AD PRODUCT. William 2026-08-26: the 1.5x line has to hold "across all ad
+ * categories". Sponsored Products keywords, Sponsored Brands keywords, Sponsored Display targets
+ * and the campaign-level sweep all decide here and nowhere else, so there is exactly one place the
+ * bar can be read or changed. `killMinRoas` exists for tests and for a caller that must be
+ * explicit; no engine passes it, and ad-rules.test.ts asserts each entry point lands on
+ * KILL_MIN_ROAS rather than on a number of its own.
+ *
+ * There is deliberately NO pivot parameter. Until 2026-08-26 this took `_pivot` and every caller
+ * threaded ACOS_PIVOT through it, which read as though 52% still steered the kill; it had not since
+ * 2026-08-13. A parameter that changes nothing is the same defect this project keeps finding, so it
+ * is gone rather than renamed. ACOS_PIVOT still steers the DIRECTION of the bid step in nextBid().
+ *
+ * NO FLAPPING, still by arithmetic rather than a timer. This kills below 1.5x; REVIVE_MIN_ROAS
+ * brings a word back at 2.0x. The 1.5x-2.0x band is dead space owned by the bid rules, so no
+ * keyword can be killed and revived by the same numbers.
  */
 export function shouldKill(
   p: Perf,
   killSpend = KILL_SPEND,
-  _pivot = ACOS_PIVOT,
   killMinRoas = KILL_MIN_ROAS,
 ): boolean {
   if (p.spend < killSpend) return false;
   if (p.orders <= 0 || p.sales <= 0) return true;   // never converted — no bid rescues that
-  return p.sales / p.spend < killMinRoas;           // converted, but below 1x — off
+  return p.sales / p.spend < killMinRoas;           // converted, but under the bar — off
 }
 
 /** ±$0.10 flat at the pivot. Below pivot raise, at/above lower; hold if no ACOS signal.
@@ -249,7 +269,7 @@ export function decide(
   p: Perf,
   opts: { killSpend?: number; step?: number; pivot?: number; floor?: number; cap?: number } = {},
 ): Verdict {
-  if (shouldKill(p, opts.killSpend, opts.pivot)) return { action: "kill" };
+  if (shouldKill(p, opts.killSpend)) return { action: "kill" };
   const bid = nextBid(currentBid, p, opts);
   if (Math.abs(bid - (currentBid || 0)) >= 0.01) return { action: "bid", bid };
   return { action: "hold" };
@@ -1282,7 +1302,7 @@ export function planBids(
 
   for (const c of candidates) {
     const perf: Perf = { spend: c.spend, orders: c.orders, sales: c.sales };
-    if (shouldKill(perf, opts.killSpend, undefined, opts.killMinRoas)) { out.killing++; continue; }
+    if (shouldKill(perf, opts.killSpend, opts.killMinRoas)) { out.killing++; continue; }
 
     const base = c.bid && c.bid > 0 ? c.bid : defaultBid;
     const since: SinceChange = {

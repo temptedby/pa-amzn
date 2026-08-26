@@ -25,10 +25,10 @@ describe("Sponsored Display $4 kill — the rule Products and Brands already use
     expect(p.kill[0].acos).toBe(2);
   });
 
-  it("SPARES a target between 1x and break-even — it gets its bid cut, not a pause", () => {
-    // $8 -> $10 is 1.25x: losing money against the 1.923x break-even, but still returning cash.
-    // "at a 1.63 we need to attempt to lower the keyword bid before turning off" (William 08-13).
-    const p = selectSdKills([perf("t1", { spend: 8, orders: 2, sales: 10 })], LIVE, CAMPS);
+  it("SPARES a target between 1.5x and break-even — it gets its bid cut, not a pause", () => {
+    // $8 -> $13 is 1.63x: losing money against break-even, but still returning cash and above the
+    // 1.5x line. "at a 1.63 we need to attempt to lower the keyword bid before turning off" (08-13).
+    const p = selectSdKills([perf("t1", { spend: 8, orders: 2, sales: 13 })], LIVE, CAMPS);
     expect(p.kill).toHaveLength(0);
   });
 

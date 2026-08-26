@@ -15,8 +15,8 @@ describe("selectCampaignsToKill — shared $4 rule at campaign level", () => {
   it("flags a campaign over $4 that returns LESS than 1x", () => {
     expect(selectCampaignsToKill([C({ spend: 8, orders: 2, sales: 7.9 })])).toHaveLength(1); // 0.99x
   });
-  it("SPARES a campaign over $4 between 1x and break-even", () => {
-    expect(selectCampaignsToKill([C({ spend: 8, orders: 2, sales: 10 })])).toHaveLength(0); // 1.25x
+  it("SPARES a campaign over $4 between 1.5x and break-even", () => {
+    expect(selectCampaignsToKill([C({ spend: 8, orders: 2, sales: 13 })])).toHaveLength(0); // 1.63x
   });
   it("PROTECTS a profitable campaign past $4", () => {
     expect(selectCampaignsToKill([C({ spend: 6, orders: 5, sales: 40 })])).toHaveLength(0); // 6.7x

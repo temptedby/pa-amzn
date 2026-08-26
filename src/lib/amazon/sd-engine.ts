@@ -47,7 +47,7 @@ import { recordBidRun, type LedgerObservation } from "./bid-ledger";
 import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
-import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT, type Perf,
+import { shouldKill, acosOf, KILL_SPEND, type Perf,
   planBids, KILL_MIN_ROAS, type BidCandidate, type BidPlan,
   SD_BID_STEP, SD_START_BID, SD_BID_COOLDOWN_HOURS, SD_BID_FLOOR,
 } from "./ad-rules";
@@ -84,21 +84,23 @@ export interface SdKillPlan {
  * PURE selector, unit-tested without the API.
  *
  * Each target is judged on its OWN spend against the shared rule: $4+ month-to-date AND
- * unprofitable, meaning no orders at all or an ACOS at/above the 52% break-even pivot. Nothing is
- * grouped, nothing is summed across targets, and one target's verdict never touches another's.
+ * unprofitable, meaning no orders at all or a ROAS under KILL_MIN_ROAS (1.5x since 2026-08-23).
+ * Display does not get a bar of its own — it calls the same shouldKill() Products and Brands call,
+ * so the line can only be changed in one place. Nothing is grouped, nothing is summed across
+ * targets, and one target's verdict never touches another's.
  */
 export function selectSdKills(
   perf: SdTargetPerf[],
   byId: Map<string, SdTargetState>,
   enabledCampaigns: Set<string>,
   killSpend = KILL_SPEND,
-  pivot = ACOS_PIVOT,
+  killMinRoas = KILL_MIN_ROAS,
 ): SdKillPlan {
   const plan: SdKillPlan = { kill: [], survived: [], alreadyOff: 0 };
   for (const p of perf) {
     const m: Perf = { spend: p.spend, orders: p.orders, sales: p.sales };
     const acos = acosOf(m);
-    if (!shouldKill(m, killSpend, pivot)) {
+    if (!shouldKill(m, killSpend, killMinRoas)) {
       if (p.spend >= killSpend) {
         plan.survived.push({ targetId: p.targetId, text: p.text, spend: +p.spend.toFixed(2), acos: acos === null ? null : +acos.toFixed(2) });
       }

@@ -31,7 +31,7 @@ import {
   type SbKeyword,
 } from "./sb-v2";
 import {
-  shouldKill, KILL_SPEND, ACOS_PIVOT, KILL_MIN_ROAS, planBids,
+  shouldKill, KILL_SPEND, KILL_MIN_ROAS, planBids,
   type Perf, type BidCandidate, type BidPlan,
 } from "./ad-rules";
 
@@ -168,8 +168,9 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
   const [live, camps] = await Promise.all([fetchSbKeywords(cfg, token), fetchSbCampaigns(cfg, token)]);
   const byId = new Map<string, SbKeyword>(live.map((k) => [k.keywordId, k]));
 
-  // (4) decide, using the SAME rule Sponsored Products uses: $4+ month-to-date AND unprofitable
-  //     (no sale at all, or ACOS at/above the 52% break-even pivot).
+  // (4) decide, using the SAME rule Sponsored Products and Display use: $4+ month-to-date AND
+  //     unprofitable (no sale at all, or a ROAS under KILL_MIN_ROAS, 1.5x since 2026-08-23).
+  //     Brands has no bar of its own; shouldKill() is the only place the line is written down.
   const ops: { keywordId: string; adGroupId: string; state: string }[] = [];
   const pending: SbKillRow[] = [];
   for (const [keywordId, p] of perf) {

@@ -380,9 +380,15 @@ export function killPlan(
 // 3rd sat dark for four weeks. This re-checks every 6h and switches it back on as soon as the credit
 // lands.
 //
-// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below the 52% ACOS pivot,
-// which is 1.923x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
-// and revived by the same data. The 1.923x-2.0x band is deliberately dead space.
+// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below KILL_MIN_ROAS,
+// which is 1.5x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
+// and revived by the same data. The 1.5x-2.0x band is deliberately dead space.
+//
+// 2.0 is William's number, restated 2026-08-23: "i didnt ask min roas to increase to 2.15, go back
+// to 2x roas to make the word visible again". A 2.15 buffer was briefly introduced on the theory
+// that a word landing on exactly 2.0 should not switch straight back on. That was my inference from
+// a different conversation, not his instruction, and it made a word 7.5% harder to recover than he
+// asked for. The bar is 2.0.
 export const REVIVE_MIN_ROAS = 2.0;
 
 /** One keyword the $4 kill paused, with the month it happened in. */
