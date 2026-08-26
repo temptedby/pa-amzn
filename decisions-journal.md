@@ -2435,3 +2435,55 @@ having crossed $4 during the day. Canada and Mexico are ungoverned, proven by li
 production rather than by reading the git tree: `/api/cron/ad-engine-ca` and `/api/cron/ad-engine-mx`
 both return 404 while every deployed cron returns 401. Four costed shutdown options are with William
 and unanswered.
+
+## 2026-08-26 — The ladder raises a word for not spending, and the log that proves it stopped writing
+
+**Context.** The morning review asked the standing question, is the engine being followed on
+everything that spends. The answer is yes: 71 of 73 qualifying Sponsored Products entities are
+already off, Display and Brands are clean, Canada has nothing over its bar. Yesterday's three
+violations were paused at 00:05:51 today. So compliance is not the problem, and the month is still
+at $1,032.47 spent against $757.30 of ad sales, 0.73x, with the business down $413.21 before 14
+refunds worth $151.24 that the P&L never subtracts.
+
+Two things surfaced that had never been looked at. First, `kw_bid_state` holds 430 keywords with
+`ladder_active = 1`, and `ladderVerdict()` raises a bid on one condition only: `spendSinceStep > 0`
+returns hold. A word climbs a rung BECAUSE it did not spend. There is no ROAS term. 243 of the 430
+are already at the $0.85 ceiling and 216 carry an `escalated_at` stamp. Second, the 00:05 engine run
+wrote 58 changes to Amazon and recorded none of them in any table.
+
+**Options.** (1) Leave the ladder and keep tightening kill thresholds, which is what the last three
+weeks did. (2) Cap the ladder at a lower rung, so words climb to $0.45 instead of $0.85. (3) Set
+`ladder_active = 0` on all 430, which stops the climb and pauses nothing. (4) Add a performance term
+to `ladderVerdict()` so a rung requires evidence, which is a code change and a deploy on a repo where
+nothing has merged since 08-17.
+
+**Decision.** Recommend (3), the switch-off, and ask before touching it. Nothing applied today. The
+`sc-account-status.mjs` marketplace bug was fixed, since that is a bug in a read-only diagnostic and
+not a threshold. `scripts/spend-truth.mjs` was written to answer William's two direct questions, and
+`kw_day` was topped up by hand because `history-archive` is not deployed.
+
+**Reasoning.** The split is the argument. Of the 430, 127 have spent: $502.90 at 0.48x on 21 orders.
+The other 303 have spent nothing. Everything not on the ladder spent $373.07 at 0.83x on 29 orders.
+So 57.4% of Sponsored Products spend sits on the cohort whose bids were raised for being idle, at
+roughly half the return of the rest, and $1,212 of unused $4 rope is still loaded, $903.34 of it on
+words already at maximum bid. Option (2) keeps the mechanism and only slows it. Option (4) is right
+eventually but cannot ship on a repo with 12 open PRs and no merges in nine days.
+
+I stated this badly first time. I wrote "stuck at 85 cents not spending" and "227 words have spent
+$428" in the same breath, as though about one group. William caught it. They are different subsets
+of the same 430 and the corrected split is above.
+
+**Industry source.** Google Ads and Amazon both document bid automation as a function of conversion
+data, not of impression starvation: Target ROAS and Target CPA raise a bid when the predicted
+conversion value justifies it. A rule whose only input is "this did not spend" is the inverse, and
+it is the same failure mode as a retry loop with no circuit breaker, escalating precisely because
+nothing is coming back.
+
+**Trade-offs.** Switching the ladder off freezes 430 words at their current bids, and some of the
+127 spenders are genuinely working, so a flat switch-off keeps them at today's bid rather than
+letting them climb further. That is accepted: the cautious step on something profitable is the slow
+one. Rollback is one UPDATE, since `current_bid` is preserved.
+
+**Status.** Recommended, not applied. Waiting on William. The two live Sponsored Products violations
+and the two converting under 1.5x are also unactioned, since "turn them off if not high enough roas"
+was scoped to the Sponsored Brands set on 08-25 and those were already off.
