@@ -30,11 +30,11 @@
     },
     {
       "path": "/api/cron/sb-engine",
-      "schedule": "15 */6 * * *"
+      "schedule": "50 * * * *"
     },
     {
       "path": "/api/cron/sd-engine",
-      "schedule": "45 */6 * * *"
+      "schedule": "55 * * * *"
     }
   ]
 }
