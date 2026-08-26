@@ -274,11 +274,11 @@ export function nextBid(
 // id; the shopper types a word. Pausing one id does not stop the word, it just moves the spend to a
 // sibling that has not personally crossed $4 yet, so no rule reaches it.
 //
-// LEAK 2, the qualifying word we cannot switch off. Three ways that happens. A pause into a
-// non-ENABLED campaign comes back 207 and changes nothing. A bar that has not shipped yet cannot
-// fire at all. And, the big one, emergencyQualifies() is deliberately WIDER than shouldKill(): a
-// word converting under 1.5x is cut at any spend, while the kill still waits for $4. So the cut
-// reaches words the pause is not entitled to touch yet, which is the whole point of it.
+// LEAK 2, the qualifying word we cannot switch off. A pause into a non-ENABLED campaign comes back
+// 207 and changes nothing, and a bar that has not shipped yet cannot fire at all. In both cases the
+// word keeps its bid and keeps buying. This half is a BACKSTOP and is expected to be empty on a
+// healthy run: the same $4-and-under-1.5x test that earns the cut also earns the pause, so anything
+// it catches is something the pause did not manage. The overlap above is where the work is.
 //
 // WHY A CUT RATHER THAN ANOTHER PAUSE. A pause is the thing we already cannot land in these cases.
 // A bid is a different write on a different field, and where the pause is refused for campaign
@@ -353,26 +353,27 @@ export function killedWordsThisMonth(
 /**
  * Does this entity earn the 80% cut on its OWN numbers?
  *
- * William 2026-08-26, and the two clauses are separate on purpose: "As soon as they get below 1.5
- * ROAS OR keywords spend $4 without converting."
+ * IDENTICAL to shouldKill(), and it delegates rather than restating the condition so the two can
+ * never drift apart.
  *
- *   converted, under KILL_MIN_ROAS  -> cut, at ANY spend
- *   never converted, past KILL_SPEND -> cut
+ * William 2026-08-26, correcting me: "The 1.5 ROAS only kicks in after $4 has been spent. Until
+ * then, the ROAS can fluctuate wildly. You shouldn't lower bids by 80% if the spend is under $4."
  *
- * This is NOT shouldKill(). shouldKill() requires $4 on both paths, so a word converting at 1.2x on
- * $2 is invisible to it and keeps its bid. That word is the reason this predicate has no spend floor
- * on the converting path: he asked for the cut when the ROAS is seen, not when the spend is.
+ * I had read his two clauses as two independent triggers and dropped the spend floor from the ROAS
+ * one, so a word converting at 1.2x on $2 would have been cut. That is wrong for a reason worth
+ * keeping: at $2 of spend this account has bought about two clicks, and one $9.49 order either
+ * landed or it did not. ROAS at that sample size is a coin toss, not a measurement. $4 is the point
+ * at which the number means something, and it governs BOTH clauses.
  *
- * I built it gated on $4 first and he had already ruled that out in the same sentence. Written down
- * because narrowing a stated rule spends money exactly as quietly as widening one.
+ * So this function earns its name by what it does NOT do rather than by differing from the kill.
+ * Its value is that the cut and the pause are guaranteed to agree about who deserves it.
  */
 export function emergencyQualifies(
   p: Perf,
   killSpend = KILL_SPEND,
   killMinRoas = KILL_MIN_ROAS,
 ): boolean {
-  if (p.orders > 0 && p.sales > 0) return p.sales / p.spend < killMinRoas;
-  return p.spend >= killSpend;
+  return shouldKill(p, killSpend, killMinRoas);
 }
 
 /** Where an 80% cut lands, in whole cents, never below the floor Amazon will accept. */
@@ -1496,27 +1497,20 @@ export function planBids(
     // ceiling, the shave and the ordinary dime, because this is not a search for the right bid. It
     // is suppression until the entity can be switched off.
     //
-    // Two ways in, and they reach different entities:
-    //   qualified — its own numbers earn the cut. WIDER than the shouldKill() line above, which
-    //               needs $4 on both paths, so a target converting at 1.2x on $2 lands here.
-    //   overlap   — a copy of this word is being switched off. The shopper types a word; the kill
-    //               pauses an id. Without this the spend just moves to the sibling.
-    const emQualified = emergencyQualifies(perf, opts.killSpend, opts.killMinRoas);
+    // OVERLAP ONLY here, deliberately. The other half of the rule, "its own numbers earn the cut",
+    // is exactly shouldKill() since William's 2026-08-26 correction, and shouldKill() already
+    // returned two lines above. Writing the branch anyway would be a condition that can never be
+    // true, which is the same defect as the dead `pivot` parameter this file just lost.
     const emOverlap = !!c.word && killedWords.has(overlapKey(c.word));
-    if (emQualified || emOverlap) {
+    if (emOverlap) {
       const from = c.bid && c.bid > 0 ? c.bid : (opts.defaultBid ?? BID_FLOOR);
       const to = emergencyBid(from, floor);
       if (to < from) {
         if (c.writable === false) { out.blocked++; continue; }
-        const roas = c.spend > 0 ? c.sales / c.spend : 0;
         out.emergency++;
         out.moves.push({
           id: c.id, label: c.label, fromBid: from, toBid: to, direction: "down",
-          reason: emQualified
-            ? (c.orders <= 0 || c.sales <= 0
-                ? `emergency: $${c.spend.toFixed(2)} spent, no sale, and not being switched off`
-                : `emergency: ${roas.toFixed(2)}x, and not being switched off`)
-            : `emergency: overlaps "${c.word}", which is switched off`,
+          reason: `emergency: overlaps "${c.word}", which is switched off`,
         });
         continue;
       }

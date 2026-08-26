@@ -38,13 +38,18 @@ describe("emergencyBid — where an 80% cut lands", () => {
   });
 });
 
-describe("emergencyQualifies — the two triggers are SEPARATE", () => {
-  it("cuts a converting word under 1.5x at ANY spend, with no $4 gate", () => {
-    // The correction that mattered. shouldKill() needs $4 on both paths, so this word is invisible
-    // to the pause and keeps bidding. William asked for the cut when the ROAS is seen.
-    const p = { spend: 2, orders: 1, sales: 2 * (KILL_MIN_ROAS - 0.2) };
-    expect(shouldKill(p)).toBe(false);
-    expect(emergencyQualifies(p)).toBe(true);
+describe("emergencyQualifies — $4 gates BOTH triggers", () => {
+  // William 2026-08-26, correcting me: "The 1.5 ROAS only kicks in after $4 has been spent. Until
+  // then, the ROAS can fluctuate wildly. You shouldn't lower bids by 80% if the spend is under $4."
+  //
+  // I had read his two clauses as independent triggers and dropped the spend floor from the ROAS
+  // one. These tests exist so that reading cannot come back.
+  it("does NOT cut a word under 1.5x that has not yet spent $4", () => {
+    const p = { spend: 2, orders: 1, sales: 2 * (KILL_MIN_ROAS - 0.2) };   // 1.30x on $2
+    expect(emergencyQualifies(p)).toBe(false);
+  });
+  it("cuts the same word once it passes $4", () => {
+    expect(emergencyQualifies({ spend: KILL_SPEND, orders: 1, sales: KILL_SPEND * 1.3 })).toBe(true);
   });
   it("spares a converting word at or above 1.5x", () => {
     expect(emergencyQualifies({ spend: 10, orders: 1, sales: 10 * KILL_MIN_ROAS })).toBe(false);
@@ -55,10 +60,18 @@ describe("emergencyQualifies — the two triggers are SEPARATE", () => {
   it("leaves an unconverted word alone while it is still inside its $4 trial", () => {
     expect(emergencyQualifies({ spend: KILL_SPEND - 0.01, orders: 0, sales: 0 })).toBe(false);
   });
+  it("agrees with shouldKill on every case, so the cut and the pause can never disagree", () => {
+    for (const spend of [0, 1, 3.99, 4, 7.5, 20])
+      for (const [orders, sales] of [[0, 0], [1, 4], [1, 9.49], [2, 30]] as const)
+        expect(emergencyQualifies({ spend, orders, sales }))
+          .toBe(shouldKill({ spend, orders, sales }));
+  });
   it("scales with the marketplace bar, so CAD 5.50 and MXN 68 behave the same way", () => {
     expect(emergencyQualifies({ spend: 5.50, orders: 0, sales: 0 }, 5.50)).toBe(true);
     expect(emergencyQualifies({ spend: 5.49, orders: 0, sales: 0 }, 5.50)).toBe(false);
     expect(emergencyQualifies({ spend: 68, orders: 0, sales: 0 }, 68)).toBe(true);
+    // and the ROAS clause waits for the same local bar, not for a bare 4
+    expect(emergencyQualifies({ spend: 5.00, orders: 1, sales: 5 }, 5.50)).toBe(false);
   });
 });
 
@@ -105,6 +118,20 @@ describe("emergencyCuts — who gets slashed", () => {
 
   it("leaves a word alone that neither qualifies nor overlaps", () => {
     expect(emergencyCuts([K({ spend: 3, orders: 1, sales: 20 })], none, none).cuts).toHaveLength(0);
+  });
+
+  it("does NOT cut a poor ROAS that has not yet spent $4", () => {
+    // $3.50 and 1.1x. Two clicks and one order is a coin toss, not a measurement.
+    expect(emergencyCuts([K({ spend: 3.5, orders: 1, sales: 3.85 })], none, none).cuts).toHaveLength(0);
+  });
+
+  it("cuts an overlap even when the copy itself has spent nothing", () => {
+    // The copy's OWN spend is irrelevant. The WORD has already proved itself on another id.
+    const out = emergencyCuts([K({ spend: 0, orders: 0, sales: 0, bid: 2.50 })],
+      none, new Set(["phone tether"]));
+    expect(out.cuts).toHaveLength(1);
+    expect(out.cuts[0].trigger).toBe("overlap");
+    expect(out.cuts[0].toBid).toBe(0.50);
   });
 
   it("counts, rather than writes, a word already at the floor", () => {
@@ -158,11 +185,16 @@ describe("planBids — Brands and Display get the same rule", () => {
     expect(out.moves[0].direction).toBe("down");
   });
 
-  it("slashes an entity converting under 1.5x that the $4 kill cannot yet touch", () => {
+  it("leaves an entity under 1.5x alone until it has spent $4", () => {
     const out = planBids([C({ spend: 2, orders: 1, sales: 2.5 })]);   // 1.25x on $2
     expect(out.killing).toBe(0);
-    expect(out.emergency).toBe(1);
-    expect(out.moves[0].toBid).toBe(0.17);
+    expect(out.emergency).toBe(0);
+  });
+
+  it("hands an entity past $4 and under 1.5x to the KILL, not to the cut", () => {
+    const out = planBids([C({ spend: 8, orders: 1, sales: 10 })]);    // 1.25x on $8
+    expect(out.killing).toBe(1);
+    expect(out.emergency).toBe(0);
   });
 
   it("does not slash when no copy is being switched off and its own numbers are fine", () => {
@@ -177,12 +209,14 @@ describe("planBids — Brands and Display get the same rule", () => {
   });
 
   it("uses Display's own floor when Display passes it", () => {
-    const out = planBids([C({ bid: 0.10, spend: 2, orders: 1, sales: 2.5 })], { floor: SD_BID_FLOOR });
+    const out = planBids([C({ bid: 0.10, spend: 1, orders: 1, sales: 20 })],
+      { floor: SD_BID_FLOOR, killedWords: new Set(["phone tether"]) });
     expect(out.moves[0].toBid).toBe(0.02);
   });
 
   it("reports, rather than attempts, a cut into a campaign that is not ENABLED", () => {
-    const out = planBids([C({ spend: 2, orders: 1, sales: 2.5, writable: false })]);
+    const out = planBids([C({ spend: 1, orders: 1, sales: 20, writable: false })],
+      { killedWords: new Set(["phone tether"]) });
     expect(out.emergency).toBe(0);
     expect(out.blocked).toBe(1);
   });

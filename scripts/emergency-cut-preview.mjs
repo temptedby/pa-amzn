@@ -29,7 +29,9 @@ for(const r of (await db.execute({sql:"select keyword_id, word, round(sum(spend)
   mtd.set(String(r.keyword_id),{word:String(r.word||''),spend:+r.s,sales:+r.sa,orders:+r.o});
 
 const key=w=>String(w??'').trim().toLowerCase().replace(/\s+/g,' ');
-const qualifies=p=>(p.orders>0&&p.sales>0)?(p.sales/p.spend)<MINROAS:(p.spend>=BAR);
+// $4 gates BOTH clauses (William 2026-08-26): under that, one order either landed or it did
+// not, and the ROAS is a coin toss rather than a measurement.
+const qualifies=p=>p.spend>=BAR&&(p.orders<=0||p.sales<=0||(p.sales/p.spend)<MINROAS);
 const cutTo=b=>{const f=Math.round(FLOOR*100),c=Math.max(f,Math.round((b>0?b:FLOOR)*100));return Math.max(f,Math.round(c*(1-CUT)))/100;};
 
 // words that have earned a switch-off this month, whatever their state is now
