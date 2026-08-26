@@ -15,7 +15,7 @@
 
 import { gunzipSync } from "node:zlib";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
-import { shouldKill, acosOf, KILL_SPEND, ACOS_PIVOT } from "./ad-rules";
+import { shouldKill, acosOf, KILL_SPEND, KILL_MIN_ROAS } from "./ad-rules";
 
 const BASE = "https://advertising-api.amazon.com";
 const RPT_CT = "application/vnd.createasyncreportrequest.v3+json";
@@ -47,12 +47,12 @@ export interface SbSdPreview {
 
 // PURE selector (unit-tested): from campaign performance, pick the ENABLED campaigns that hit the
 // kill bar under the shared rule. "ENABLED" match is case-insensitive because SD returns lowercase.
-export function selectCampaignsToKill(rows: CampaignPerf[], killSpend = KILL_SPEND, pivot = ACOS_PIVOT): KillPreviewRow[] {
+export function selectCampaignsToKill(rows: CampaignPerf[], killSpend = KILL_SPEND, killMinRoas = KILL_MIN_ROAS): KillPreviewRow[] {
   const out: KillPreviewRow[] = [];
   for (const c of rows) {
     if ((c.state || "").toUpperCase() !== "ENABLED") continue;
     const perf = { spend: c.spend, orders: c.orders, sales: c.sales };
-    if (shouldKill(perf, killSpend, pivot)) {
+    if (shouldKill(perf, killSpend, killMinRoas)) {
       out.push({ campaignId: c.campaignId, name: c.name, spend: +c.spend.toFixed(2), acos: acosOf(perf) });
     }
   }
