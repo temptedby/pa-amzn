@@ -2487,3 +2487,57 @@ one. Rollback is one UPDATE, since `current_bid` is preserved.
 **Status.** Recommended, not applied. Waiting on William. The two live Sponsored Products violations
 and the two converting under 1.5x are also unactioned, since "turn them off if not high enough roas"
 was scoped to the Sponsored Brands set on 08-25 and those were already off.
+
+---
+
+## 2026-08-26 (second entry) — Calling an unshipped rule "correct" is how a backlog turns into spend
+
+**Context.** The full rule-compliance sweep finished: 213 Sponsored Products entities in the US,
+plus Display, Brands, Canada and Mexico, every entity that spent in August judged against live
+Amazon state read in the same run. It found four enabled keywords that William's stated bar says
+should be off. Two have spent over $4 with zero sales ($4.28 `retractable cell phone lanyard`
+PHRASE, $4.25 `advanced anti-theft phone tether` BROAD). Two have converted but return under 1.5x
+($7.52 `phone tethered` EXACT at 1.26x, $7.11 `holdmate pro retractable phone holder` EXACT at
+1.33x). I reported the second pair labelled `unshipped`, because the 1.5x bar lives on PR #15 which
+has been unmerged since 08-23, and then wrote that the live engine was "correctly" leaving them
+alone. William: "this is untrue question B they should be turned off they are under 1.5roas ...
+wasting money."
+
+**Options.** (1) Leave them and wait for PR #15 to merge, which costs nothing to build and keeps
+bleeding at roughly $1 a day per word while 12 PRs sit unmerged with no date. (2) Pause the two
+under-1.5x by hand with a one-off script keyed to their ids, fastest to write, but it strands them
+outside `kw_kill_ledger`, which is the table the engine's in-month revival reads, so a word that
+attribution later lifts over 2.15x would never come back. (3) Run the existing
+`scripts/kill-below-roas.mjs` at `--roas=1.5 --bar=4`, which applies the literal rule, verifies each
+write twice, and ledgers every kill for the month. (4) Merge PR #15 first and let the engine do it
+on its next run, correct in principle but I cannot merge, and the engine reads one report snapshot a
+day so the fix would not bite for hours.
+
+**Decision.** Option 3. Ran `kill-below-roas.mjs` with a report cache so the dry pass and the live
+pass share one Amazon report. As of writing it is still queued behind Amazon's reporting service at
+over ten minutes, and nothing has been paused yet.
+
+**Reasoning.** The bar has been 1.5 since 2026-08-23. A rule William has stated is the rule; the
+code not carrying it yet is my delivery backlog, not a property of the account. Labelling the
+engine "correct" quietly reframed an unshipped change as an acceptable state, which is exactly the
+framing that lets a backlog spend money. The existing script was chosen over a one-off because the
+ledger write is not optional: `openKills()` reads `kw_kill_ledger` for the current month, so a kill
+made outside it can never be revived in-month, and two of these four have already converted once.
+
+**Industry source.** This is the standard argument for policy-as-configuration over
+policy-as-deployment. Feature-flag and policy-engine practice (OPA, LaunchDarkly's own guidance)
+exists precisely because a threshold that requires a code deploy to change will lag the decision
+that set it, and the lag is paid in production behaviour. Our bar being a TypeScript constant
+behind a pull request is the failure mode those tools were built to remove.
+
+**Trade-offs accepted.** Pausing by hand is not a fix, it is a patch that has to be repeated each
+time a word crosses the bar, and it will need repeating until PR #15 and PR #11 merge. The
+reporting-queue latency also means the enforcement happens whenever Amazon answers rather than at a
+chosen moment. Both are acceptable against leaving four words enabled that have taken $23.16 for
+$18.98 of sales, 0.82x.
+
+**Status.** Kill run queued, not applied. Reported to William as queued rather than as done. PR #15
+(1.5x bar) and PR #11 (hourly engine) remain the real fix and remain unmerged. Separately,
+`scripts/spend-truth.mjs` refused its whole Sponsored Brands section after one v2 HSA day failed to
+report, which is the not-found-is-a-violation rule working as intended but leaves the no-floor
+answer for Sponsored Brands unproven until the per-day retry is fixed.
