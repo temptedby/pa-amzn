@@ -30,6 +30,7 @@
 
 import { gunzipSync } from "node:zlib";
 import { db } from "@/lib/db/client";
+import { adsConfigFromEnv } from "./ads-api";
 import type { AdsConfig } from "./ads-api";
 
 const BASE = "https://advertising-api.amazon.com";
@@ -85,6 +86,8 @@ export interface ReportSpec {
   columns: string[];
   startDate: string;
   endDate: string;
+  /** Advertising profile this report belongs to. Defaults to the active Ads config when omitted. */
+  profileId?: string;
 }
 
 export interface ReportJob {
@@ -101,9 +104,19 @@ export type CollectOutcome<T> =
   | { state: "requested"; job: ReportJob }
   | { state: "failed"; reason: string };
 
-/** Stable identity for a report request. Same spec on a later run finds the same job. */
-export function reportKey(s: ReportSpec): string {
-  return [s.purpose, s.adProduct, s.reportTypeId, s.startDate, s.endDate,
+/** Stable identity for a report request. Same spec on a later run finds the same job.
+ *
+ *  The profile is part of the identity. Ads reports are scoped to one advertising account, so the
+ *  same purpose/product/date range means a completely different report in Canada than in the US.
+ *  Without the profile in the key a second marketplace would collect the first one's rows and judge
+ *  its own keywords against them, which is silent and would look like the engine simply doing
+ *  nothing. Added 2026-08-21, when Canada became the second account.
+ *
+ *  profileId is passed explicitly by tests; in production it comes from the active Ads config.
+ */
+export function reportKey(s: ReportSpec, profileId?: string): string {
+  const profile = profileId ?? s.profileId ?? adsConfigFromEnv()?.profileId ?? "no-profile";
+  return [s.purpose, profile, s.adProduct, s.reportTypeId, s.startDate, s.endDate,
     s.groupBy.join("+"), s.columns.slice().sort().join("+")].join("|");
 }
 

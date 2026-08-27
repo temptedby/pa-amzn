@@ -55,10 +55,13 @@ const report = [];
 // Central deep link 404s until a marketplace is chosen. The script used to navigate straight past
 // it and report four Not Founds, which reads like a broken URL and is really an unchosen account.
 async function chooseUS() {
+  // 2026-08-26: the old version only acted if Amazon HAPPENED to park us on the switcher. It does
+  // not. It parks us on the CANADA dashboard, the switcher URL never appears, the function returned
+  // true, and every US deep link 404'd for three days running while reporting "United States
+  // selected". So go to the switcher DELIBERATELY every run, and verify the country afterwards.
   for (let i = 0; i < 3; i++) {
-    const u = page.url();
-    if (!/account-switcher|merchantMarketplace/i.test(u)) return true;
-    // The marketplace list is a set of clickable rows; "United States" is the one we want.
+    await page.goto('https://sellercentral.amazon.com/account-switcher', { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(3000);
     const target = page.getByText('United States', { exact: true }).first();
     if (await target.count().catch(() => 0)) {
       await target.click({ timeout: 15000 }).catch(() => {});
@@ -69,12 +72,17 @@ async function chooseUS() {
         await page.waitForLoadState('domcontentloaded').catch(() => {});
       }
     }
-    await page.waitForTimeout(2500);
+    await page.waitForTimeout(3000);
+    // PROVE it, do not assume it. The header names the marketplace we are scoped to.
+    const body = await page.evaluate(() => document.body.innerText.slice(0, 400)).catch(() => '');
+    if (/United States/.test(body) && !/\bCanada\b/.test(body.split('\n').slice(0, 6).join('\n'))) return true;
   }
-  return !/account-switcher/i.test(page.url());
+  const body = await page.evaluate(() => document.body.innerText.slice(0, 200)).catch(() => '');
+  console.log('  switcher check, first lines of page:', JSON.stringify(body.split('\n').slice(0, 5)));
+  return false;
 }
 const onUS = await chooseUS();
-console.log(onUS ? 'marketplace: United States selected' : 'WARNING: still on the account switcher — pages will 404');
+console.log(onUS ? 'marketplace: United States CONFIRMED in the page header' : 'WARNING: NOT on United States. Every US page below will 404 and MUST NOT be read as clean.');
 
 for (const [slug, url, what] of PAGES) {
   console.log(`\n=== ${slug} — ${what} ===`);

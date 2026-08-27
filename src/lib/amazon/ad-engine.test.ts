@@ -390,10 +390,10 @@ describe("inMonthRevivals — the $4 kill undone once attribution lands", () => 
   const mtd = (spend: number, sales: number, orders = 1, id = "K1") =>
     new Map([[id, { spend, sales, orders }]]);
 
-  it("brings back the real case: killed at 0 orders, then credited above 2x", () => {
-    const out = inMonthRevivals(led(), live(), mtd(4.50, 9.49), MONTH);
+  it("brings back the real case: killed at 0 orders, then credited above the revive bar", () => {
+    const out = inMonthRevivals(led(), live(), mtd(4.20, 9.49), MONTH);
     expect(out).toHaveLength(1);
-    expect(out[0].roas).toBeCloseTo(2.11, 2);
+    expect(out[0].roas).toBeCloseTo(2.26, 2);
     expect(out[0].word).toBe("phone tether");
   });
 
@@ -403,9 +403,9 @@ describe("inMonthRevivals — the $4 kill undone once attribution lands", () => 
     expect(inMonthRevivals(led(), live(), mtd(13.61, 16.49), MONTH)).toHaveLength(0);
   });
 
-  it("holds the line exactly at 2.0", () => {
-    expect(inMonthRevivals(led(), live(), mtd(10, 19.99), MONTH)).toHaveLength(0);
-    expect(inMonthRevivals(led(), live(), mtd(10, 20), MONTH)).toHaveLength(1);
+  it("holds the line exactly at 2.15", () => {
+    expect(inMonthRevivals(led(), live(), mtd(10, 21.49), MONTH)).toHaveLength(0);
+    expect(inMonthRevivals(led(), live(), mtd(10, 21.5), MONTH)).toHaveLength(1);
   });
 
   it("cannot flap: nothing sits in both the kill window and the revival window", () => {
@@ -442,8 +442,9 @@ describe("inMonthRevivals — the $4 kill undone once attribution lands", () => 
     expect(inMonthRevivals(dupes, live(), mtd(4, 20), MONTH)).toHaveLength(1);
   });
 
-  it("pins the bar at 2.0 so it cannot quietly drift to break-even", () => {
-    expect(REVIVE_MIN_ROAS).toBe(2.0);
+  // 2.25x with William's 5% buffer beneath it (2026-08-21). Pinned so it cannot quietly drift.
+  it("pins the bar at 2.15", () => {
+    expect(REVIVE_MIN_ROAS).toBe(2.15);
   });
 });
 
@@ -492,13 +493,13 @@ describe("killPlan — the $4 kill judges a keyword id, never a word", () => {
     expect(killPlan([row("GONE", 99)], live())).toHaveLength(0);
   });
 
-  it("spares a copy that spent $4 but is still returning 1x or better", () => {
+  it("spares a copy that spent $4 but is still returning 1.5x or better", () => {
     // $4 alone is not the rule, and since 2026-08-13 nor is the 52% pivot. $4 AND under 1x is.
     // A copy between 1x and break-even gets its BID cut by the bid rules, not a pause.
     const byId = live(kw("A", "phone tether", "PHRASE"));
     expect(killPlan([row("A", 5, 20, 2)], byId)).toHaveLength(0);  // 4.0x
-    expect(killPlan([row("A", 5, 6, 1)], byId)).toHaveLength(0);   // 1.2x — cut the bid, do not pause
-    expect(killPlan([row("A", 5, 4.99, 1)], byId)).toHaveLength(1); // 0.998x — off
+    expect(killPlan([row("A", 5, 8, 1)], byId)).toHaveLength(0);   // 1.6x — cut the bid, do not pause
+    expect(killPlan([row("A", 5, 7.49, 1)], byId)).toHaveLength(1); // 1.498x — off
     expect(killPlan([row("A", 5, 0, 0)], byId)).toHaveLength(1);   // never converted — off
   });
 

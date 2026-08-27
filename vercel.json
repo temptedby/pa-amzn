@@ -13,6 +13,14 @@
       "schedule": "40 * * * *"
     },
     {
+      "path": "/api/cron/ad-engine-ca",
+      "schedule": "20 * * * *"
+    },
+    {
+      "path": "/api/cron/ad-engine-mx",
+      "schedule": "25 * * * *"
+    },
+    {
       "path": "/api/cron/inbox-agent",
       "schedule": "0 * * * *"
     },
@@ -35,6 +43,10 @@
     {
       "path": "/api/cron/sd-engine",
       "schedule": "55 * * * *"
+    },
+    {
+      "path": "/api/cron/history-archive",
+      "schedule": "20 9 * * *"
     }
   ]
 }

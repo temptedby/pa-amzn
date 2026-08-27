@@ -11,6 +11,7 @@ import {
   BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
   lifetimeOnlyPool,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
+  killSpendFor,
 } from "./ad-rules";
 
 // Autonomous Sponsored-Products engine. Designed to run every few hours via cron,
@@ -97,6 +98,19 @@ export interface AdEngineResult {
   errors: string[]; durationMs: number; reason?: string;
 }
 
+/** Point an otherwise-identical Ads config at a different advertising account.
+ *
+ *  One set of ADS_* credentials covers every profile on the account, so switching marketplace is
+ *  only a change of scope header. Canada is profile 2269012516456949, the US 527401661118587.
+ *  Runs stay SEPARATE per country (William 2026-08-21) rather than one run looping both: a 300s
+ *  function budget is per country, a failure in one cannot take the other down, and each country's
+ *  decisions land in the log under their own run.
+ */
+export function withProfile(cfg: AdsConfig | null, profileId?: string): AdsConfig | null {
+  if (!cfg) return null;
+  return profileId ? { ...cfg, profileId } : cfg;
+}
+
 async function ads(cfg: AdsConfig, token: string, path: string, method: string, body: unknown, ct = "application/json") {
   const res = await fetch(`${BASE}${path}`, {
     method,
@@ -157,7 +171,10 @@ async function deferredRows(
   cfg: AdsConfig, token: string, notes: string[],
   purpose: string, reportTypeId: string, groupBy: string[], columns: string[], sd: string, ed: string,
 ): Promise<{ rows: Row[]; ready: boolean }> {
-  const spec: ReportSpec = spSpec(purpose, reportTypeId, groupBy, columns, sd, ed);
+  // The profile goes ON THE SPEC, not left to reportKey's env fallback. When runAdEngine is asked
+  // for a non-default account, cfg carries the override but process.env does not, so a spec without
+  // it would resolve to the US key and Canada would read the US account's rows. 2026-08-21.
+  const spec: ReportSpec = { ...spSpec(purpose, reportTypeId, groupBy, columns, sd, ed), profileId: cfg.profileId };
   const r = await getReport<Row>(cfg, token, spec);
   if (r.state === "ready") { notes.push(`${purpose}: ready (${r.rows.length} rows, ${r.ageHours}h old)`); return { rows: r.rows, ready: true }; }
   if (r.state === "failed") { notes.push(`${purpose}: FAILED — ${r.reason}`); return { rows: [], ready: false }; }
@@ -344,6 +361,9 @@ export function killPlan(
   rows: { keywordId?: string | number | null; cost?: number; purchases14d?: number; sales14d?: number }[],
   byId: Map<string, { keywordText: string; matchType: string; state: string; bid?: number | null }>,
   newKwBid = NEW_KW_BID,
+  // The report's numbers are in the marketplace's own currency, so the bar has to be too. A bare 4
+  // means MXN 4, about USD 0.24, which would kill a Mexican keyword after a single click.
+  killSpend = KILL_SPEND,
 ): KillPick[] {
   const out: KillPick[] = [];
   const seen = new Set<string>();
@@ -354,7 +374,7 @@ export function killPlan(
     const k = byId.get(id);
     if (!k || k.state !== "ENABLED") continue;               // already off, or gone from the account
     const perf: Perf = { spend: r.cost ?? 0, orders: r.purchases14d ?? 0, sales: r.sales14d ?? 0 };
-    if (decide(k.bid || newKwBid, perf).action !== "kill") continue;
+    if (decide(k.bid || newKwBid, perf, { killSpend }).action !== "kill") continue;
     seen.add(id);
     out.push({ keywordId: id, text: k.keywordText, matchType: k.matchType, spend: +perf.spend.toFixed(2) });
   }
@@ -380,10 +400,16 @@ export function killPlan(
 // 3rd sat dark for four weeks. This re-checks every 6h and switches it back on as soon as the credit
 // lands.
 //
-// NO FLAPPING, by arithmetic rather than by a cooldown. shouldKill() pauses below the 52% ACOS pivot,
-// which is 1.923x; revival needs 2.0x. Nothing sits in both windows, so a keyword cannot be killed
-// and revived by the same data. The 1.923x-2.0x band is deliberately dead space.
-export const REVIVE_MIN_ROAS = 2.0;
+// NO FLAPPING, by arithmetic rather than by a cooldown. A keyword must not be able to sit in both
+// the kill window and the revive window on one reading, or it oscillates every run.
+//
+// WAS 2.0x against a 1.0x kill. Now 2.15x against a 1.5x kill, William 2026-08-21: revive at 2.25x
+// with a 5% buffer beneath it, "so if roas reaches 2.15 then we turn it on". 2.15 is used rather
+// than the arithmetic 2.1375 because it is his stated number and marginally the stricter of the two.
+//
+// The dead band is 1.5x to 2.15x, 0.65 wide. Narrower than the old 1.0x-2.0x gap and still far
+// wider than any single day's movement, so nothing can be killed and revived by the same data.
+export const REVIVE_MIN_ROAS = 2.15;
 
 /** One keyword the $4 kill paused, with the month it happened in. */
 export interface KillLedgerRow { keywordId: string; word: string; matchType: string; month: string }
@@ -607,11 +633,11 @@ async function perfSinceChange(
   return out;
 }
 
-export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEngineResult> {
+export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; currency?: string } = {}): Promise<AdEngineResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
   const out: AdEngineResult = { ok: false, dryRun, killed: [], bids: [], needsConfirm: [], revived: [], added: [], notes: [], errors: [], durationMs: 0 };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 
@@ -666,7 +692,7 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
   // the same text are separate keywords with separate bids, so they are separate decisions.
   const killOps: { keywordId: string; state: string }[] = [], bidOps: { keywordId: string; bid: number }[] = [];
   const killedAt = new Map<number, number>();   // kill-op index -> index into out.killed
-  for (const p of killPlan(kt, byId)) {
+  for (const p of killPlan(kt, byId, NEW_KW_BID, killSpendFor(opts.currency))) {
     killedAt.set(killOps.length, out.killed.length);
     killOps.push({ keywordId: p.keywordId, state: "PAUSED" });
     out.killed.push({ text: p.text, matchType: p.matchType, spend: p.spend, keywordId: p.keywordId });
@@ -1059,14 +1085,15 @@ async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
 }
 
 /** Bring floored keywords back, throttled. dryRun previews the exact batch without applying. */
-export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promise<ReintroRunResult> {
+export async function runReintroduction(opts: { dryRun?: boolean; profileId?: string; currency?: string } = {}): Promise<ReintroRunResult> {
+  const killBar = killSpendFor(opts.currency);   // the trial rope, in this marketplace's currency
   const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
   const start = Date.now();
   const out: ReintroRunResult = {
     ok: false, dryRun, promoted: [], laddered: [], escalated: [], eligible: 0, blockedBy: [],
     state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, notes: [], errors: [], durationMs: 0,
   };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 
@@ -1138,7 +1165,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
       const m = mtd.get(id);
       if (!m) { inTrial++; continue; }                       // promoted, no spend yet -> still on trial
       cohortMonthSpend += m.cost;
-      if (m.cost < KILL_SPEND && m.orders === 0) inTrial++;  // rope not yet used up
+      if (m.cost < killBar && m.orders === 0) inTrial++;      // rope not yet used up
     }
     // Today's cohort spend drives the circuit breaker. Amazon's account day resets at 07:00 UTC.
     // Preferred source is kw_daily (our own history). If it has not been written for today yet, fall
@@ -1290,7 +1317,7 @@ export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promis
 export function summarizeReintroduction(r: ReintroRunResult): string {
   const lines = [
     `Reintroduction ${r.dryRun ? "(preview)" : "ran"} — ${r.promoted.length} promoted of ${r.eligible} eligible. ${r.errors.length} errors. ${Math.round(r.durationMs / 1000)}s`,
-    `Gate: ${r.state.introducedToday}/${REINTRO_PER_DAY} promoted today. Reported only: ${r.state.inTrial} unproven in flight (~$${(r.state.inTrial * KILL_SPEND).toFixed(2)} at risk), cohort spend MTD $${r.state.cohortMonthSpend}.`,
+    `Gate: ${r.state.introducedToday}/${REINTRO_PER_DAY} promoted today. Reported only: ${r.state.inTrial} unproven in flight (~${(r.state.inTrial * KILL_SPEND).toFixed(2)} at risk), cohort spend MTD $${r.state.cohortMonthSpend}.`,
     r.blockedBy.length ? `Stopped by: ${r.blockedBy.join(", ")}.` : "",
     r.laddered.length ? `Bid ladder: ${r.laddered.length} stepped up.\n` + r.laddered.map((l) => `  $${l.from.toFixed(2)} -> $${l.to.toFixed(2)}  ${l.keywordText}`).join("\n") : "",
     r.escalated.length ? `NEEDS YOU: ${r.escalated.length} at the $0.85 ceiling and still not spending.\n` + r.escalated.map((e) => `  ${e.keywordText}`).join("\n") : "",
@@ -1306,11 +1333,11 @@ export function summarizeReintroduction(r: ReintroRunResult): string {
 // (which runs every 6h): this is invoked once a month. Lists PAUSED keywords, pulls their trailing
 // 65d performance (chunked into <=31d Ads-API reports), and re-enables any that recovered to the
 // >= $4 spend / ACOS <= 50% winner bar. dryRun previews without applying. Idempotent.
-export async function runMonthlyReactivation(opts: { dryRun?: boolean } = {}): Promise<ReactivationResult> {
+export async function runMonthlyReactivation(opts: { dryRun?: boolean; profileId?: string } = {}): Promise<ReactivationResult> {
   const dryRun = opts.dryRun ?? false;
   const start = Date.now();
   const out: ReactivationResult = { ok: false, dryRun, reactivated: [], notes: [], errors: [], durationMs: 0 };
-  const cfg = adsConfigFromEnv();
+  const cfg = withProfile(adsConfigFromEnv(), opts.profileId);
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
 

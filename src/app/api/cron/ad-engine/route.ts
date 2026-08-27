@@ -23,12 +23,14 @@ export async function GET(request: Request) {
   const dryRun = new URL(request.url).searchParams.get("dryRun") === "1";
   const result = await runAdEngine({ dryRun });
 
-  const acted = result.killed.length + result.bids.length + result.added.length > 0;
-  if (!dryRun && (acted || result.errors.length)) {
-    const subject = result.errors.length
-      ? "Ad engine ran with errors"
-      : `Ad engine: ${result.killed.length} paused, ${result.added.length} added, ${result.bids.length} re-bid`;
-    await sendEmail({ to: alertRecipient(), subject: `[PA-AMZN ads] ${subject}`, text: summarizeAdEngine(result) })
+  // ROUTINE RUNS ARE SILENT. William 2026-08-27: "telegram it is please i dont want to fill the
+  // inbox". At hourly, across three countries, a mail per acting run is up to 72 a day. The
+  // hourly watchdog reports what the engine did; this route now speaks up only when it BROKE.
+  //
+  // Errors still mail, because a run that threw is the one case where staying quiet is
+  // indistinguishable from a run that never happened.
+  if (!dryRun && result.errors.length) {
+    await sendEmail({ to: alertRecipient(), subject: `[PA-AMZN ads] Ad engine ran with errors`, text: summarizeAdEngine(result) })
       .catch((e) => console.error("[ad-engine] email failed:", e));
   }
 

@@ -60,6 +60,8 @@ scripts/pw-*.png
 
 # Seller Central status reads — account PII, never commit
 .sc-status/
+# Per-marketplace Seller Central reads. Account PII, same reason as .sc-status.
+.sc-status-*/
 
 # Creative sources pulled from Drive (203MB of originals). Drive is the master copy;
 # these are a working cache and must never be committed.

@@ -275,3 +275,75 @@ CREATE TABLE IF NOT EXISTS ad_entity_lifetime (
   as_of       TEXT NOT NULL,
   PRIMARY KEY (entity_type, entity_id, as_of, source)
 );
+
+-- ---------------------------------------------------------------------------
+-- OUR OWN HISTORY. William 2026-08-23: "make sure we are saving data from this month
+-- to go back further once we build over time, to not just rely on Amazon's 65 day limit."
+--
+-- Amazon serves roughly 65-95 days of report history and then the data is gone for good. Every
+-- rule that reasons about a keyword's PAST is therefore built on sand: shouldRetirePermanently()
+-- needs three consecutive months, and by month four Amazon has already forgotten month one, which
+-- is the exact cycle isPermanentlyDead() and kw_tombstone were written to break.
+--
+-- These three tables are ours. Once written, a month is ours forever whatever Amazon drops.
+-- ---------------------------------------------------------------------------
+
+-- One row per keyword per DAY. The grain everything else is derived from, so nothing is ever
+-- recomputed from a window that has since expired. Upserted, so re-running a backfill is safe and
+-- a late-attributed sale updates the day it belongs to rather than the day we noticed.
+CREATE TABLE IF NOT EXISTS kw_day (
+  keyword_id    TEXT NOT NULL,
+  day           TEXT NOT NULL,           -- YYYY-MM-DD, the marketplace's own date
+  word          TEXT,
+  match_type    TEXT,
+  campaign_id   TEXT,
+  ad_group_id   TEXT,
+  ad_product    TEXT NOT NULL DEFAULT 'SPONSORED_PRODUCTS',
+  spend         REAL NOT NULL DEFAULT 0,
+  clicks        INTEGER NOT NULL DEFAULT 0,
+  impressions   INTEGER NOT NULL DEFAULT 0,
+  orders        INTEGER NOT NULL DEFAULT 0,
+  sales         REAL NOT NULL DEFAULT 0,
+  first_seen_at TEXT NOT NULL,
+  updated_at    TEXT NOT NULL,
+  PRIMARY KEY (keyword_id, day, ad_product)
+);
+CREATE INDEX IF NOT EXISTS idx_kw_day_day   ON kw_day (day);
+CREATE INDEX IF NOT EXISTS idx_kw_day_word  ON kw_day (word, match_type);
+
+-- One row per keyword per MONTH, rolled up from kw_day. This is what the three-month retirement
+-- rule reads (William: "if they have three straight months of losses, we put them on the shit
+-- list ... if we spend $12 over three months and the word is just not going to convert anymore,
+-- then we have to let it die").
+CREATE TABLE IF NOT EXISTS kw_month (
+  keyword_id    TEXT NOT NULL,
+  month         TEXT NOT NULL,           -- YYYY-MM
+  word          TEXT,
+  match_type    TEXT,
+  ad_product    TEXT NOT NULL DEFAULT 'SPONSORED_PRODUCTS',
+  spend         REAL NOT NULL DEFAULT 0,
+  clicks        INTEGER NOT NULL DEFAULT 0,
+  impressions   INTEGER NOT NULL DEFAULT 0,
+  orders        INTEGER NOT NULL DEFAULT 0,
+  sales         REAL NOT NULL DEFAULT 0,
+  days_with_spend INTEGER NOT NULL DEFAULT 0,
+  updated_at    TEXT NOT NULL,
+  PRIMARY KEY (keyword_id, month, ad_product)
+);
+CREATE INDEX IF NOT EXISTS idx_kw_month_month ON kw_month (month);
+
+-- ACCOUNT-level: what a given day's numbers looked like ON a given later date. Small, one row per
+-- (day, observed_on). This is the only way to build a real attribution settling curve, because it
+-- records the READING as well as the value. attribution-rise.mjs currently reconstructs this from
+-- kw_perf_snapshot, which contains partial runs and had to be taught to discard them.
+CREATE TABLE IF NOT EXISTS ad_day_observation (
+  day           TEXT NOT NULL,           -- the trading day being described
+  observed_on   TEXT NOT NULL,           -- the date we read it
+  ad_product    TEXT NOT NULL DEFAULT 'SPONSORED_PRODUCTS',
+  spend         REAL NOT NULL DEFAULT 0,
+  clicks        INTEGER NOT NULL DEFAULT 0,
+  orders        INTEGER NOT NULL DEFAULT 0,
+  sales         REAL NOT NULL DEFAULT 0,
+  PRIMARY KEY (day, observed_on, ad_product)
+);
+CREATE INDEX IF NOT EXISTS idx_ad_day_obs_day ON ad_day_observation (day);
