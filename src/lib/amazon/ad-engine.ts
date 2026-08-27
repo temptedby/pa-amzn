@@ -5,6 +5,7 @@ import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
+  isPermanentlyDead, isReintroWindow,
   bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, activeCeiling, nextGate,
   type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
@@ -522,6 +523,41 @@ async function recordKills(killed: AdEngineResult["killed"], month: string): Pro
   }
 }
 
+/**
+ * Retire for good the words that cleared the kill bar and never once converted.
+ *
+ * `kw_tombstone` has existed in schema.sql since it was designed and `deadKeySet()` has been
+ * reading it on every reintroduction run. NOTHING EVER WROTE TO IT. The table was empty on
+ * 2026-08-23 while 49 words had spent $4 or more in August with zero orders between them, $278.99
+ * in total. Amazon serves ~95 days of report history, so each of those reads as "never spent" by
+ * November and becomes eligible again. The comment on isPermanentlyDead() describes exactly this
+ * cycle and the mechanism to break it was never connected.
+ *
+ * Only ever tombstones a kill Amazon ACCEPTED, and only one with zero orders. A word that converted
+ * badly is paused for the month and can come back on the 1st; that is a different rule.
+ */
+async function recordTombstones(
+  killed: AdEngineResult["killed"],
+  mtd: Map<string, { spend: number; orders: number; sales: number }>,
+): Promise<number> {
+  let n = 0;
+  for (const k of killed) {
+    if (k.applied === false) continue;
+    const perf = mtd.get(String(k.keywordId));
+    if (!perf) continue;
+    if (!isPermanentlyDead({ spend: perf.spend, orders: perf.orders, sales: perf.sales })) continue;
+    const r = await db().execute({
+      sql: `INSERT INTO kw_tombstone (dead_key, word, match_type, reason, evidence, killed_at)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(dead_key) DO NOTHING`,
+      args: [deadKey(k.text, k.matchType), k.text, k.matchType, "never_converted",
+             JSON.stringify({ spend: perf.spend, orders: perf.orders, month: new Date().toISOString().slice(0, 7) }),
+             new Date().toISOString()],
+    });
+    if (r.rowsAffected) n++;
+  }
+  return n;
+}
+
 /** This month's kills that have not been revived yet. */
 async function openKills(month: string): Promise<KillLedgerRow[]> {
   const r = await db().execute({
@@ -929,6 +965,11 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
     // Ledger the kills so the next run can reconsider them once attribution catches up.
     try { await ensureKillLedger(); await recordKills(out.killed, month); } catch (e) { out.errors.push("kill ledger: " + (e instanceof Error ? e.message : String(e))); }
+    // Tombstone the ones that burned the bar and NEVER converted, so next month does not pay to
+    // relearn it. deadKeySet() has been reading this table since it was written; nothing ever
+    // wrote to it.
+    try { const n = await recordTombstones(out.killed, nowMtd); if (n) out.notes.push(`tombstoned ${n} words that spent the bar and never converted`); }
+    catch (e) { out.errors.push("tombstone: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   out.ok = true; out.durationMs = Date.now() - start;
@@ -1040,13 +1081,23 @@ async function reintroCohort(): Promise<{ ids: Set<string>; today: number }> {
 }
 
 /** Bring floored keywords back, throttled. dryRun previews the exact batch without applying. */
-export async function runReintroduction(opts: { dryRun?: boolean } = {}): Promise<ReintroRunResult> {
+export async function runReintroduction(opts: { dryRun?: boolean; force?: boolean; now?: Date | number } = {}): Promise<ReintroRunResult> {
   const dryRun = opts.dryRun ?? true;   // preview by default — this switches on live spend
   const start = Date.now();
   const out: ReintroRunResult = {
     ok: false, dryRun, promoted: [], laddered: [], escalated: [], eligible: 0, blockedBy: [],
     state: { introducedToday: 0, inTrial: 0, cohortMonthSpend: 0 }, notes: [], errors: [], durationMs: 0,
   };
+  // Lifetime evidence may only reopen a word at the START of a month. Mid-month, the only thing
+  // that can switch a word back on is THIS month's attribution clearing 2.0x, which is
+  // inMonthRevivals()'s job and reads month-to-date alone. See isReintroWindow().
+  if (!(opts.force ?? false) && !isReintroWindow(opts.now ?? new Date())) {
+    out.ok = true;
+    out.reason = `outside the start-of-month window (day ${(opts.now ? new Date(opts.now) : new Date()).getUTCDate()}); lifetime evidence does not reopen a word mid-month`;
+    out.notes.push(out.reason);
+    out.durationMs = Date.now() - start;
+    return out;
+  }
   const cfg = adsConfigFromEnv();
   if (!cfg || !cfg.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
   const token = await getAdsAccessToken(cfg);
