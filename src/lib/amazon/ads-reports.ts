@@ -205,13 +205,20 @@ async function pollInline<T>(
 }
 
 /**
- * Get report rows if a previously-requested report has finished; otherwise request one and return
- * without waiting. NEVER blocks for more than a single status poll, so a run stays well inside
- * Vercel's 300s function budget no matter how backed up Amazon's queue is.
+ * Get report rows if a previously-requested report has finished; otherwise request one and wait for
+ * it, up to `opts.inlineWaitMs` (default INLINE_POLL_MS). When the wait runs out the deferred path
+ * is untouched: we return "requested"/"pending" and a later run collects.
+ *
+ * `inlineWaitMs: 0` polls the status ONCE and returns immediately. That is the mode report-warm
+ * needs. Warm walks five specs in one function; at the 90s default that is a 450s worst case
+ * against a 300s Vercel budget, so the last specs could be cut off mid-run and never requested at
+ * all. Warm's whole job is to ASK, not to wait, and the engine 40 minutes later does the waiting.
  */
 export async function getReport<T = Record<string, unknown>>(
   cfg: AdsConfig, token: string, spec: ReportSpec, nowIso = new Date().toISOString(),
+  opts: { inlineWaitMs?: number } = {},
 ): Promise<CollectOutcome<T>> {
+  const inlineWaitMs = opts.inlineWaitMs ?? INLINE_POLL_MS;
   const key = reportKey(spec);
   const existing = await loadJob(key);
 
@@ -224,7 +231,7 @@ export async function getReport<T = Record<string, unknown>>(
 
   // A live job that has not gone stale -> wait for it, within the inline budget.
   if (existing && existing.reportId && existing.status === "REQUESTED" && !isStaleJob(existing, nowIso)) {
-    const r = await pollInline<T>(cfg, token, existing.reportId, key, nowIso);
+    const r = await pollInline<T>(cfg, token, existing.reportId, key, nowIso, inlineWaitMs);
     if (r && "rows" in r) return { state: "ready", rows: r.rows, ageHours: 0 };
     if (r && "failed" in r) return { state: "failed", reason: r.failed };
     return { state: "pending", job: { key, reportId: existing.reportId, status: existing.status, requestedAt: existing.requestedAt, collectedAt: existing.collectedAt } };
@@ -249,7 +256,7 @@ export async function getReport<T = Record<string, unknown>>(
   });
   // Wait for the report we just asked for. At the engine's own hours this comes back in about
   // 31 seconds, so the run no longer has to exit empty and leave the engine on old numbers.
-  const fresh = await pollInline<T>(cfg, token, reportId, key, nowIso);
+  const fresh = await pollInline<T>(cfg, token, reportId, key, nowIso, inlineWaitMs);
   if (fresh && "rows" in fresh) return { state: "ready", rows: fresh.rows, ageHours: 0 };
   if (fresh && "failed" in fresh) return { state: "failed", reason: fresh.failed };
   return { state: "requested", job: { key, reportId, status: "REQUESTED", requestedAt: nowIso, collectedAt: null } };

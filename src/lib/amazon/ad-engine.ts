@@ -921,12 +921,24 @@ export async function runAdEngine(opts: { dryRun?: boolean } = {}): Promise<AdEn
     // has no answer. Written after the applies so a failed write cannot lose the snapshot.
     try {
       const at = new Date().toISOString();
-      for (const [kwId, p] of nowMtd) {
-        await db().execute({
-          sql: `INSERT OR REPLACE INTO kw_perf_snapshot (taken_at,keyword_id,month,mtd_spend,mtd_sales,mtd_orders,mtd_clicks,mtd_impressions)
-                VALUES (?,?,?,?,?,?,?,?)`,
-          args: [at, kwId, sd, p.spend, p.sales, p.orders, p.clicks, p.impressions ?? 0],
-        });
+      // ONE BATCH, NOT ONE ROUND TRIP PER KEYWORD.
+      //
+      // This loop used to `await` a separate INSERT for every keyword in the report. At 327 rows
+      // that is 327 sequential round trips to Turso, and it is what killed the run before it
+      // reached persistLog: on 2026-08-19 and 2026-08-20 the engine applied its bids and wrote
+      // kw_bid_history, then died here, so ad_engine_log recorded NOTHING for runs that had in fact
+      // paused keywords and moved bids. The snapshot table shows the same wound from the inside —
+      // 315 rows written at 08-19T06:04, then only 75 at 08-20T00:05, truncated mid-loop.
+      //
+      // Batching matters more hourly than six-hourly: the same cost would now be paid 24 times a
+      // day. `batch` sends them in one transaction.
+      const rowsToWrite = [...nowMtd].map(([kwId, p]) => ({
+        sql: `INSERT OR REPLACE INTO kw_perf_snapshot (taken_at,keyword_id,month,mtd_spend,mtd_sales,mtd_orders,mtd_clicks,mtd_impressions)
+              VALUES (?,?,?,?,?,?,?,?)`,
+        args: [at, kwId, sd, p.spend, p.sales, p.orders, p.clicks, p.impressions ?? 0] as (string | number)[],
+      }));
+      for (let i = 0; i < rowsToWrite.length; i += 200) {
+        await db().batch(rowsToWrite.slice(i, i + 200));
       }
       // 90 days of snapshots is far more than the 7-day evaluation window needs.
       await db().execute({ sql: "DELETE FROM kw_perf_snapshot WHERE taken_at < ?", args: [new Date(Date.now() - 90 * 864e5).toISOString()] });
