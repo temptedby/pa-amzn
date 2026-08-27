@@ -35,12 +35,14 @@ export async function GET(request: Request) {
   // CAD, so the kill bar is CAD 5.50 rather than a bare 4. See KILL_SPEND_BY_CURRENCY.
   const result = await runAdEngine({ dryRun, profileId, currency: "CAD" });
 
-  const acted = result.killed.length + result.bids.length + result.added.length > 0;
-  if (!dryRun && (acted || result.errors.length)) {
-    const subject = result.errors.length
-      ? "Canada ad engine ran with errors"
-      : `Canada ad engine: ${result.killed.length} paused, ${result.added.length} added, ${result.bids.length} re-bid`;
-    await sendEmail({ to: alertRecipient(), subject: `[PA-AMZN ads CA] ${subject}`, text: summarizeAdEngine(result) })
+  // ROUTINE RUNS ARE SILENT. William 2026-08-27: "telegram it is please i dont want to fill the
+  // inbox". At hourly, across three countries, a mail per acting run is up to 72 a day. The
+  // hourly watchdog reports what the engine did; this route now speaks up only when it BROKE.
+  //
+  // Errors still mail, because a run that threw is the one case where staying quiet is
+  // indistinguishable from a run that never happened.
+  if (!dryRun && result.errors.length) {
+    await sendEmail({ to: alertRecipient(), subject: `[PA-AMZN ads CA] Canada ad engine ran with errors`, text: summarizeAdEngine(result) })
       .catch((e) => console.error("[ad-engine-ca] email failed:", e));
   }
 
