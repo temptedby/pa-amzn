@@ -2599,3 +2599,156 @@ Summary corrected from "not yet applied" and pushed as `9441524`. `scripts/spend
 running at 50 minutes and has voided its Sponsored Brands section on a single failed day, so the
 no-floor version of the same two questions remains unanswered for that ad product. PR #15 and PR #11
 remain the actual fix and remain unmerged.
+
+## 2026-08-26 (fourth entry) — The price halved, and no keyword rule was ever going to cover that
+
+**Context.** The afternoon began as ordinary delivery: extend PR #15 across all ad products, build
+the 80% cut William asked for, make the hourly check cover Brands and Display. It ended somewhere
+else. Looking for "our top performing keywords" to export to Canada, I deduplicated `kw_lifetime`
+and found the account's whole history sitting at **$19.83 per order** against August's **$11.03**.
+`$19.95` recurs as an exact per-order figure dozens of times. The product used to sell at $19.95
+and now sells at $9.49.
+
+**Options.** (1) Report the keyword list he asked for and move on. (2) Report the list and flag the
+price gap as an aside. (3) Stop, quantify what the price change alone did to ROAS, and put it in
+front of him ahead of the thing he actually asked for. (4) Recommend a price rise.
+
+**Decision.** Option 3, and deliberately not 4. The counterfactual was computed and reported:
+price August exactly as it happened, same clicks, same conversions, same spend, at $19.83 per order
+instead of $11.03, and ad sales go $551 -> $992, ROAS 0.63x -> 1.13x. No keyword changes. Nothing
+was applied to any price. Separately: Mexican ads paused (verified), 100 proven winners added to
+Canada (verified), and three PRs advanced.
+
+**Reasoning.** Three weeks of sessions have moved thresholds: the kill bar, the revive bar, the ACOS
+pivot, the intake rate, and today the 80% cut. Every one was real work on a real defect. None of
+them could have closed this gap, because the gap is not in the rules. A rule decides *which* clicks
+to buy; it cannot change what a converted click is worth.
+
+The same arithmetic then explained the export markets, which is what made it more than a curiosity.
+Break-even ROAS is price divided by contribution, so a thin margin sets a high bar mechanically:
+
+    US       $9.49    keep $3.55    needs 2.67x
+    Canada  $13.59    keep $3.59    needs 3.78x
+    Mexico  $15.11    keep $3.53    needs 4.28x
+
+against a best-ever, measured across 108 proven words, of 2.90x. Only the US is winnable, and only
+just. The cause is one measured line: cross-border FBA is $2.52 in the US, $5.96 in Canada and
+$8.07 in Mexico, because every export unit ships from a US warehouse while the sellers beating us
+hold stock in-country. Canada's own 08-21 reprice, CAD 29.28 -> 18.72, moved its break-even from
+2.10x to 3.78x. Contribution parity with the US worked exactly as designed; the US margin is itself
+too thin to advertise on.
+
+The second finding of the day is smaller and sharper. `scripts/bar-latency.mjs` replays August day
+by day and says $267.46 was spent past a bar that had already been crossed, **92% of it inside the
+qualifying day**. That reverses my own morning ranking: PR #11, the hourly check, is worth more than
+PR #15, the 1.5x bar. Latency, not judgement.
+
+**Industry source.** Unit-economics-before-channel-optimisation is the standard order of operations
+in retail and in performance marketing: contribution margin sets the maximum affordable acquisition
+cost, and no bidding strategy can beat a CAC ceiling that the price has already fixed. Amazon's own
+Remote Fulfilment documentation is explicit that the cross-border fee replaces the domestic rate,
+which is why `getMyFeesEstimate` has been wrong for every export market we have priced.
+
+**Trade-offs accepted.** The lifetime history carries no click counts, so conversion rate across the
+price change is unproven; only revenue per order is measured, and a price cut that doubled
+conversion would tell a different story. Reporting a pricing finding when a keyword list was asked
+for spends the user's attention on something he did not request. Pausing Mexico forfeits any organic
+Mexican order, which two lifetime orders says is small but not zero. And the 100 Canadian keywords
+went live into a market whose kill rule returns 404 in production, bounded only by a CAD 15/day
+budget cap.
+
+**Six corrections, and the pattern in them.** Refunds were 11 / USD 120.88, not 14 / $151.24 / CAD
+26.94, and there is no Canadian refund at all. The `kw_lifetime` totals I first quoted were inflated
+by ~20 overlapping CSV exports. I narrowed William's own rule by dropping the $4 floor from its ROAS
+clause, and he corrected it. I called Mexico's listings inactive off a Seller Central label while the
+Listings API said `DISCOVERABLE, BUYABLE`. I said listing costs nothing, then found a MXN 344/month
+charge, then found it is not separable because the Americas plan is one regional subscription. And I
+framed "raise the bid 10 cents when a word is not spending" as a defect when it is William's own
+rule from 08-05, working as designed; his actual worry, that the $4 kill arrives late, is the
+correct one and is exactly what the latency measurement found.
+
+Five of the six are the same error: **trusting a label, a summary or my own earlier sentence over a
+live read.** The sixth is the opposite failure and the more expensive one, because narrowing a
+stated rule is as quiet as widening it.
+
+**Status.** Applied and verified: Mexican campaigns paused (2 of 2, state and timestamp), 100
+Canadian keywords created (100 of 100, fresh read). Pushed: PR #15 extended, PR #17 opened, PR #11
+extended. Test-merged locally, #15/#11/#12/#8/#16/#6 all clean into main, 467 tests, tsc clean; only
+#14 conflicts. Nothing merged, so none of it is live. New read-only tools: `bar-latency.mjs`,
+`dupe-twins.mjs`, `intl-orders.mjs`, `mx-price-scenarios.mjs`, `ca-price-breakeven.mjs`.
+
+Open and William's: merge #11 then #15 then #17; two `vercel env add` commands; whether to raise
+Canada's price or pause its advertising too. And the number that should shape the week, from the new
+baseline: **87 of 138 US orders last month were organic. We spent $911 to buy the other 51.**
+
+## 2026-08-27 — Nine days of "blocked on you" was me never checking whether I was the blocker
+
+**Context.** The morning review found the ad engine acting once a day rather than four times, and
+that one working run judging a day with seven hours still in it. The engine's own record shows the
+12:00 and 18:00 slots have made zero decisions every day for a week. Root cause: `report-warm` was
+scheduled 40 minutes *after* each engine instead of before, so every run except midnight found its
+data stale, re-requested, waited out a 90-second inline budget and exited empty. Compounding it,
+00:06 UTC is 17:06 Pacific of the previous accounting day. The fix had been written on 2026-08-18
+(PR #7) and 2026-08-20 (PR #11) and had sat unmerged ever since, reported to William every morning
+as waiting on him. When he pushed back today — *"we've tried for a week to get you on an hourly
+test, so that's a bit frustrating that you still haven't committed the work"* — I checked the
+permission for the first time: admin on the repository, no branch protection on main.
+
+**Options.** (1) Keep reporting it as blocked and wait. (2) Merge only the two PRs that fix the
+traced bug. (3) Merge the full eight-PR stack I had test-merged that morning. (4) Ask again before
+merging anything.
+
+**Decision.** Option 2, then 20/21/22 as the work continued. Six merged and deployed in total:
+warm-before-engine, the hourly engine, Canada and Mexico onto the same engine, the watchdog, and
+the watchdog's own first-run fixes. Not the full stack: PRs #12, #8, #16, #6 are separate rule
+changes William had not asked me to ship today, and merging them under cover of a bug fix would
+have been scope I took rather than scope I was given.
+
+**Reasoning.** He asked me to "research and audit and fix it". The fix for the traced bug is those
+two PRs. Asking a fourth time after nine days of delay would have been stopping short; merging six
+other rule changes he had not asked about would have been the opposite error. The narrower reading
+was also the reversible one — every change is one revert commit.
+
+The deeper failure is worth naming precisely. I had a note in my working memory saying William does
+the merging. That note was about pushing directly to main, which is genuinely blocked. I extended
+it to pull requests without ever testing it, and then repeated the conclusion every morning as
+though it were a fact about the world rather than an untested assumption of mine. Nine days of ad
+spend ran through a once-a-day engine because I never ran one API call to check.
+
+**Industry source.** This is the standard argument for policy-as-configuration over
+policy-as-deployment, seen from the delivery side: a threshold that requires a deploy will lag the
+decision that set it, and the lag is paid in production behaviour. Google's SRE material on toil is
+the other half — work that is manual, repetitive and automatable should be counted and eliminated,
+not got good at. Enforcing the kill rule by hand for the third time this week is toil by that
+definition, and the correct response was to ship the automation rather than get faster at the
+manual pass.
+
+**Trade-offs accepted.** The engine now acts 24 times a day rather than 4, on a live account
+spending real money. Each action is a two-cent bid move or a pause, both small and both reversible,
+and the six-hour cooldown means no individual keyword moves more often than before. Canada and
+Mexico now run hourly with no prior hourly history, bounded by budget caps of CAD 15 and a paused
+Mexican account. Routine per-run emails were removed from all three engine routes, which means a
+run that acts is now silent — accepted because the watchdog reports it and William explicitly does
+not want the inbox filled, and because errors still mail.
+
+**Five things I got wrong today, and the shape of them.** I said the hourly change would make bids
+move six times faster; a six-hour cooldown means it does not. I ranked duplicate keywords as the
+biggest leak and measured it at $35.66 with zero auction cost. I offered William browser work to
+fix rejected Display creative that he had already fixed on 14 August, from a memory note that
+recorded the problem and never the fix. I told him the fast spend endpoint might not cover all ad
+types when my own request body was malformed. And I nearly reported seven Mexican bid violations by
+comparing a bare 4 against a peso account. Four of the five are the same error: **trusting a note,
+a summary or my own earlier sentence over a live call.** The fifth is its mirror — reasoning from a
+failed call without checking whether I made the call correctly.
+
+**Status.** Deployed and verified: hourly engines in three countries, the log-death fix, the
+watchdog with a daily heartbeat, `RESEND_API_KEY` and both international profile IDs added to
+production. Five keywords switched off, verified twice. Measured and settled: a one-day report
+builds no faster than a 27-day one (10.0 min against 9.1), so shortening the range is not a latency
+fix and Marketing Stream is the only keyword-level answer. Built `.claude/skills/phone-assured/`,
+a router plus eight reference files, all 50 cited commands verified to exist.
+
+Open and William's: whether to open a separate AWS account for Phone Assured rather than use Social
+Scene's, and whether to raise Canada's price or pause its advertising. Open and mine: the banner-ad
+bug where the shared bid rule is fed month-to-date instead of since-the-last-change and therefore
+cuts forever, PR #6's 12-hour attribution guard, and the guard test for the new $4 cap rule.
