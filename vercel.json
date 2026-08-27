@@ -47,6 +47,10 @@
     {
       "path": "/api/cron/history-archive",
       "schedule": "20 9 * * *"
+    },
+    {
+      "path": "/api/cron/engine-watch",
+      "schedule": "15 * * * *"
     }
   ]
 }

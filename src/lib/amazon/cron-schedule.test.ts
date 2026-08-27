@@ -76,3 +76,38 @@ describe("cron schedule — new keywords still come online SLOWLY", () => {
     expect(scheduleFor("/api/cron/ad-engine-reactivate")).toBe("0 15 1 * *");
   });
 });
+
+// ---------------------------------------------------------------------------
+// THE WATCHDOG'S OWN SLOT (William 2026-08-27)
+// ---------------------------------------------------------------------------
+describe("the hourly watchdog", () => {
+  const crons = JSON.parse(readFileSync(new URL("../../../vercel.json", import.meta.url), "utf8")).crons as Array<{ path: string; schedule: string }>;
+  const at = (p: string) => crons.find((c) => c.path === `/api/cron/${p}`)?.schedule;
+  const minuteOf = (s: string | undefined) => Number(String(s).split(" ")[0]);
+
+  it("exists and runs every hour", () => {
+    expect(at("engine-watch")).toBe("15 * * * *");
+  });
+
+  it("runs AFTER every engine it audits, by judging the previous hour", () => {
+    // :15 is earlier in the clock than the engines, which is the point: it looks back at the
+    // cycle that finished 20 minutes ago, not at work still in flight.
+    const w = minuteOf(at("engine-watch"));
+    for (const p of ["ad-engine", "sb-engine", "sd-engine", "ad-engine-ca", "ad-engine-mx"]) {
+      expect(minuteOf(at(p))).toBeGreaterThan(w);
+    }
+  });
+
+  it("does not collide with any other cron minute", () => {
+    const hourly = crons.filter((c) => c.schedule.endsWith("* * * *") && !c.schedule.startsWith("0 1"));
+    const mins = hourly.map((c) => minuteOf(c.schedule));
+    const dupes = mins.filter((m, i) => mins.indexOf(m) !== i && m !== 0);
+    expect(dupes).toEqual([]);
+  });
+
+  it("every spending engine is hourly, in every country", () => {
+    for (const p of ["ad-engine", "sb-engine", "sd-engine", "ad-engine-ca", "ad-engine-mx"]) {
+      expect(at(p), `${p} must stay hourly`).toMatch(/^\d+ \* \* \* \*$/);
+    }
+  });
+});
