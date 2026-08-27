@@ -2752,3 +2752,78 @@ Open and William's: whether to open a separate AWS account for Phone Assured rat
 Scene's, and whether to raise Canada's price or pause its advertising. Open and mine: the banner-ad
 bug where the shared bid rule is fed month-to-date instead of since-the-last-change and therefore
 cuts forever, PR #6's 12-hour attribution guard, and the guard test for the new $4 cap rule.
+
+---
+
+## 2026-08-27 evening — the ceiling comes before the bids, and the database is not the account
+
+**Context.** The hourly engine's first full day. A second morning review found the Sponsored Brands
+bid ratchet running 24 times a day instead of once, and a chain of four claims of mine that a live
+read then destroyed. William's ad account is authorised to spend $745 a day and spends $33.69. The
+question that ended the session was his, and it was about sequence: he wants the 1,353 floored
+keywords lifted, and he does not want *"a thousand words starting to spend and just blow up our
+whole ad account."*
+
+**Options considered.**
+
+1. *Lift the floored keywords now, rely on the $4 kill.* Fastest, and wrong. 1,353 words at $4 each
+   is $5,412 of rope, and the $4 rule only fires **after** each word has spent its $4.
+2. *Lift them and watch the watchdog.* The watchdog reports per keyword against the bar, but it runs
+   hourly against a report that refreshes every two to four hours, so it would report the damage
+   after it happened rather than prevent it.
+3. *Cap the daily budgets first, then lift.* A budget is the only control in Amazon's own system
+   that is enforced before the money is spent rather than after.
+4. *Do neither until the engine loop is fixed.* Defensible, and too slow: the fix does not change
+   the exposure arithmetic.
+
+**Decision.** Option 3, and it is now the stated order: **cap budgets, then raise bids, in that
+sequence and never the reverse.** The number itself is William's, asked as one question, with $75
+a day recommended as roughly double current spend. Nothing was changed to budgets or bids tonight.
+
+Separately, and inside what William approved, 20 competitor ASIN targets were added at $0.37 into
+`ASIN MAN 2` ($25/day, ENABLED). `POST /sp/targets` returned 207 with 20 accepted and 0 refused,
+and all 20 were read back live as ENABLED at $0.37, stamped 21:40:10 UTC.
+
+**Reasoning.** The three controls in this account fire at different times. The $4 kill and the 1.5x
+line are *post hoc*: they read a report and switch a word off after it has already spent. The bid
+level is *probabilistic*: it changes how often you win, not how much you can lose. Only the daily
+budget is a hard stop enforced by Amazon before the spend happens. With 22x headroom, the account
+currently has no hard stop at all, so every other safeguard is a promise about how fast we notice.
+Raising 1,353 bids into that is asking the slowest control to do the fastest control's job.
+
+**Industry source.** Amazon's own campaign budget is the only spend control the platform enforces
+in real time; keyword-level rules are all reconciled from reports on a lag, which Amazon documents
+as up to 12 hours for Sponsored Products and which we measured at 9 to 39 minutes for a report plus
+a 2 to 4 hour cache. Standard PPC practice caps campaign budgets to a multiple of intended spend
+precisely so that a bid or targeting error is bounded rather than open-ended.
+
+**Trade-offs accepted.** Capping budgets near current spend will throttle a genuinely good day. The
+main campaign spends $12.27 against $250 authorised, and a $30 cap would clip a day that suddenly
+worked. Accepted because we are not currently having those days, and because a cap is one API call
+to raise once there is evidence. The 20 new ASIN targets carry up to $80 of exposure before the $4
+rule has stopped all of them, bounded further by the $25 daily campaign budget.
+
+**Four things I got wrong today, and they are one thing.** I reported `phone assured phone tether`
+at 12.8x on 78 orders and called it a winner somebody had switched off; deduplicated it is 9.5x on
+68 orders and the best copy is ENABLED. I said ASIN targeting was our best channel at 1.97x against
+search's 0.63x, which compared lifetime against one month — this month ASIN targeting spent $1.57.
+I found 99 proven converters "pinned at the floor" and was about to raise them when a live read
+showed their bids are $0.53 to $0.85. And I reported 689 words at the floor when the live figure is
+1,353, of which **two** have ever converted in our records.
+
+All four are the same error: **`kw_lifetime` is a snapshot imported from CSVs on 5 August, and I
+read it as the account.** The traps file already says "trusting a label over a live read" and
+"compare equal windows". Reading a rule is not the same as applying it, and the correction each
+time came from William asking rather than from me checking.
+
+**Status.** Written and verified: 20 competitor ASIN targets live at $0.37, 20 of 20 confirmed by
+read-back. Traced and unfixed: `planBids` passes `last: undefined`, so neither the cooldown nor the
+since-last-change window applies to Brands or Display (`ad-rules.ts:1330`); the bid loop iterates
+report rows rather than the keyword list, leaving three quarters of enabled keywords unjudged
+(`ad-engine.ts:710`); `engine-heartbeat.ts` was never committed, so the watchdog reads last-action
+as last-run and raised a false ENGINE NOT RUNNING tonight; `engine-watch.ts:261` sends the wrong
+Accept media type and 406s on Brands. PR #6 verified still open three ways.
+
+Open and William's: the daily budget ceiling; the reintroduction cap 10 to 40; the five A+ panels;
+attach or Drive for Megan's email; the five profitable paused ASIN targets. Open and mine: the four
+defects above.
