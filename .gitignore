@@ -67,3 +67,6 @@ scripts/pw-*.png
 # these are a working cache and must never be committed.
 /assets/source/
 /build/creative/
+
+# Seller Central browser profiles (sc-account-status.mjs) — never commit, they hold session cookies
+.sc-status-*/
