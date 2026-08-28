@@ -2827,3 +2827,101 @@ Accept media type and 406s on Brands. PR #6 verified still open three ways.
 Open and William's: the daily budget ceiling; the reintroduction cap 10 to 40; the five A+ panels;
 attach or Drive for Megan's email; the five profitable paused ASIN targets. Open and mine: the four
 defects above.
+
+## 2026-08-28 — Ninety percent of the month should have been switched off, and our own evidence was double-counted
+
+**Context.** A morning review that William turned into a full audit with one line: *"think we have
+over $1100 in ads right now please make sure you can account for all spend"*. Reconciling it to the
+dollar exposed a reporting blind spot, and chasing the value hiding in the account exposed a data
+one. The day ended with two live writes, one of which I got wrong and put back inside the hour.
+
+**Options considered** for the central question, which is what to do about 90% of the spend failing
+the 1.5x bar while the rule itself is provably obeyed:
+
+1. *Tighten the kill rule.* Useless. `spend-truth` and `over-bar` both return zero live violations.
+   The rule is not being broken; it is being satisfied by money that has already gone.
+2. *Cap daily budgets, then raise the winners.* My recommendation from the 27th. William declined
+   it today: *"daily budget is fine its never spent that much in a day and if it does the engine
+   will stop it hourly."*
+3. *Raise the proven winners and let the $4 bar bound the downside.* What we did, at his direction,
+   in the one channel above break-even.
+4. *Stop launching new words.* Not decided today, and it is where $201.54 of the month went.
+
+**Decision.** Option 3, narrowly: one word switched back on and ten Sponsored Brands bids stepped
+up a dime, then the planner fixed so the step survives. Nothing was done about the volume problem,
+which is the larger number and remains open.
+
+**Reasoning.** The account splits cleanly in two once you sort by what each dollar returned:
+
+```
+  $87.48 of spend returned $305.23    3.49x
+  the other ~$1,025 returned ~$300    0.29x
+```
+
+$40.42 of Sponsored Products at 4.61x and $47.06 of Sponsored Brands at 2.53x are a good business.
+The remaining thousand dollars is not a bid-tuning problem, it is a volume problem, and $201.54 of
+it went to words that never reached the $4 bar at all so no kill rule can ever reach them. A
+further $399.61 is the same words being re-tried, because `kw_tombstone` is read on every run and
+holds zero rows.
+
+Against that, raising ten proven Brands words is small and safe: it is the only product above
+break-even, and the exposure is bounded by a $60/day campaign budget.
+
+**Industry source.** Amazon's own campaign budget is the only spend control the platform enforces
+in real time; keyword rules reconcile from reports on a lag. Standard PPC practice is to sort spend
+by return and defund the tail rather than re-tune it, because a bid change alters win rate, not
+unit economics. The price rescale below is the same principle: a keyword's historic ROAS is not
+transferable across a price change, since the numerator halves and the cost per click does not.
+
+**Trade-offs accepted.** Budgets stay uncapped, so the brake is hourly enforcement rather than a
+hard stop, which is William's call and now recorded as such. The ten raised Brands words have thin
+evidence, two to seven lifetime orders each. And Sponsored Brands has had no working kill rule at
+all this month, so those raises went into a channel the engine cannot see until PR #25 ships.
+
+**Two findings that change how we read our own numbers.**
+
+*The v3 reporting API hides legacy Sponsored Brands campaigns.* Per-campaign totals came to
+$1,058.22 against the audit's $1,109.91. Products and Display agreed to the cent; the entire $51.69
+was Brands. There is an ENABLED Brands Video campaign authorised at $160/day, $21,300 spent
+lifetime, that the per-campaign view has never shown. `audit-spend` is right because it uses
+`/v2/hsa/campaigns/report`; anything built on v3 is structurally blind here.
+
+*`kw_lifetime` double-counts.* The August 5 exports were loaded more than once under different
+filenames: 1.15x on spend and 1.19x on orders overall, up to 3x on individual words. ROAS survives
+it because both halves inflate together, so today's recommendations stand, but every order count
+and dollar total I have quoted from that table this month is high.
+
+**The price rescale, which is the real answer to "which winners should come back".** Lifetime
+average order value is $19.67, earned at the old $19.95 price. August's is $10.93. Multiply any
+lifetime ROAS by 0.556. Break-even at 2.45x therefore needs 4.41x lifetime, and the 1.5x kill bar
+needs 2.70x. Of 47 lifetime-proven words with no enabled copy, 23 would fail the kill bar today,
+including every famous one: `retractable iphone` on 117 orders, `phone chain` on 104, `iphone
+tether` on 88. Eight of the 13 that do clear were already re-tried this month for $38.83 and zero
+sales. Five candidates survive. Not 141, not 58.
+
+**Status.** Applied and verified against Amazon: `retractable cell phone leash` EXACT enabled
+(`lastUpdate 2026-08-28T14:51:32Z`); ten Brands bids raised one $0.10 step, 207 SUCCESS 10 of 10,
+read back. PR #25 open: the Brands and Display cooldown plus the watchdog 406, 491 tests, pinning
+William's rule of today — grow $0.10, no more than every six hours, stop at $0.85 and ask.
+
+**Five corrections, and they have a shape.** I told William a Canadian order was refunded and then
+told him he had told me; the financial events show no Canadian refund at all, and 14 US refunds
+worth $166.17 that nobody had been looking at, a 9.9% refund rate. I called `phone security` still
+live when both Brands copies are paused, because an 18-digit campaign ID rounded through
+`JSON.parse` and I read "unresolved" as "live" instead of chasing it. I produced five paused Brands
+winners that evaporated once the evidence was filtered to Brands only, having credited Sponsored
+Products history to Brands keywords. I quoted $8.27 of spend today from a stale ad-day counter when
+the figure was $0.93. And I read *"keep raising the bids .1 to .85"* as a destination rather than a
+ceiling and put ten keywords straight to $0.85.
+
+Four of the five were caught by a check I ran before speaking. The fifth was caught by William. The
+pattern in all of them is the same one already in the traps file: an unresolved value read as a
+finding, and a stated instruction widened past what was said.
+
+**Open and William's:** merge PR #25; the reintroduction cap 10 to 40; the five A+ panels; attach or
+Drive for Megan; the five revival candidates and the five paused ASIN targets.
+
+**Open and mine:** the engine loop iterates report rows, leaving three quarters of enabled keywords
+unjudged; `engine-heartbeat.ts` uncommitted; `kw_tombstone` has no writer; the 18-digit rounding
+lives anywhere we join Brands or Display by numeric ID. Unread today: `sc-account-status` was
+killed without output, and `kw_day` is two days stale.
