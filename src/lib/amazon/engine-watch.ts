@@ -270,12 +270,19 @@ async function liveSdTargets(cfg: AdsConfig, token: string): Promise<Map<string,
 
 /** Live Sponsored Brands keywords. */
 async function liveSbKeywords(cfg: AdsConfig, token: string): Promise<Map<string, LiveEntity>> {
+  // TWO HEADER RULES, both learned from real responses on 2026-08-28, and they are not symmetric:
+  //   Accept MUST be the vendor type. `application/json` answers 406 "No match for accept header".
+  //   Content-Type MUST BE ABSENT on this GET. Sending any Content-Type answers 415 "Cannot consume
+  //   content type", including the vendor type itself.
+  // Writing is the mirror image (Content-Type: application/json, Accept: ...sbkeywordresponse...),
+  // which is exactly why mixing the two up is so easy. The cost of this one was that the watchdog
+  // threw on every run and Sponsored Brands went unwatched entirely.
   const res = await fetch(`${A}/sb/keywords`, {
     headers: {
       Authorization: `Bearer ${token}`,
       "Amazon-Advertising-API-ClientId": cfg.clientId,
       "Amazon-Advertising-API-Scope": String(cfg.profileId),
-      "Content-Type": "application/json", Accept: "application/json",
+      Accept: "application/vnd.sbkeyword.v3+json",
     },
   });
   if (!res.ok) throw new Error(`sb/keywords ${res.status}`);

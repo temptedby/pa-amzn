@@ -26,6 +26,7 @@
 // spanning a month boundary is closed at the boundary rather than differenced across it — recorded
 // here rather than discovered later as a mystery negative number.
 import { db } from "@/lib/db/client";
+import type { BidChange } from "./ad-rules";
 
 export interface EpochCounters {
   spend: number; sales: number; orders: number; clicks: number; impressions: number;
@@ -286,4 +287,51 @@ export async function recordBidRun(
     }
   }
   return { opened, touched };
+}
+
+/**
+ * The bid change currently in force for every entity of one ad product.
+ *
+ * WHY THIS EXISTS. `planBids()` — the shared planner Brands and Display run on — was written with
+ * `last: undefined` hard-coded, on the reasoning that `kw_bid_history` was empty so there was no
+ * history to pass. That reasoning expired the moment this ledger started recording epochs, but the
+ * `undefined` stayed. The consequence is not theoretical: with no `last`, `inCooldown()` can never
+ * be true, so the hourly cron re-bid every Brands and Display entity 24 times a day, and because
+ * every branch of `searchStep()` for a word that IS getting clicks points DOWN, the effect was a
+ * one-way ratchet. `phone retractable holder` returned 2.28x on 7 orders and was walked to a $0.10
+ * bid two cents at a time, which is a winner switched off by arithmetic rather than by a rule.
+ *
+ * An OPEN epoch is exactly "the bid level in force now, and when it started", which is the same
+ * thing `kw_bid_history` gives Sponsored Products. The open counters are that level's baseline, so
+ * the turn-around branch of searchStep() also becomes reachable for the first time.
+ */
+export async function lastChanges(adProduct: string): Promise<Map<string, BidChange>> {
+  const out = new Map<string, BidChange>();
+  try {
+    const r = await db().execute({
+      sql: `SELECT entity_id, bid, from_bid, opened_at,
+                   open_spend, open_sales, open_clicks, open_impressions
+              FROM bid_epoch
+             WHERE ad_product = ? AND closed_at IS NULL
+               AND id IN (SELECT MAX(id) FROM bid_epoch
+                           WHERE ad_product = ? AND closed_at IS NULL GROUP BY entity_id)`,
+      args: [adProduct, adProduct],
+    });
+    for (const row of r.rows) {
+      const openSpend = Number(row.open_spend ?? 0);
+      const openSales = Number(row.open_sales ?? 0);
+      out.set(String(row.entity_id), {
+        changedAt: String(row.opened_at),
+        fromBid: row.from_bid == null ? Number(row.bid) : Number(row.from_bid),
+        toBid: Number(row.bid),
+        // ROAS of the level BEFORE this one. Null rather than 0 when it never spent, because
+        // searchStep treats null as "no signal" and 0 as "spent and sold nothing".
+        roasBefore: openSpend > 0 ? openSales / openSpend : null,
+        impressionsBefore: row.open_impressions == null ? undefined : Number(row.open_impressions),
+        clicksBefore: row.open_clicks == null ? undefined : Number(row.open_clicks),
+        salesBefore: row.open_sales == null ? undefined : Number(row.open_sales),
+      });
+    }
+  } catch { /* ledger not created yet — no history is a valid answer, and means no cooldown */ }
+  return out;
 }
