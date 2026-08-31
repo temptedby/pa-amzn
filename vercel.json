@@ -46,7 +46,7 @@
     },
     {
       "path": "/api/cron/history-archive",
-      "schedule": "20 9 * * *"
+      "schedule": "20 */4 * * *"
     },
     {
       "path": "/api/cron/engine-watch",

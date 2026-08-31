@@ -19,6 +19,13 @@ import { runHistoryArchive } from "@/lib/amazon/history-archive";
 // This one is READ-ONLY against Amazon. It changes no bid, pauses no keyword and spends nothing,
 // so unlike the engines it needs no preview flag.
 // Auth: Bearer CRON_SECRET (Vercel injects it).
+//
+// 2026-08-31: IT NEVER WAITS FOR A REPORT ANY MORE. It used to block on Amazon's queue, needed 589
+// seconds, was given 300, and so was killed just past halfway every day from 08-26 onward while
+// looking healthy. It now asks for a window's report, stores the id and hangs up; the next run four
+// hours later collects it. A run takes seconds, so the platform timeout is no longer the binding
+// constraint. Runs every 4 hours rather than daily because a window now needs a second visit to be
+// collected, and because a missed day of history cannot be got back once Amazon drops it.
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
