@@ -179,7 +179,7 @@ describe("harvestWindows — chunked <=31d trailing windows", () => {
 });
 
 
-import { reactivationCandidates, REACT_WINDOW_DAYS, inMonthRevivals, REVIVE_MIN_ROAS, killPlan } from "./ad-engine";
+import { reactivationCandidates, REACT_WINDOW_DAYS, inMonthRevivals, REVIVE_MIN_ROAS, killPlan, PRICE_RESCALE } from "./ad-engine";
 
 // Monthly reactivation (ad-engine-harvest-rule.md step 4, William 2026-06-26): re-enable a PAUSED
 // keyword whose trailing 65d recovered to the same winner bar as harvest (cost >= $4 AND ACOS <= 50%).
@@ -291,9 +291,41 @@ describe("reactivationCandidates — lifetime route", () => {
     new Map([["phone tether|EXACT", { roas, spend, sales: spend * roas, orders }]]);
 
   it("brings back a word with NO recent spend at all, on its lifetime record alone", () => {
-    const out = reactivationCandidates(paused(), new Map(), lt(3.1, 40));
+    // 4.0x recorded = 2.22x in today's money, comfortably over the rescaled bar. Was 3.1x when the
+    // bar was 1.92x; the fixture moved with the bar, the behaviour under test did not.
+    const out = reactivationCandidates(paused(), new Map(), lt(4.0, 40));
     expect(out).toHaveLength(1);
     expect(out[0].via).toBe("lifetime");
+  });
+
+  // William 2026-08-31: "reactivation bar should never turn on words that never converted only key
+  // words that have converted above a 2x roas in the past". Pinned so the bar cannot drift back to
+  // the old 1.92x break-even, and so a never-converted word can never return by any route.
+  it("never re-enables a word that has never converted, however much it spent", () => {
+    const neverSold = new Map([["phone tether|EXACT", { roas: 0, spend: 500, sales: 0, orders: 0 }]]);
+    expect(reactivationCandidates(paused(), new Map(), neverSold)).toHaveLength(0);
+  });
+
+  // William 2026-08-31 chose the 2x to be read IN TODAY'S MONEY. Lifetime records were earned at
+  // $19.95 and the product now sells for $9.49, so the bar on the recorded number is 2 / 0.556 =
+  // 3.60x. A 2.00x record is only 1.11x today and would be killed again days after coming back.
+  it("holds the lifetime bar at 3.60x, the price-rescaled 2x", () => {
+    expect(reactivationCandidates(paused(), new Map(), lt(2.0, 40))).toHaveLength(0);
+    expect(reactivationCandidates(paused(), new Map(), lt(3.59, 40))).toHaveLength(0);
+    expect(reactivationCandidates(paused(), new Map(), lt(3.6, 40))).toHaveLength(1);
+  });
+
+  it("every word it re-enables clears the 1.5x kill bar once rescaled", () => {
+    const out = reactivationCandidates(paused(), new Map(), lt(3.6, 40));
+    expect(out).toHaveLength(1);
+    expect((1 / out[0].acos) * PRICE_RESCALE).toBeGreaterThanOrEqual(1.5);
+  });
+
+  // Route A is the trailing-window path. It must refuse a never-converted word too, otherwise the
+  // "only words that have converted" rule would have a second door standing open.
+  it("route A also refuses a word with spend but no sales", () => {
+    const spentNothingBack = new Map([["K1", { cost: 50, sales: 0 }]]);
+    expect(reactivationCandidates(paused(), spentNothingBack, new Map())).toHaveLength(0);
   });
 
   it("leaves it off when lifetime is below break-even", () => {
