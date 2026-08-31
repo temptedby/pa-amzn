@@ -796,6 +796,34 @@ export const BID_SHAVE_STEP = 0.02;
 /** Clicks needed before a ROAS reading is trusted. Below this the ratio is noise: the bid still
  *  moves, but always on the cautious step, never the fast one. */
 export const SEARCH_MIN_CLICKS = 3;
+
+/**
+ * Impressions needed before "shown, but never clicked" counts as a verdict.
+ *
+ * THE MEASUREMENT THAT FORCED THIS. Of 852 Sponsored Products bid moves between 2026-08-14 and
+ * 2026-08-20, 674 were raises and 652 of those came from this one branch. The evidence behind them:
+ *
+ *     min 0    p25 0    median 2    p75 11    p90 42    max 234 impressions
+ *
+ * Account CTR over the same period is 0.595%, which is ONE CLICK PER 168 IMPRESSIONS. A keyword
+ * shown twice without being clicked is the single most ordinary event in the account. The rule was
+ * reading that as a verdict and paying more for it, 652 times in six days, while spend per day went
+ * up 3.67x and units per day went up 1.26x.
+ *
+ * By the rule of three, zero clicks in n impressions puts the 95% upper bound on a keyword's CTR at
+ * roughly 3/n. At 150 impressions that bound is 2%, still more than three times the account
+ * average, so 150 is a generous bar rather than a strict one. It blocks 98% of the raises above.
+ *
+ * WHAT THIS DELIBERATELY DOES NOT TOUCH. A keyword with NO impressions at all still climbs, on the
+ * branch above: it is not in the auction, and a bid only charges when it wins a click, so raising
+ * costs nothing. That is William's 2026-08-10 reasoning and the escape route out of the $0.10 floor
+ * trap, and it is untouched.
+ *
+ * AND THIS IS A DELAY, NOT A FREEZE. The window here runs from the keyword's last bid change, so a
+ * held keyword keeps being shown and keeps accumulating impressions. Once it genuinely passes the
+ * bar with still no click, the raise fires — on evidence instead of on noise.
+ */
+export const NO_CLICK_MIN_IMPRESSIONS = 150;
 // The line the whole search steers by (William 2026-08-07: "roas above 2x that's the goal").
 // Break-even is 1.92x on real fees ($9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA), so 2x is
 // break-even plus a thin margin — deliberately not a target that only a floored bid could hit.
@@ -1079,6 +1107,8 @@ export function searchStep(
     step?: number; floor?: number; cap?: number; ceiling?: number; minClicks?: number; target?: number;
     /** the gentle cut for a word that already works (BID_SHAVE_STEP) */
     shave?: number;
+    /** impressions required before a missing click may raise a bid (NO_CLICK_MIN_IMPRESSIONS) */
+    noClickMinImpressions?: number;
     /** the lowest bid this word has been PROVEN to still need; never cut at or below it */
     floorFound?: number | null;
   } = {},
@@ -1090,6 +1120,7 @@ export function searchStep(
   const cap = opts.cap ?? BID_CAP;
   const ceiling = opts.ceiling ?? BID_CONFIRM_CEILING;
   const minClicks = opts.minClicks ?? SEARCH_MIN_CLICKS;
+  const noClickMinImpressions = opts.noClickMinImpressions ?? NO_CLICK_MIN_IMPRESSIONS;
   const target = opts.target ?? TARGET_ROAS;
   const base = currentBid > 0 ? currentBid : floor;
 
@@ -1192,6 +1223,14 @@ export function searchStep(
   // nobody clicks whatever the listing says. Position is bought with bid, and 1,750 keywords are
   // proof that holding them there teaches us nothing.
   if (clicks === 0) {
+    // ...but only once "never clicked" means something. See NO_CLICK_MIN_IMPRESSIONS.
+    if (impressions < noClickMinImpressions) {
+      return {
+        bid: null,
+        reason: `${impressions} impressions and no clicks — too few to mean anything (one click costs about `
+          + `${noClickMinImpressions} impressions on this account), holding until there is evidence`,
+      };
+    }
     return move("up", `${impressions} impressions and no clicks — raising to find the position that gets one`);
   }
 
