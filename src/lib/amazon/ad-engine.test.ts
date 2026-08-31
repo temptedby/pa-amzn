@@ -322,8 +322,13 @@ describe("reactivationCandidates — lifetime route", () => {
   });
 });
 
-describe("only BROAD discoveries are harvested (William 2026-08-08)", () => {
-  // "only way to add new phrase and exact is if they perform as search terms for broad keywords"
+describe("any converting search term is harvested (William 2026-08-18)", () => {
+  // "exact and phrase for search words converting". This SUPERSEDES the 2026-08-08 broad-only rule.
+  //
+  // What the old rule cost: a live probe on 2026-08-18 over the real 60-day window found 8 terms
+  // converting at 2x or better, and only 2 were surfaced by a broad keyword. The gate was refusing
+  // `tourist phone safety cord` at 16.5x and `phone security leash` at 10.9x, neither of which
+  // existed in the account in any match type.
   const win = { searchTerm: "anti theft phone strap", cost: 2.24, sales14d: 16.49, purchases14d: 1 };
 
   it("harvests a converting BROAD search term as EXACT + PHRASE", () => {
@@ -335,44 +340,65 @@ describe("only BROAD discoveries are harvested (William 2026-08-08)", () => {
     expect(adds.every((a) => a.keywordText === "anti theft phone strap")).toBe(true);
   });
 
-  it("does NOT harvest the same term when a PHRASE keyword found it", () => {
-    expect(harvestCandidates([row({ ...win, matchType: "PHRASE" })], new Set())).toHaveLength(0);
+  it("harvests a term a PHRASE keyword found", () => {
+    // The live 16.5x case in miniature. A phrase keyword `phone safety cord` matching the query
+    // `tourist phone safety cord` yields a strictly NARROWER keyword carrying its own bid, which is
+    // the whole point of harvesting. The old rule called this "a copy of itself" and refused it.
+    expect(harvestCandidates([row({ ...win, matchType: "PHRASE" })], new Set())).toHaveLength(2);
   });
 
-  it("does NOT harvest when an EXACT keyword found it", () => {
-    expect(harvestCandidates([row({ ...win, matchType: "EXACT" })], new Set())).toHaveLength(0);
+  it("harvests a term an EXACT keyword found", () => {
+    expect(harvestCandidates([row({ ...win, matchType: "EXACT" })], new Set())).toHaveLength(2);
   });
 
-  it("does NOT harvest auto-campaign discoveries by default", () => {
+  it("harvests auto-campaign discoveries", () => {
     // Auto reports as TARGETING_EXPRESSION_PREDEFINED with keyword text "loose-match", never BROAD.
-    // Excluding it is the literal reading of William's rule and remains an open question.
-    expect(harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED", keyword: "loose-match" })], new Set())).toHaveLength(0);
+    // Under the new rule eligibility does not depend on what surfaced the term, so auto is included.
+    expect(harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED", keyword: "loose-match" })], new Set())).toHaveLength(2);
   });
 
-  it("CAN include auto when asked, without a code change", () => {
-    const adds = harvestCandidates([row({ ...win, matchType: "TARGETING_EXPRESSION_PREDEFINED" })], new Set(),
-      NEW_KW_BID, { discoveryMatchTypes: ["BROAD", "TARGETING_EXPRESSION", "TARGETING_EXPRESSION_PREDEFINED"] });
-    expect(adds).toHaveLength(2);
+  it("keeps a row whose match type is missing", () => {
+    // Previously dropped on the principle that silence is not eligibility. That principle applied
+    // when the source match type WAS the eligibility test. It no longer is, so a blank column is
+    // just a blank column and the term is judged on its money like any other.
+    expect(harvestCandidates([{ ...row(win), matchType: undefined }], new Set())).toHaveLength(2);
   });
 
-  it("treats a row with NO match type as ineligible rather than assuming broad", () => {
-    // Rows predating the column cannot be shown to be discoveries. Silence is not eligibility.
-    expect(harvestCandidates([{ ...row(win), matchType: undefined }], new Set())).toHaveLength(0);
+  it("CAN still be restricted to a source match type, without a code change", () => {
+    // The lever that reverses this if the account ever needs narrowing again.
+    const adds = harvestCandidates([row({ ...win, matchType: "PHRASE" })], new Set(), NEW_KW_BID,
+      { discoveryMatchTypes: ["BROAD"] });
+    expect(adds).toHaveLength(0);
   });
 
-  it("still applies the 2.0x bar to broad discoveries", () => {
+  it("still applies the 2.0x bar", () => {
     // 1.5x: converted, but below the bar William set and below the 1.92x break-even.
     expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 15, purchases14d: 1 })], new Set())).toHaveLength(0);
     expect(harvestCandidates([row({ searchTerm: "x", cost: 10, sales14d: 20, purchases14d: 1 })], new Set())).toHaveLength(2);
   });
 
-  it("does not let a PHRASE row's spend drag a BROAD winner below the bar", () => {
-    // Same term, two match types. Only the broad row counts toward the decision.
+  it("judges a term on its TOTAL spend across every match type that surfaced it", () => {
+    // BEHAVIOUR CHANGE, and the reason this test is worth reading. Under the broad-only rule the
+    // PHRASE row was filtered out BEFORE aggregation, so a $1 -> $10 broad row harvested even though
+    // the same term had burned $90 through phrase with nothing to show. Now every row for the term
+    // counts: $91 spent, $10 back, 0.11x, no harvest.
+    //
+    // This is the same principle as the bid turn-around fix — judge the thing on all of its
+    // exposure, not on the slice that flatters it. A term is a term whatever matched it.
     const adds = harvestCandidates([
       row({ searchTerm: "shared term", cost: 1, sales14d: 10, purchases14d: 1, matchType: "BROAD" }),
       row({ searchTerm: "shared term", cost: 90, sales14d: 0, purchases14d: 0, matchType: "PHRASE" }),
     ], new Set());
-    expect(adds).toHaveLength(2);
+    expect(adds).toHaveLength(0);
+  });
+
+  it("still skips a genuine duplicate already in that ad group", () => {
+    // The real guard against copies, and the reason the source-match-type gate was never needed for
+    // it. `existing` is keyed (adGroup | matchType | lowercased text).
+    const r = row({ ...win, matchType: "PHRASE" });
+    const have = new Set([`${r.adGroupId}|PHRASE|anti theft phone strap`]);
+    const adds = harvestCandidates([r], have);
+    expect(adds.map((a) => a.matchType)).toEqual(["EXACT"]);
   });
 });
 
