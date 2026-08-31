@@ -44,9 +44,17 @@ export const HARVEST_MAX_ACOS = 0.50;        // reactivation bar: proven ACOS <=
 // 1.92x from real fees ($9.49 price, $0.62 COGS, $1.42 referral, $2.52 FBA), so 2x is the first
 // rung that actually makes money rather than merely converting.
 export const HARVEST_MIN_ROAS = 2;
-// Monthly reset bars for bringing a PAUSED keyword back on LIFETIME evidence. Break-even is 1.92x;
-// the 2-order floor exists because a 79x return built on one order and $0.25 of spend is noise.
-export const REACTIVATE_MIN_ROAS = 1.92;
+// Monthly reset bars for bringing a PAUSED keyword back on LIFETIME evidence.
+//
+// William 2026-08-31: "reactivation bar should never turn on words that never converted only key
+// words that have converted above a 2x roas in the past". So the bar is 2.00x, not the 1.92x
+// break-even that used to sit here, and a past conversion is mandatory on BOTH routes:
+//   route A already requires sales > 0 and ACOS <= 50% (HARVEST_MAX_ACOS), which is ROAS >= 2x
+//   route B requires REACTIVATE_MIN_ORDERS orders AND REACTIVATE_MIN_ROAS
+// A word with no order in its history can no longer come back by any path.
+//
+// The 2-order floor stays because a 79x return built on one order and $0.25 of spend is noise.
+export const REACTIVATE_MIN_ROAS = 2.0;
 export const REACTIVATE_MIN_ORDERS = 2;
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 // Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable

@@ -296,6 +296,26 @@ describe("reactivationCandidates — lifetime route", () => {
     expect(out[0].via).toBe("lifetime");
   });
 
+  // William 2026-08-31: "reactivation bar should never turn on words that never converted only key
+  // words that have converted above a 2x roas in the past". Pinned so the bar cannot drift back to
+  // the old 1.92x break-even, and so a never-converted word can never return by any route.
+  it("never re-enables a word that has never converted, however much it spent", () => {
+    const neverSold = new Map([["phone tether|EXACT", { roas: 0, spend: 500, sales: 0, orders: 0 }]]);
+    expect(reactivationCandidates(paused(), new Map(), neverSold)).toHaveLength(0);
+  });
+
+  it("holds the lifetime bar at exactly 2x, not the old 1.92x break-even", () => {
+    expect(reactivationCandidates(paused(), new Map(), lt(1.99, 40))).toHaveLength(0);
+    expect(reactivationCandidates(paused(), new Map(), lt(2.0, 40))).toHaveLength(1);
+  });
+
+  // Route A is the trailing-window path. It must refuse a never-converted word too, otherwise the
+  // "only words that have converted" rule would have a second door standing open.
+  it("route A also refuses a word with spend but no sales", () => {
+    const spentNothingBack = new Map([["K1", { cost: 50, sales: 0 }]]);
+    expect(reactivationCandidates(paused(), spentNothingBack, new Map())).toHaveLength(0);
+  });
+
   it("leaves it off when lifetime is below break-even", () => {
     expect(reactivationCandidates(paused(), new Map(), lt(1.5, 40))).toHaveLength(0);
   });
