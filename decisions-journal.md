@@ -3143,3 +3143,139 @@ No date was set for revisiting it, which means it can drift; the next Canada rea
 "decide by" attached.
 
 **Status.** DECIDED, no action. Canada left enabled at $15/day. Mexico confirmed off.
+
+---
+
+## 2026-08-31 — The threshold was never the lever, and the archive was never broken
+
+**Context.** The morning review found August closing at $1,273.51 spend against $916.65 of ad sales,
+0.72x on a 2.67x break-even, a loss near $931. William asked four questions in sequence: are we
+turning keywords off properly, is $4 the right bar, what converts, and why is Display not spending.
+Underneath all four sat an assumption I had been carrying for weeks, that the kill threshold was the
+instrument that controlled spend.
+
+**Options.** (1) Tune the $4 bar up, so a word gets more rope before conviction. (2) Tune it down,
+so the rule reaches more words. (3) Leave it and hunt elsewhere. (4) Measure what $4 actually buys
+before touching it at all.
+
+**Decision.** Option 4, then option 3. $4 stays exactly where it is.
+
+**Reasoning.** Measured per keyword from Amazon: CPC $0.95, and a 9.09% conversion rate on the six
+words with enough clicks to mean anything. So $4 buys 4.2 clicks, and a perfectly healthy keyword
+shows zero sales across 4.2 clicks **67% of the time**. The bar convicts good words two thirds of
+the time. But raising it is worse, not better: at $8 the rule catches 7 words instead of 87 and
+strands $618 instead of $222. Every direction is bad because the threshold is not the mechanism.
+The mechanism is that 11 clicks make one order, one order is worth $3.55, so a click can be worth at
+most **$0.32** and we pay $0.95. Three times over, on every click, in every campaign. A threshold
+cannot fix a unit price.
+
+**Industry source.** Amazon's published Sponsored Products benchmarks put conversion at 9-13%; ours
+measures 9.09% on real-volume keywords, which retires "we have a conversion problem" as a diagnosis.
+The binomial arithmetic on 4.2 clicks at 9.09% is the same false-negative reasoning behind any
+minimum-sample rule.
+
+**Trade-offs accepted.** Leaving $4 alone means 130 keywords that died under the bar keep spending
+$221.76 a month unreachable by any rule. That is a real cost and I am choosing it, because every
+alternative bar costs more. The lever moves to CPC instead: `AUTO_FOR_SALES` plus two +50% placement
+multipliers on one $90/day campaign buy clicks at $1.31 against $0.79 on the campaign beside it, for
+the same 0.57x versus 0.59x return. About $218/month, still unactioned pending William.
+
+**Status.** Measured and reported. No bid rule changed. Placement multipliers open with William.
+
+---
+
+## 2026-08-31 — Read the 2x in today's money, not in the old price
+
+**Context.** The monthly reactivation fires 09-01 at 15:00 UTC and would have re-enabled 150 paused
+keywords on a 1.92x lifetime bar. William: *"reactivation bar should never turn on words that never
+converted only key words that have converted above a 2x roas in the past."*
+
+**Options.** (1) Implement 2.00x literally against the recorded number. (2) Rescale for the price
+cut, making it 3.60x on record. (3) Ask which he meant.
+
+**Decision.** Option 3, then option 2 on his answer: today's money, 3.60x.
+
+**Reasoning.** Every lifetime ROAS in `kw_lifetime` was earned when the product sold for $19.95. It
+now sells for $9.49, so the same traffic returns 0.556 of the recorded figure. A word reading 2.00x
+is really **1.11x today**, below William's own 1.5x kill bar. Implementing the literal 2.00x would
+have re-enabled 143 words of which 63 were already condemned by another rule he set eight days
+earlier: switched on Tuesday, killed by Friday, $4 each to prove it. The rescale takes it to 44
+words, every one clearing the kill bar, 26 clearing break-even outright, and all the branded winners
+kept. Fresh rope drops from $600 to $176.
+
+**Industry source.** None needed; this is unit economics. The general principle is that a historical
+ratio is only comparable when the denominator has not moved, and ours halved.
+
+**Trade-offs accepted.** 106 words that genuinely converted in the past stay off. Some may be
+winnable at the new price and we will not learn which. I would rather leave a good word off than pay
+$4 to relearn a bad one, given the account loses money on every ad dollar today.
+
+**Status.** SHIPPED. PR #29 merged, build Ready, route probes 401. 417 tests, four new ones pinning
+the rule. Fires tomorrow 15:00 UTC.
+
+---
+
+## 2026-08-31 — The archive was not broken, it was waiting
+
+**Context.** `kw_day` last wrote 2026-08-26 and `ad_day_observation` 2026-08-23. Amazon drops report
+history at about 96 days, so every day this stayed broken was a day lost for good. The record said
+the job needed 589 seconds against a 300-second Vercel budget.
+
+**Options.** (1) Raise `maxDuration`. (2) Narrow the 40-day window. (3) Split into two crons.
+(4) Stop waiting: request the report, store the id, collect on a later run.
+
+**Decision.** Option 4, plus batched writes and a move from daily to every 4 hours.
+
+**Reasoning.** I measured the two windows separately rather than trusting the 589s, and it is worse:
+**961 seconds today.** The decisive number is that a 10-day window returning 493 rows took **703.8
+seconds** while a 31-day window returning 3,855 rows took **256.7**. Queue time has no relationship
+to window width or row count. That kills options 1 and 2 outright: narrowing does not help because
+width is not the cost, and raising the timeout does not help because 961s is past even the 900s
+ceiling. Waiting was never necessary in the first place. The report keeps building after we
+disconnect, so storing the id costs nothing and a later run collects it.
+
+**Industry source.** The standard async-job pattern for long-running provider work, and the one this
+codebase already uses in `ads-reports.ts` for the engine's own reports.
+
+**Trade-offs accepted.** A window now needs two visits, so data lands within about 8 hours rather
+than immediately. Given it had landed not at all for five days, that is an easy trade. I kept the
+archive on its own `archive-daily|<profile>|<start>|<end>` keyspace instead of reusing the shared
+`getReport()`, because that function's cache key has no `timeUnit` and a DAILY request would collide
+with the engine's SUMMARY request for the same dates. Reusing it would have been less code and a
+real risk to the engine.
+
+**Status.** SHIPPED. PR #30 merged, build Ready, route 401. Proven end to end before merging:
+`kw_day` 6,307 -> 7,325 rows and current to 08-31, the five lost days matching the month audit
+exactly. 424 tests pass.
+
+---
+
+## 2026-08-31 — A ratio in the wrong column, and a recommendation built on nothing
+
+**Context.** Asked whether to add competitor targets or lean on retargeting, I wrote that
+retargeting was "5.4x the click rate" and recommended moving Display budget toward it. William:
+*"retargeting has never been 5.4x roas what are you talking about?"*
+
+**Options.** (1) Clarify that I said click rate, not ROAS, and keep the recommendation.
+(2) Accept the wording caused it, and re-examine whether the recommendation survives.
+
+**Decision.** Option 2. Withdrew the recommendation.
+
+**Reasoning.** The clarification is true and worthless. "5.4x" in a list of ad metrics reads as a
+return, and I put it there. More importantly, once the numbers are laid out with no ratios at all,
+the recommendation collapses on its own: competitor ASINs $13.70/0 orders, category $0.63/0 orders,
+retarget $5.47/0 orders. **Display made zero sales in August across every target kind.** I was
+ranking three things that all returned nothing and presenting the ordering as a reason to move
+money. A better click rate on zero sales is not evidence of anything.
+
+**Industry source.** None. This is the discipline of naming the unit: a multiple is meaningless
+until you say a multiple of what.
+
+**Trade-offs accepted.** Display keeps running at about $20/month until William decides, which is
+small enough to ignore beside $1,113 in Sponsored Products.
+
+**How to apply.** Never write "Nx" for a rate ratio in a list containing ROAS. Give the two rates.
+And when a recommendation rests on a ranking, check the absolute numbers before the ordering: three
+zeroes in a row do not have a best.
+
+**Status.** Recommendation withdrawn. Display untouched, open with William.
