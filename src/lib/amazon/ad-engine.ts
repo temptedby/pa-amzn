@@ -87,6 +87,8 @@ export interface AdEngineResult {
     roasBefore?: number | null;
     /** what THIS bid level produced, carried into kw_bid_history as the next run's baseline */
     impressionsBefore?: number; clicksBefore?: number; salesBefore?: number;
+    /** days those figures were accumulated over; persisted so the next run can divide by it */
+    windowDaysBefore?: number;
   }[];
   /** Wanted a raise past the $0.85 ceiling and stopped. William confirms these by hand. */
   needsConfirm: { text: string; matchType: string; keywordId: string; bid: number; wouldBe: number; roas: number | null }[];
@@ -468,7 +470,9 @@ async function ensureBidMemory(): Promise<void> {
   // (William 2026-08-10: "Less impressions less sales then we start to go the other way").
   // Added to an existing table, so each column is added separately and only a genuine
   // "duplicate column" is swallowed.
-  for (const col of ["imp_before INTEGER", "clicks_before INTEGER", "sales_before REAL"]) {
+  // window_hours: how long the before-figures took to accumulate, so the turn-around can compare
+  // two windows of different length as daily rates (William 2026-08-17).
+  for (const col of ["imp_before INTEGER", "clicks_before INTEGER", "sales_before REAL", "window_hours REAL"]) {
     try { await db().execute(`ALTER TABLE kw_bid_history ADD COLUMN ${col}`); }
     catch (e) { if (!/duplicate column/i.test(String(e))) throw e; }
   }
@@ -559,7 +563,7 @@ async function lastBidChanges(): Promise<Map<string, BidChange>> {
   const out = new Map<string, BidChange>();
   try {
     const r = await db().execute(`SELECT keyword_id, changed_at, from_bid, to_bid, roas_before,
-             imp_before, clicks_before, sales_before FROM kw_bid_history
+             imp_before, clicks_before, sales_before, window_hours FROM kw_bid_history
       WHERE id IN (SELECT MAX(id) FROM kw_bid_history GROUP BY keyword_id)`);
     for (const row of r.rows) {
       out.set(String(row.keyword_id), {
@@ -570,6 +574,10 @@ async function lastBidChanges(): Promise<Map<string, BidChange>> {
         impressionsBefore: row.imp_before == null ? undefined : Number(row.imp_before),
         clicksBefore: row.clicks_before == null ? undefined : Number(row.clicks_before),
         salesBefore: row.sales_before == null ? undefined : Number(row.sales_before),
+        // How long those before-figures took to accumulate. The turn-around divides by it so a
+        // three-week window and a six-hour one can be compared at all (William 2026-08-17).
+        // Undefined on rows written before this, and the turn-around then declines to fire.
+        windowDaysBefore: row.window_hours == null ? undefined : Number(row.window_hours) / 24,
       });
     }
   } catch { /* first run — no history yet */ }
@@ -588,8 +596,17 @@ async function perfSinceChange(
   changes: Map<string, BidChange>,
   nowMtd: Map<string, SinceChange>,
   month: string,
+  nowMs: number = Date.now(),
 ): Promise<Map<string, SinceChange>> {
   const out = new Map<string, SinceChange>();
+
+  // EVERY WINDOW NOW CARRIES ITS OWN LENGTH (William 2026-08-17, "lets rewrite to be the daily
+  // average"). These windows are not all the same size: one keyword's runs from a bid change six
+  // hours ago, its neighbour's runs from the 1st because it has never moved. Comparing their raw
+  // counts is what reversed nearly every cut and walked the account up to the $0.85 ceiling.
+  const monthStartMs = Date.parse(`${month.slice(0, 7)}-01T00:00:00.000Z`);
+  const daysBetween = (fromMs: number) => Math.max(0, (nowMs - fromMs) / 864e5);
+  const monthSoFarDays = daysBetween(monthStartMs);
 
   // A KEYWORD WITH NO RECORDED BID CHANGE STILL HAS A WINDOW: the whole month.
   //
@@ -607,12 +624,12 @@ async function perfSinceChange(
   // Seeding from month-to-date is both correct and the conservative direction: no bid change means
   // nothing has happened to reset the window, so month-to-date IS the performance since the last
   // move. `planBids()` already does exactly this for Brands and Display.
-  for (const [kwId, now] of nowMtd) out.set(kwId, now);
+  for (const [kwId, now] of nowMtd) out.set(kwId, { ...now, windowDays: monthSoFarDays });
 
   for (const [kwId, ch] of changes) {
     const now = nowMtd.get(kwId);
     if (!now) continue;
-    if (ch.changedAt.slice(0, 7) !== month.slice(0, 7)) { out.set(kwId, now); continue; }
+    if (ch.changedAt.slice(0, 7) !== month.slice(0, 7)) { out.set(kwId, { ...now, windowDays: monthSoFarDays }); continue; }
     try {
       const r = await db().execute({
         sql: `SELECT mtd_spend s, mtd_sales sa, mtd_orders o, mtd_clicks c, mtd_impressions i FROM kw_perf_snapshot
@@ -627,8 +644,9 @@ async function perfSinceChange(
         spend: Math.max(0, now.spend - base.spend), sales: Math.max(0, now.sales - base.sales),
         orders: Math.max(0, now.orders - base.orders), clicks: Math.max(0, now.clicks - base.clicks),
         impressions: Math.max(0, (now.impressions ?? 0) - base.impressions),
+        windowDays: daysBetween(Date.parse(ch.changedAt)),
       });
-    } catch { out.set(kwId, now); }
+    } catch { out.set(kwId, { ...now, windowDays: monthSoFarDays }); }
   }
   return out;
 }
@@ -683,7 +701,7 @@ export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; 
     });
   }
   const lastChange = await lastBidChanges();
-  const since = await perfSinceChange(lastChange, nowMtd, sd);
+  const since = await perfSinceChange(lastChange, nowMtd, sd, nowMs);
   let heldByCooldown = 0, rolledBack = 0;
 
   // THE $4 RULE IS EVALUATED PER KEYWORD, ON ITS OWN (William 2026-08-07).
@@ -759,6 +777,7 @@ export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; 
         reason: m.reason, keywordId: id, roasBefore,
         // The evidence THIS bid level produced. Next run compares its own window against it.
         impressionsBefore: ev?.impressions ?? 0, clicksBefore: ev?.clicks ?? 0, salesBefore: ev?.sales ?? 0,
+        windowDaysBefore: ev?.windowDays,
       });
     }
   }
@@ -915,10 +934,11 @@ export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; 
           try {
             await db().execute({
               sql: `INSERT INTO kw_bid_history (keyword_id,changed_at,from_bid,to_bid,roas_before,reason,ad_product,
-                                               imp_before,clicks_before,sales_before)
-                    VALUES (?,?,?,?,?,?,?,?,?,?)`,
+                                               imp_before,clicks_before,sales_before,window_hours)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
               args: [b.keywordId, at, b.from ?? 0, b.to, b.roasBefore ?? null, b.reason ?? null, "SPONSORED_PRODUCTS",
-                     b.impressionsBefore ?? 0, b.clicksBefore ?? 0, b.salesBefore ?? 0],
+                     b.impressionsBefore ?? 0, b.clicksBefore ?? 0, b.salesBefore ?? 0,
+                     b.windowDaysBefore == null ? null : b.windowDaysBefore * 24],
             });
           } catch (e) { out.errors.push("bid history: " + (e instanceof Error ? e.message : String(e))); }
           // A restored bid becomes this word's proven floor, but ONLY once Amazon has accepted the
