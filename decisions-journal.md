@@ -2925,3 +2925,77 @@ Drive for Megan; the five revival candidates and the five paused ASIN targets.
 unjudged; `engine-heartbeat.ts` uncommitted; `kw_tombstone` has no writer; the 18-digit rounding
 lives anywhere we join Brands or Display by numeric ID. Unread today: `sc-account-status` was
 killed without output, and `kw_day` is two days stale.
+---
+## 2026-08-29: The rule that raises a quiet word is correct and unreachable
+
+**Context.** A morning review in which William read the bid history himself and asked the question
+that located the bug: *"Why does it go from 36 cents back to 10? If it's not spending, it should go
+up higher, not down."* He was right, and the answer was one argument in one function call. The day
+also produced a full month audit, a clean compliance sweep across three countries, and two
+corrections of my own claims.
+
+**Options considered** for the central problem, Sponsored Brands returning 1.53x and spending $0.00
+for three days:
+
+1. *Raise the Brands bids again by hand.* This is what we did on 08-28. The engine erased all ten
+   raises within 18 hours. Repeating it without the code fix buys one day at most.
+2. *Pause the Sponsored Brands engine* so it stops cutting. Stops the damage, but also stops the
+   kill rule in the one channel where a bad word took $49.20 this month, and leaves the bids on the
+   floor where they already are.
+3. *Ship the fix.* PR #25 passes `last` instead of `undefined`, restoring the cooldown, the
+   turn-around, and the raise-a-quiet-word branch. Verified today: 491 tests, tsc clean, merges
+   cleanly.
+4. *Do nothing until asked.* The bids are already at the $0.10 floor, so the marginal cost of an
+   hour's delay is close to zero. The cost is the state, not the rate.
+
+**Decision.** Option 4, and it was not a preference. Merging deploys to production, William had not
+answered, and he said plainly *"I don't know what PR twenty-five is."* The right move was to explain
+it in plain language and ask again, not to ship it on the strength of my own diagnosis. Nothing was
+written to the account today.
+
+**Reasoning.** The defect is a window, not a threshold, which is why three weeks of arguing about
+bars never touched it. `ad-rules.ts:1113` computes `isSpending` from whatever `since` it is handed.
+Sponsored Products hands it since-the-last-bid-change, via `last`, at line 1231. Brands and Display
+hand it month-to-date and `undefined` at line 1330. One click anywhere in the month therefore makes
+`isSpending` true until the 1st, line 1116 refuses every raise, and every remaining branch points
+down. `retractable anti theft phone holder` had exactly one click, on 22 August, worth $13.49 on
+$0.50 of spend, and the engine cut it sixteen times in eighteen hours.
+
+The reason this outranks the rest of the account is concentration. Two words were 73% of Brands
+spend this month. One was killed correctly at 0.39x. The other, at 2.96x on seven orders, was walked
+to the floor. Excluding the killed one, Brands is 2.33x against a 2.67x break-even, and its back half
+is 3.27x. Everything else we manage runs at 0.63x.
+
+**Industry source.** Standard PPC practice is that a bid controls auction entry, not unit economics,
+so a bid rule must be judged against the evidence produced *at that bid level*, not against a
+running month total. Amazon's own guidance to re-evaluate after a change has had time to accumulate
+data is the same principle. Comparing a bid level against month-to-date evidence is the unequal
+window trap already recorded in this project on 08-19 and 08-27.
+
+**Trade-offs accepted.** The bids stay on the floor until PR #25 ships, so Brands buys nothing in the
+meantime. That is a real cost, bounded by the fact that Brands was only ever spending $11/day at its
+peak. Against it, deploying to production without an answer would break the standing rule that
+William approves live changes, and he had just told me he did not know what the change was.
+
+**Two corrections, both mine, both from stating a mechanism before measuring it.** I reported $12.31
+of spend today when that was the tail of yesterday's ad day; the account resets at 07:00 UTC and the
+real figure was $1.13. Second occurrence this week of a trap already written down. And I told
+William that $120/day of Sponsored Display budget sat behind $0.02 bids that could not win an
+impression. The report says Display won 13,836 impressions this month and took 38 clicks, a 0.27%
+CTR, and costs nothing because it bills per click and nobody clicks. `Black 1 retarget` won 1,759
+impressions on a $0.02 bid. The fix that claim implied, raise the Display bids, would have spent
+money on an ad nobody wants. The Brands finding survived because it was measured before it was
+described.
+
+**Status.** Nothing applied to the account. Month audited complete at $1,156.99 spend, $840.73 sales,
+0.73x, all 29 days answered. Compliance clean in all five sections at both bars with zero unreadable
+entities. Canada has no word at CAD 4 or CAD 5.50 and needs no kills. PR #25 verified and left
+unmerged pending William.
+
+**Open and mine, in order of decay.** `kw_day` has not written since 2026-08-26T09:08, so three days
+of our own keyword history are missing and Amazon discards at about 96 days. This is the thing
+William asked for directly today, *"we need to always track the history and record the keywords"*,
+and it is the only open item with a deadline that runs whether we act or not. Then: the Display
+creative moderation status is unread because `/sd/creatives` returns empty and v2 carries no
+`servingStatus`; the engine loop still iterates report rows so roughly three quarters of enabled
+keywords are never judged; `engine-heartbeat.ts` is uncommitted; `kw_tombstone` has no writer.
