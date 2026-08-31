@@ -47,14 +47,26 @@ export const HARVEST_MIN_ROAS = 2;
 // Monthly reset bars for bringing a PAUSED keyword back on LIFETIME evidence.
 //
 // William 2026-08-31: "reactivation bar should never turn on words that never converted only key
-// words that have converted above a 2x roas in the past". So the bar is 2.00x, not the 1.92x
-// break-even that used to sit here, and a past conversion is mandatory on BOTH routes:
-//   route A already requires sales > 0 and ACOS <= 50% (HARVEST_MAX_ACOS), which is ROAS >= 2x
+// words that have converted above a 2x roas in the past", and asked the same day that the 2x be
+// read IN TODAY'S MONEY rather than as the raw historical number.
+//
+// THE PRICE RESCALE. Every lifetime ROAS in kw_lifetime was earned when this product sold for
+// $19.95. It now sells for $9.49, so the same traffic returns 9.49/19.95 = 0.556 of the recorded
+// figure. A word showing 2.00x in the table is really 1.11x today - below the 1.5x kill bar, so it
+// would be re-enabled on the 1st and killed again within days, having spent its $4 to prove it.
+//
+//   wanted today   2.00x
+//   rescale        / 0.556
+//   bar on record  3.60x
+//
+// A past conversion is mandatory on BOTH routes, pinned by test so neither door can reopen:
+//   route A requires sales > 0 and ACOS <= 50% (HARVEST_MAX_ACOS), which is ROAS >= 2x
 //   route B requires REACTIVATE_MIN_ORDERS orders AND REACTIVATE_MIN_ROAS
 // A word with no order in its history can no longer come back by any path.
 //
 // The 2-order floor stays because a 79x return built on one order and $0.25 of spend is noise.
-export const REACTIVATE_MIN_ROAS = 2.0;
+export const PRICE_RESCALE = 0.556;    // $9.49 / $19.95 — see [[price-rescale-factor]]
+export const REACTIVATE_MIN_ROAS = 3.60;
 export const REACTIVATE_MIN_ORDERS = 2;
 const HARVEST_WINDOW_DAYS = 60;              // trailing window (chunked into <=31d Ads-API reports)
 // Monthly REACTIVATION (ad-engine-harvest-rule.md step 4, William 2026-06-26): once a month, re-enable
