@@ -2827,3 +2827,147 @@ Accept media type and 406s on Brands. PR #6 verified still open three ways.
 Open and William's: the daily budget ceiling; the reintroduction cap 10 to 40; the five A+ panels;
 attach or Drive for Megan's email; the five profitable paused ASIN targets. Open and mine: the four
 defects above.
+
+## 2026-08-30: The $102 bid was never ours, and the engine could never have seen it
+
+**Context.** William read yesterday's reactivation finding and pushed back on the shape of it:
+*"$102 bid on 1,100 words, three carry $102 bid, that can't be right. We have a max of $4 bid for
+any word into our system."* He was right to disbelieve it. A system with a $4 cap and a $0.85
+confirm ceiling should not be able to produce a $102 bid, and the number sat unexplained in my
+report as though the engine had done it. He also asked the question I had not led with: if we spent
+$66 yesterday, what came back, and where does that leave us.
+
+**Options.**
+1. Fix the three bids and move on. Fast, and leaves the cause unknown, which is how a fixed symptom
+   comes back.
+2. Trace the origin first, then fix. Costs one round of queries.
+3. Treat it as an engine bug and go straight to the bid-writing code.
+4. Cap every over-$4 bid in the account while I was in there.
+
+**Decision.** Option 2, then the literal fix. Traced the origin, then set exactly the three $102
+bids to $0.10 and left the other three over-cap bids ($5.00, $5.00, $4.28) alone.
+
+**Reasoning.** The trace answered it cleanly and the answer was not what either of us assumed.
+There is no row for any of the three in `kw_bid_history`, `kw_bid_state` or `kw_kill_ledger`, and
+Amazon's own console export from 5 August already shows all three at $102 and already paused. The
+bid predates our engine. Amazon's suggested bid for the word is $0.79 to $1.38, so it is a typo for
+$1.02 by whoever ran the account before us.
+
+The mechanism that let it survive is the part worth keeping: **the engine only reads keywords that
+are ENABLED and appear in a report, so a paused keyword is invisible to it.** All month it has been
+correctly walking a *different copy* of `phone tethers retractable` between $0.71 and $0.85 while
+the paused twin held $102 unseen. Nothing would ever have woken it except the 1 September
+reactivation, which flips state to ENABLED and never touches the bid. So the danger was real, but
+the fault was not in the bid rule at all, and fixing the bid rule would not have found it.
+
+I fixed three and not six because William named the $102s. Widening a stated instruction to its
+obvious neighbours is a mistake I have made repeatedly here, and the other three are paused and
+therefore spending nothing, so there is no cost to asking.
+
+**Industry source.** Amazon's own suggested-bid range from the Sponsored Products API is the
+external reference that makes $102 legible as a typo rather than a strategy: 75x the top of the
+range Amazon itself recommends. On the money question, the click-rate and conversion benchmarks
+commonly published for Sponsored Products (about 0.4% click rate, 9-13% conversion) are what turn
+our 0.62% and 5.01% into a diagnosis rather than two loose numbers.
+
+**Trade-offs accepted.** Setting the bid on a paused keyword changes nothing today, so this buys
+safety on Tuesday and nothing before it. Three over-cap bids remain, deliberately. The reactivation
+job still sets no bid of its own, so the class of problem stays open even though these three
+instances are closed. And the write went to production on a verbal instruction rather than through
+a PR, which is right for a three-row bid correction and would not be right for anything structural.
+
+**Status.** DONE and verified. `PUT /sp/keywords` returned 207 with three successes and zero errors,
+and a read-back from Amazon shows $0.10 on all three, still PAUSED. Open: the remaining three
+over-cap bids, and a bid cap inside the reactivation job before it runs on Tuesday.
+
+---
+
+## 2026-08-30: Two things I called broken were fine, and the one I called fine is killing us
+
+**Context.** Three claims of mine came under measurement today. Yesterday I said the `planBids`
+defect ratchets "Brands and Display". Today I flagged seven Mexican keywords as breaching the $4 bid
+cap. And for four days I have been reporting the Sponsored Products engine as working correctly
+because it obeys its rules.
+
+**Options.**
+1. Report the ratchet and the Mexican breaches as found, both follow from reading the code.
+2. Measure the outcome of each before reporting.
+3. Report with hedging language and let William sort out which are real.
+
+**Decision.** Option 2, after the fact in two cases. Both the Display claim and the Mexico claim
+were corrected in the same session that produced them.
+
+**Reasoning.** Display shares the defective code path with Brands, so the ratchet claim was a sound
+inference and still wrong: Display moves both directions every day (08-29 was 4 up and 4 down) and
+it spent $1.69 on the 29th. Brands is the one that ratcheted, and the direction data is unambiguous,
+zero raises on any day from 08-18 onward across 599 consecutive lowers. Sharing a code path is not
+sharing an outcome.
+
+Mexico was worse because it was already written down. The seven "breaches" are peso bids. MXN 14.02
+is about 70 cents against a MXN 68 cap. I applied a dollar threshold to a peso column, which is the
+exact trap recorded in memory as `bid-cap-is-the-kill-bar`.
+
+The third one is the expensive one and it runs the other way. The Sponsored Products engine obeys
+every rule it has and is the largest single cause of the loss. Going hourly on 08-27 did not change
+the rule, it ran the same weak-evidence raise six times as often: 287 raises against 78 lowers on
+the 27th, and 249 of yesterday's 298 raises fired on fewer than 10 impressions. **309 of 520 tracked
+words now sit at the $0.85 ceiling and exactly one is below $0.20.** Spend followed, $28.67 on the
+25th to $66.14 on the 29th. "Obeys the rules" was never the same statement as "is doing the right
+thing", and I let it stand in for four days.
+
+The money frame William asked for is what makes it legible. August is $1,221.36 of spend against
+$897.67 of ad sales. We keep 37.4%, so $335.75 came back against $1,221.36 spent, about -$885 before
+refunds and -$919 after. One dollar in buys 73 cents of sales and we keep 27 cents of that. Against
+a 2.67x break-even that is a four-times gap, and no bid rule closes a four-times gap.
+
+**Industry source.** Published Sponsored Products benchmarks, roughly 0.4% click rate and 9-13%
+conversion. Ours are 0.62% and 5.01%: clicked more than average, converting about half as often.
+That points the diagnosis at the listing and the offer, not at the auction, and it is consistent
+with `pa-price-is-not-the-problem` (cheapest of ten competitors and worst selling).
+
+**Trade-offs accepted.** The conversion diagnosis rests on external benchmarks rather than a
+matched-category measurement of our own, so it is directional. Our click and conversion figures come
+from `kw_month`, which covers 08-01 to 08-26 only because the archive died, so the sample is large
+but not the full month. And I am recording a criticism of the SP engine without a fix, because the
+fix is a threshold change and William has an unmerged queue already.
+
+**Status.** Corrections taken and recorded. The SP ceiling problem is OPEN and unaddressed:
+recommended `ladder_active = 0` on the 520, now asked four times across sessions.
+
+---
+
+## 2026-08-30: Canada stays on, because a short run is not evidence
+
+**Context.** William asked whether Canada and Mexico were still off. Mexico is: both campaigns
+paused, $0/day. Canada is not: two campaigns enabled on $15/day, CAD 17.01 spent this month
+returning CAD 26.94, 1.58x. Canadian break-even is 3.78x because cross-border FBA costs $5.96 a unit
+against $2.52 in the US. I recommended switching it off.
+
+**Options.**
+1. Switch Canada off. Stops a channel running at 42% of break-even.
+2. Leave it and keep measuring.
+3. Cut its budget rather than stopping it.
+
+**Decision.** Option 2. **William declined the recommendation:** *"no not turning canada off its
+been on for a very short period of time."*
+
+**Reasoning.** His is the better read and it is the same principle as `cautious-step-on-what-works`
+pointing the other way. CAD 17.01 across a handful of days with one converting keyword is not a
+sample you can retire a market on. The 1.58x is real but it is built on a single order, and killing
+a market on one order is how we ended up with 124 profitable keywords switched off in the first
+place. The exposure is CAD 15/day against a US operation losing roughly $40/day, so the cost of
+being patient here is small and the cost of being wrong is a market we cannot cheaply restart.
+
+Worth recording that I framed this as a recommendation with a number attached and he overrode it on
+sample size, which is the right axis. I had the ratio and not the reasoning about how much evidence
+the ratio rests on.
+
+**Industry source.** None cited; this is a sampling judgement, not a practice question. The relevant
+internal reference is `kill-judges-blind-in-the-attribution-window`, which is the same error in a
+different costume: judging a keyword before its sales have landed.
+
+**Trade-offs accepted.** Canada continues to lose money at a known rate while we gather evidence.
+No date was set for revisiting it, which means it can drift; the next Canada reading should carry a
+"decide by" attached.
+
+**Status.** DECIDED, no action. Canada left enabled at $15/day. Mexico confirmed off.
