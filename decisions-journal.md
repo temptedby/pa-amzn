@@ -3279,3 +3279,135 @@ And when a recommendation rests on a ranking, check the absolute numbers before 
 zeroes in a row do not have a best.
 
 **Status.** Recommendation withdrawn. Display untouched, open with William.
+
+---
+
+## 2026-09-02 — Both fixes held on their first firing, and the account did not change
+
+**Context.** First morning review since shipping PR #29 (reactivation bar 1.92x to 3.60x) and PR #30
+(archive stops blocking on Amazon's report queue) on 08-31. Neither had run in production yet when
+they were merged, and a merged PR is not shipped.
+
+**Options.** (1) Trust the merge and move to new work. (2) Verify each fix against the state it was
+supposed to change, then read the account fresh.
+
+**Decision.** Option 2. Verified both, then took the full live layer.
+
+**Reasoning.** The archive was frozen at 08-26 and is now current to 09-02, 7,653 rows across 106
+days, which is the exact symptom the fix targeted. The reactivation fired 09-01 at 15:05:05 UTC and
+re-enabled 44 Sponsored Products keywords, matching the predicted 44 to the word, every one with a
+real conversion record between 3.7x and 12.5x. Both fixes did what they said.
+
+And nothing else moved. CPC is $0.966 in September against $0.953 in August. The month opened at
+0.37x against a 2.67x break-even. Of 287 bid moves in two days, 3 were ROAS decisions and 284 were
+noise: 139 reversals, 110 raises on words with impressions and no clicks, 35 shaves on one or two
+clicks. Fixing the archive and the reactivation bar was correct and changed no money.
+
+**Industry source.** None needed. This is the standing rule that a deploy is verified against the
+symptom, never against the merge.
+
+**Trade-offs accepted.** A morning spent confirming rather than building. Worth it: the reactivation
+had been about to switch on 150 words and now switches on 44, and that number was checkable only by
+watching it fire.
+
+**Status.** Both verified in production. The click price remains the open problem and nothing
+shipped so far touches it.
+
+---
+
+## 2026-09-02 — The Brands reactivation kept the old bar, because I only changed one of two
+
+**Context.** On 08-31 William set the reactivation rule: only words that have converted, at 2x in
+today's money, which rescales to 3.60x on record. I implemented it in `ad-engine.ts` and shipped it.
+Today's review found Sponsored Brands runs its own reactivation inside the same cron job, on
+`SB_REACTIVATE_MIN_ROAS = 1.92` at `sb-engine.ts:336`. It qualified 60 Brands words on 09-01,
+several with $400 to $800 of lifetime spend, at 1.92x to 2.6x. That is 1.07x to 1.44x in today's
+money, all below the 1.5x kill bar.
+
+**Options.** (1) Change the Brands constant to 3.60x now, on the grounds that it is obviously the
+same rule. (2) Report the gap and ask, leaving the constant alone.
+
+**Decision.** Option 2. Reported and asked. Nothing changed.
+
+**Reasoning.** William's rule named "the reactivation bar" without naming a channel, so option 1 is
+defensible. But the standing instruction is that a stated rule is implemented literally and the
+neighbouring case is asked about, not extended silently, and this is precisely a neighbouring case:
+a different constant, in a different file, on a channel with its own break-even history. Changing it
+unasked is the failure mode we have already had three times.
+
+The honest fault here is not the asking, it is that on 08-31 I did not go looking for a second
+reactivation path before declaring the rule shipped. One `grep` for the word would have found it.
+
+**Industry source.** None. This is the "do not widen a stated rule" and "search for every
+implementation of a rule before calling it changed" pair.
+
+**Trade-offs accepted.** Brands keeps running on the old bar until William answers. Exposure is
+small so far, $11.53 across two days, but it is money moving through a bar we know is wrong.
+
+**Status.** Open with William. One-line change when he answers.
+
+---
+
+## 2026-09-02 — applied=0 is not proof the write failed, either
+
+**Context.** All 60 Brands reactivations logged `applied=0`, which is set from Amazon's own per-item
+success set, so I reported that none of them landed. Then the per-day Brands read showed $0.00 spend
+on 08-28, 08-29, 08-30 and 08-31, and $10.27 on 09-01 across five words. One of those five,
+`phone retractable cord` BROAD, is on the qualified list and had been dark for at least four days.
+
+**Options.** (1) Keep the original reading, since the flag is derived from Amazon's response.
+(2) Try to prove the live state by matching keyword text. (3) Correct the claim to UNREAD and say
+what blocks the answer.
+
+**Decision.** Option 3, after option 2 failed.
+
+**Reasoning.** Text matching cannot settle it. `ad_engine_log` stores the word and the match type
+but not the keyword id, and the same text exists across several Brands campaigns, so a live pull
+returned 79 matches for 54 distinct word-and-match pairs. 24 showed ENABLED, but there is no way to
+tell an instance the job switched on from one that was already on. Meanwhile the four-day silence
+followed by spend on the reactivation day is real evidence pointing the other way from the flag.
+
+Saying "nothing landed" would have been comfortable and unsupported. Saying "at least one qualified
+word is now spending, and the count is UNREAD" is the accurate answer.
+
+**Industry source.** None. This is the existing "applied records intent, not outcome" trap, which we
+had only ever seen as `applied=1` on a refused write. The same flag is now unreliable in the other
+direction.
+
+**Trade-offs accepted.** The Brands question stays half-answered until the log carries keyword ids.
+
+**How to apply.** Never quote `applied` as evidence of what happened on Amazon, in either direction.
+Confirm against a live read of the entity, by id. When the id is not recorded, say UNREAD.
+
+**Status.** Corrected in the same session. Adding keyword ids to `ad_engine_log` is on my list.
+
+---
+
+## 2026-09-02 — Two dormant channels started spending on the 1st, and the brake was off
+
+**Context.** Sponsored Brands spent nothing for four consecutive days to 08-31, then $10.27 on
+09-01. Sponsored Display spent $19.80 across the whole of August with zero sales, then $5.20 on
+09-01 alone. Both restarted on the first day of the month.
+
+**Options.** (1) Treat it as noise, two small numbers. (2) Note the shared date and the mechanism,
+and flag the window.
+
+**Decision.** Option 2. Flagged, no action taken.
+
+**Reasoning.** The kill rule fires on $4 of month-to-date spend. On the 1st that counter resets to
+zero for every entity on the account, so nothing anywhere can be switched off until a word has spent
+$4 again. The highest spender this month is at $3.40. In that same window the engine added 50
+reintroductions and 44 reactivations. So the account currently has more words in the auction than at
+any point in August and no mechanism able to remove any of them, for roughly five more days.
+
+That is a structural consequence of a calendar-month kill window, not a bug, and it recurs every
+month. Worth naming before proposing anything.
+
+**Industry source.** None yet. A rolling window rather than a calendar month is the obvious
+alternative and has not been researched.
+
+**Trade-offs accepted.** No action taken during the blind window. The exposure is the first week of
+each month at whatever rate the account happens to be running.
+
+**Status.** Observed and recorded. No change proposed. Would need the 6-step before touching the
+kill window.
