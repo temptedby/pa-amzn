@@ -3411,3 +3411,50 @@ each month at whatever rate the account happens to be running.
 
 **Status.** Observed and recorded. No change proposed. Would need the 6-step before touching the
 kill window.
+
+## 2026-09-17 · The agent was never broken, the window had been open for four days
+
+**Context.** William asked how to open the Confabulator for PA-AMZN, then said he had not been able
+to open the agent in two weeks and that it "doesnt populate in cursor," then that there were issues
+with the ad account and he could not get into it. Three complaints in one line, and the first two
+had been read as user error for two weeks.
+
+**Options.**
+1. Keep giving instructions (open the folder, press Cmd+I, install the extension). This is what had
+   already failed repeatedly.
+2. Inspect the machine: extension registry, install method, Cursor logs, process uptime.
+3. Treat the ad account complaint as an API credential expiry and re-run the OAuth setup.
+
+**Decision.** Option 2 for the tooling, and for the ad account, validate the token with a real
+runtime call before assuming anything about it.
+
+**Reasoning.** Every piece of advice given up to that point assumed the software was in a fresh
+state. It was not. `ps` showed the Cursor main process (pid 580) had been alive since 2026-09-12
+15:14, 3 days 21 hours. The Cursor extension log showed `anthropic.claude-code` had installed itself
+five times inside that window, 2.1.269 through 2.1.273, and the extension's own activation log
+stopped at 2026-09-14 11:19. A live extension host loads once at startup, so every one of those
+updates landed on disk and none of them loaded. Separately, `which cursor` returned nothing: the
+shell command had never been installed, so no terminal instruction of the form `cursor <path>` could
+ever have worked. Both facts were visible in under a minute and neither had been checked.
+
+On the ad account, the memory rule is that "approved" is not "working" and a credential is only
+proven by a 200. `scripts/ads-profiles.mjs` is 16 lines, read-only, and returned all three profiles
+(US Phone Assured, CA and MX Securisee). That converted a vague complaint into a located one: the
+integration is healthy, so the blocker is console-side, and guessing which console symptom would
+have wasted the same way the Cursor guessing did.
+
+**Industry source.** Standard VS Code extension host behaviour, which Cursor inherits: extensions
+are resolved and activated at window load, and an in-place update requires a window reload before it
+takes effect. This is why the VS Code extension API ships the "Reload Required" prompt at all.
+
+**Trade-offs accepted.** Only the US profile was pulled. CA has 309 live keywords with 83 at the
+ceiling as of 09-02 and was not checked, so the $770.61 is a floor on the fortnight, not the total.
+The `sales14d` attribution window means the $408.62 is understated and will rise, though not by the
+$362 that would close the gap. The stale extension folders and the Homebrew-versus-npm CLI collision
+were both found and both left alone, because deleting extension directories under a running window
+is how you turn one broken thing into two.
+
+**Status.** `cursor` is on PATH and verified at 3.20.14. The reload is William's to run. The
+fortnight of ad spend is recorded and **nothing has been proposed or changed**; any action on those
+campaigns needs the 6-step first. The question of which console symptom is blocking the ad account
+was asked and is unanswered, and it is the one thing holding up the rest.
