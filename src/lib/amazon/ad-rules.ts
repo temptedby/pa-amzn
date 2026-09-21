@@ -1255,11 +1255,17 @@ export function bidWithMemory(
 // What was missing was a planner that any engine can hand its entities to. SP calls it with
 // keywords, SB with keywords, SD with targets, and all three get identical arithmetic.
 //
-// WHAT IT DELIBERATELY DOES NOT DO: invent history. `kw_bid_history` has zero rows, so there is no
-// "what did the last bid level produce" to compare against and the turn-around cannot fire. Rather
-// than fake a baseline, the planner passes `last: undefined` and searchStep skips that branch by
-// design. Every other rule — never raise a spending word, cut $0.10 under 2x, shave $0.02 at or
-// above it, stop at the approved gate — works on month-to-date figures alone.
+// HISTORY, and the bug that lived in this comment. The original note here said the planner passes
+// `last: undefined` on purpose, because `kw_bid_history` had zero rows and a faked baseline is
+// worse than none. That was true when it was written and stopped being true the day `bid_epoch`
+// started recording, but the hard-coded `undefined` stayed behind.
+//
+// It was not a missing nicety. `inCooldown(undefined)` is always false, so the hourly cron re-bid
+// every Brands and Display entity 24 times a day; and for an entity that IS getting clicks every
+// branch of searchStep() points down. The net effect was a one-way ratchet that walked winners to
+// the floor two cents at a time — measured on 2026-08-28 as 0 of 75 judgeable bid moves improving
+// ROAS, 9 making it worse. Callers now pass `last` from lastChanges() and the cooldown, the
+// turn-around branch and the $0.85 gate all become reachable for the first time on those products.
 
 export interface BidCandidate {
   id: string;
@@ -1272,6 +1278,10 @@ export interface BidCandidate {
   writable?: boolean;
   /** highest gate a human has approved for this entity; absent means the $0.85 gate applies */
   approvedCeiling?: number | null;
+  /** the bid change currently in force: when it happened and what the level before it produced.
+   *  Absent means "no history", which is a real answer on a first run and correctly imposes no
+   *  cooldown. See lastChanges() in bid-ledger.ts for where Brands and Display get theirs. */
+  last?: BidChange | null;
 }
 
 export interface BidMove {
@@ -1288,6 +1298,10 @@ export interface BidPlan {
   escalated: BidEscalation[];
   /** decided to change nothing */
   held: number;
+  /** wanted to move but the last change is still too fresh to judge. Counted apart from `held`
+   *  because "no opinion" and "an opinion I am not allowed to act on yet" are different states,
+   *  and conflating them is how a one-way ratchet stayed invisible for two weeks. */
+  heldByCooldown: number;
   /** wanted a change but the entity or its campaign is not ENABLED */
   blocked: number;
   /** the $4 rule owns these; the planner never bids on something being switched off */
@@ -1311,15 +1325,26 @@ export function planBids(
      *  everything else stays on the shared $0.10. Without this the shared floor clamped every
      *  Display cut and a five-cent bid was unreachable. */
     floor?: number;
+    /** minimum gap between two moves on one entity. Defaults to BID_COOLDOWN_HOURS (6). */
+    cooldownHours?: number;
+    nowMs?: number;
   } = {},
 ): BidPlan {
   const defaultBid = opts.defaultBid ?? BID_FLOOR;
   const floor = opts.floor ?? BID_FLOOR;
-  const out: BidPlan = { moves: [], escalated: [], held: 0, blocked: 0, killing: 0 };
+  const nowMs = opts.nowMs ?? Date.now();
+  const cooldownHours = opts.cooldownHours ?? BID_COOLDOWN_HOURS;
+  const out: BidPlan = { moves: [], escalated: [], held: 0, heldByCooldown: 0, blocked: 0, killing: 0 };
 
   for (const c of candidates) {
     const perf: Perf = { spend: c.spend, orders: c.orders, sales: c.sales };
     if (shouldKill(perf, opts.killSpend, undefined, opts.killMinRoas)) { out.killing++; continue; }
+
+    // COOLDOWN FIRST, and before any arithmetic. A bid level has to be left alone long enough to
+    // produce evidence; judging it an hour after setting it just re-reads the same numbers and
+    // moves again. Sponsored Products has always had this via bidWithMemory(); Brands and Display
+    // did not, which is the whole defect this parameter exists to close.
+    if (inCooldown(c.last, nowMs, cooldownHours)) { out.heldByCooldown++; continue; }
 
     const base = c.bid && c.bid > 0 ? c.bid : defaultBid;
     const since: SinceChange = {
@@ -1327,7 +1352,7 @@ export function planBids(
       clicks: c.clicks, impressions: c.impressions ?? 0,
     };
     const ceiling = activeCeiling(c.approvedCeiling);
-    const step = searchStep(base, since, undefined, { ceiling, floor, step: opts.step, shave: opts.step });
+    const step = searchStep(base, since, c.last, { ceiling, floor, step: opts.step, shave: opts.step });
 
     if (step.bid === null) {
       if (step.escalate) {

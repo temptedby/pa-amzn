@@ -23,7 +23,7 @@
 //     while never existing. Only ids Amazon returned SUCCESS for are logged as killed.
 
 import { db } from "@/lib/db/client";
-import { recordBidRun, type LedgerObservation } from "./bid-ledger";
+import { recordBidRun, lastChanges, type LedgerObservation } from "./bid-ledger";
 import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import {
@@ -210,6 +210,10 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
   }
   const ceilings = await approvedCeilings("SPONSORED_BRANDS");
   for (const c of candidates) c.approvedCeiling = ceilings.get(c.id) ?? null;
+  // The bid level currently in force per keyword. Without it planBids has no cooldown and this
+  // engine, running hourly, walked its own winners to the floor two cents a run.
+  const sbLast = await lastChanges("SPONSORED_BRANDS");
+  for (const c of candidates) c.last = sbLast.get(c.id) ?? null;
   const bidPlan = planBids(candidates);
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
