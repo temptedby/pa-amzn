@@ -3458,3 +3458,135 @@ is how you turn one broken thing into two.
 fortnight of ad spend is recorded and **nothing has been proposed or changed**; any action on those
 campaigns needs the 6-step first. The question of which console symptom is blocking the ad account
 was asked and is unanswered, and it is the one thing holding up the rest.
+
+---
+
+## 2026-09-18 — The rules improved, the account got worse, and the rules were not the variable
+
+**Context.** September 1-17 ran $827.65 of Sponsored Products spend against $473.56 of ad sales,
+0.57x. August 1-17 ran $405.25 against $288.23, 0.71x. Spend doubled and ROAS fell 20%. The
+obvious reading is that the bid engine degraded over the fourteen days nobody was watching.
+
+**Options.**
+1. Read the account totals, conclude the engine is broken, and start proposing rule changes.
+2. Compare the same calendar window in both months and decompose the change into rule behaviour
+   versus keyword population.
+3. Wait for `audit-spend.mjs` to give an authoritative figure before saying anything.
+
+**Decision.** Option 2. Option 3 was attempted and the script died.
+
+**Reasoning.** Decomposing it reverses the conclusion. Every rule metric improved month over month:
+the earning keywords went from 21 at 1.85x to 37 at 2.15x; bid moves went from 585 up / 110 down
+(84% raises) to 869 up / 762 down (53%); the kill fired 29% earlier, 112 kills at $5.04 average
+versus 68 at $7.07. The single metric that got worse is the population it was applied to. Dead
+keywords went from 103 costing $249.32 to 195 costing $607.73, and 147 keywords entered the auction
+for the first time in September at 0.68x, 36% of the month's spend. The rules did better work on
+twice as many bad words and lost more money doing it. Had I stopped at the account total I would
+have proposed a rule change for a problem that lives entirely in the intake rate.
+
+**Industry source.** None external. This is our own "compare windows of equal length" discipline
+from PR #6, applied one level up: the same trap that reversed every correct bid cut also reverses
+a month-over-month judgement about whether a system is working.
+
+**Trade-offs accepted.** The 14-day attribution window means September's $473.56 is understated and
+will rise, so the 0.57x is a floor. The shape of the finding survives that, because attribution lifts
+the earners and not the 195 words with zero sales. Sponsored Display is still UNREAD, so the spend
+figure is Sponsored Products plus a measured $24.85 of Brands, not the account total.
+
+**How to apply.** When spend and ROAS move the wrong way together, decompose into rule behaviour and
+population before touching a threshold. "The engine got worse" and "the engine was handed more bad
+words" produce the same account total and need opposite fixes.
+
+**Status.** Recorded. Nothing changed. The intake rate is now the named leak.
+
+---
+
+## 2026-09-18 — tacos.mjs printed a month total built from one ad product and called it the month
+
+**Context.** Ran `scripts/tacos.mjs` to get the TACOS view. It printed
+`MONTH ad spend $147.61   ad sales $196.33   ACOS 75%   total sales $0.00   units 0   TACOS Infinity%`.
+Two lines above the table, in output easy to scroll past, were
+`SP create failed ... range (47 days) must not exceed maximum range (31 days)` and the same for SD.
+
+**Options.**
+1. Quote the MONTH line. It is the script's own summary and it ran to completion.
+2. Discard it and read the same ground from `kw_day`, our own archive.
+3. Fix the window immediately and re-run.
+
+**Decision.** Option 2 for this session, with the defect recorded for a later fix.
+
+**Reasoning.** The $147.61 is Sponsored Brands alone, because the Sponsored Products and Sponsored
+Display report creations both 400'd on a window the script builds itself and Amazon caps at 31 days.
+The `total sales $0.00` is a second independent failure in the orders join, which also did not stop
+the print. So the summary line is wrong in two directions at once and carries no warning: it looks
+like a month total, it is labelled as a month total, and it is neither. Exactly the `kw_daily`
+failure again, where a stale CSV produced a confident wrong August figure. `kw_day` answered the
+same question from data we write ourselves, current to today, 11,014 rows, and cross-checked against
+the per-ASIN advertised-product report at $826.80 versus $827.65. Option 3 was declined because a
+code change mid-review is a direction change nobody asked for.
+
+**Industry source.** None. This is our own standing rule that a script must refuse to total when a
+component is missing, which `audit-spend.mjs` already implements and printed INCOMPLETE for on
+09-02. `tacos.mjs` never got that treatment.
+
+**Trade-offs accepted.** The TACOS frame, which is the right frame for this account, went unanswered
+this session. Sponsored Display spend stays UNREAD.
+
+**How to apply.** Read the lines above a summary table before quoting the summary. Any script that
+sums across ad products must print INCOMPLETE and refuse a total when a component fails, the way
+`audit-spend.mjs` does.
+
+**Status.** Defect recorded, not fixed. Two one-line fixes pending: the 47-day window in
+`tacos.mjs`, and the hardcoded dead scratchpad path that crashes `sb-mtd.mjs` after it prints.
+
+---
+
+## 2026-09-18 — Every ad dollar is on the product with the worst economics, and the best one has never been advertised
+
+**Context.** William asked about pushing ads to the 3-pack because of its higher AOV, then supplied
+the real per-pack costs that the answer depended on: $2.00 single, $2.80 two-pack, $3.30 three-pack.
+Our P&L script had been assuming a flat $2.00 for every pack size.
+
+**Options.**
+1. Answer on AOV, which is what was asked. The 3-pack is $16.49 against $8.79.
+2. Compute contribution, break-even ROAS and affordable CPC per product at the real costs, and check
+   what is actually advertised.
+3. Recommend moving the existing Single budget to the 3-pack.
+
+**Decision.** Option 2, and explicitly not option 3.
+
+**Reasoning.** AOV is the wrong axis; it does not tell you whether a click can pay for itself. At the
+real costs the 3-pack contributes $7.18 per order against the Single's $3.55, which puts its
+break-even at 2.30x versus 2.67x and its affordable CPC at $0.39 versus $0.19. It also clears three
+tethers per order, which is the unit that matters when the goal is selling through remaining stock.
+So the instinct is right for better reasons than the one given. Then the live read: of 176 enabled
+product ads the 3-pack appears in exactly one enabled campaign, which spent $0.00 in September, and
+the 3-pack-only campaign is not enabled. Both campaigns burning 89% of spend advertise the Single
+alone. In September the Single took roughly $820 of ads to sell 54 units while the 2-pack and 3-pack
+sold 27 units on about $48 and $0.00 respectively. Option 3 is refused on stock: sellable is 145
+singles, 47 two-packs and 22 three-packs, so the best economics sit on the smallest pile and a full
+budget shift empties it in about two weeks and strands the 145 singles.
+
+Separately, William asked directly for the 2-pack's ad ROAS. The per-ASIN advertised-product report
+gives 1.07x in September on 11 clicks and 12.15x in August on 2 clicks. The correct answer is that
+it is unmeasured: 13 clicks and 2 orders across 34 days is the same two sales landing either side of
+a rounding error. Reporting either figure as the 2-pack's ROAS would have been a number with no
+measurement behind it.
+
+**Industry source.** None external. This is contribution-per-click rather than ACOS as the decision
+metric, which is the same correction already recorded as "max affordable CPC is 32 cents" and
+"TACOS not ACOS" in this account.
+
+**Trade-offs accepted.** The affordable-CPC figures use September's blended 5.46% conversion rate for
+every product, because no product except the Single has enough ad clicks to measure its own. A
+$16.49 pack plausibly converts worse than a $9.49 one, which would cut the 3-pack's advantage.
+That is the thing a funded test would settle and the reason a test was proposed instead of a shift.
+Even at the 3-pack's $0.39 we pay $1.05, so this narrows the gap from 5.4x to 2.7x and does not
+close it.
+
+**How to apply.** Rank products for advertising by contribution per click and units cleared per
+order, never by AOV or price. Before proposing any budget move, read which ASIN each campaign
+actually advertises; "raise the 3-pack's bids" was not available, because there were no 3-pack bids.
+
+**Status.** Nothing changed. A small fixed-budget test on the 3-pack and 2-pack at an affordable bid,
+rather than a shift of Single spend, was proposed and is unanswered.
