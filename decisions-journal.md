@@ -3590,3 +3590,147 @@ actually advertises; "raise the 3-pack's bids" was not available, because there 
 
 **Status.** Nothing changed. A small fixed-budget test on the 3-pack and 2-pack at an affordable bid,
 rather than a shift of Single spend, was proposed and is unanswered.
+
+---
+
+# 2026-09-21
+
+## The $4 bar is not a test, it is a spending limit, and the median winner converts before it matters
+
+**Context.** William decided the ad engine runs into October and asked for "improvements to avoid
+$700 in spend with 0 comversions." September 1-21 had 214 keywords spend $651.63 and return nothing,
+71% of the month's ad spend. The obvious reading was that the kill rule is too slow or too leaky.
+
+**Options.**
+1. Tighten the latency: kill hourly instead of on a daily report snapshot.
+2. Lower the $4 bar.
+3. Cut intake so fewer words ever start the $4 climb.
+4. Cut the click price, so $4 buys more evidence per word.
+5. Do nothing to the bar and accept the discovery tax as the cost of running ads at all.
+
+**Decision.** Measure first, and the measurement killed option 1 outright. Recommended a lower bar
+to William with the full table and did **not** change the constant, because $4 is his number.
+
+**Reasoning.** The waste is not runaways and it is not latency. Banding the 214 dead words showed
+95 of them sitting in the $4-6 band, $428.06, which is 66% of the waste and is the bar working
+exactly as written. Nothing got past $10. Total overshoot above the bar across all 126 September
+kills is $152.03, an average of $1.21 a word, so the rule fires on time and fixing latency recovers
+at most a fifth of the money.
+
+The bar itself is the cost: 214 words times roughly $4 of rope each. So the question became whether
+$4 buys anything. At the month's $1.04 CPC and 5.58% CVR, $4 buys 3.85 clicks, and a genuinely
+average keyword produces zero sales in 3.85 clicks 80% of the time. The bar was already killing four
+out of five good words on noise. It is a spending limit wearing the costume of a test.
+
+The counter-check is what settled it. For the 41 keywords that did earn in September, cumulative
+spend at the moment the first order landed was: median $0.00, p75 $1.70, p90 $2.55, max $6.87. The
+median earner converted before spending anything measurable. Winners in this account announce
+themselves on the first or second click, so a lower bar gives up very little. Backtested, a $2 bar
+stops $335.62 of spend and gives up $36.43 of contribution, net +$299.19.
+
+One thing that had to be checked before any of that arithmetic was honest: budgets run at 6%
+utilisation with 16x headroom, so money freed by a kill does not get re-spent by another keyword. It
+stays unspent. In a budget-constrained account the whole calculation would have been wrong.
+
+**Industry source.** The rule of three for zero-event samples: with zero successes in n trials the
+95% upper bound on the rate is about 3/n. At 3.85 clicks that bound is 78%, which is no constraint
+at all on a 5.58% converter. The same reasoning is already in PR #12 for the no-click raise branch,
+applied there at 150 impressions. This is the kill-side twin of it.
+
+**Trade-offs accepted.** A lower bar kills genuine winners: 8 of 41 at a $2 bar, 13 of 41 at $1.50.
+That is real revenue given up, quantified rather than hand-waved, and in a wind-down where the goal
+is to move 240 remaining units rather than to discover new keywords, discovery has little forward
+value. The backtest is also survivorship-shaped, because it can only measure words that eventually
+converted; it cannot price the winner that would have converted on click nine. Accepted, because the
+distribution shows almost nothing converting late.
+
+**Status.** Research delivered to William with the full option table. **The bar is unchanged at $4.**
+This is a rule he stated and I will not move it without him saying so. Asked, unanswered.
+
+---
+
+## Seventy percent of the zero-conversion spend was re-buying words we already owned
+
+**Context.** Having established that the $4 bar is a per-word tax, the next question was how 214
+words came to be paying it in a single month when the account only has about 2,000 live keywords and
+most of them sit dead at the floor.
+
+**Options.**
+1. Treat it as normal keyword churn and focus only on the bar.
+2. Attribute each dead word to where it came from: genuinely new, or let back in.
+3. Throttle everything that adds keywords, without measuring which source is expensive.
+
+**Decision.** Option 2. Split the dead population by whether the keyword had ever appeared in
+`kw_day` before 2026-09-01.
+
+**Reasoning.** The split is lopsided enough to change the whole plan. $458.22 across 152 words was
+keywords the account had run before and let back in. Only $193.41 across 62 words was genuinely new.
+Separately, 11 of August's 68 kills were killed again in September, the same word paid for twice.
+
+That points at intake, not at discovery. September ran 15 reintroduction bursts promoting 150 words
+and one reactivation event re-enabling 104 on 09-01. The forward exposure is worse: 123 words killed
+this month sit unrevived, having cost $642.81 to discover, and their month-to-date counter zeroes on
+10-01.
+
+The mechanism that should stop this already half exists. `kw_tombstone` is read on main at
+`ad-engine.ts:1087` by `deadKeySet()`, and `isPermanentlyDead()` is written and tested at
+`ad-rules.ts:674`. The table has zero rows because **nothing has ever written to it**. The writer,
+`recordTombstones()`, sits unmerged in PR #16 along with a change restricting reintroduction to day 1
+of the month.
+
+**Industry source.** This is a negative-cache miss, the same failure shape as `kw_daily` having no
+automated writer. A read path that always returns empty is indistinguishable from a read path that is
+working, which is why the account has re-bought the same words for two months without anything
+looking broken.
+
+**Trade-offs accepted.** PR #16's second half changes William's 2026-08-06 instruction to run
+reintroduction every 6 hours, roughly 40 words a day. That is narrowing a stated rule, which costs
+money exactly as quietly as widening one, so it is flagged for his decision rather than merged with
+the tombstone writer it is bundled with. PR #16's base branch is also stale and needs rebasing onto
+main before it can go anywhere.
+
+**Status.** Measured and reported. Nothing merged. Both halves of PR #16 are William's call, and the
+rebase is mine.
+
+---
+
+## business-pnl.mjs printed a zero-revenue month because a 51-day report window returns DONE and empty
+
+**Context.** Running the business P&L for the morning review returned `TOTAL 0 units, $0.00 revenue`
+and then confidently printed `MONTH SO FAR $-899.74 DOWN`. Orders were visibly arriving: the Orders
+API showed 41 orders in the previous eight days.
+
+**Options.**
+1. Trust the tool and report a zero-revenue month.
+2. Substitute the Orders API and walk every order for its items.
+3. Find out why the report came back empty before replacing anything.
+
+**Decision.** Option 3, then a corrected copy of the same report call.
+
+**Reasoning.** The script hardcodes `dataStartTime: '2026-08-01'` with `dataEndTime: now`, which was
+a sane 20-day window when it was written on 2026-08-21 and is a 51-day window today. Probing three
+variants settled it: Aug 1-31 returns 161 rows, Sep 1-19 returns 89 rows, and the 51-day span returns
+an **empty report with `processingStatus: DONE`**. Amazon does not error, it succeeds with nothing.
+
+That is the same class of defect as `tacos.mjs` building a 47-day window against a 31-day cap and
+then printing a month total assembled from Sponsored Brands alone. A tool that degrades to a
+plausible number is worse than one that crashes, because nothing downstream can tell.
+
+The replacement takes the window as arguments and prints row counts at every filter stage, so a zero
+can never pass silently again: report rows, column indexes, and counts for cancelled, off-channel and
+unknown-sku. It refuses with UNREAD rather than printing a total if the report comes back empty. That
+produced August at $1,786.87 revenue and $679.09 contribution, and September 1-20 at $1,077.53 and
+$413.56, both at William's real per-pack costs of $2.00, $2.80 and $3.30.
+
+**Industry source.** The project's own standing rule, that "not found is a violation, never a pass,"
+and never fill a gap with a zero. Amazon's Reports API documents no explicit span cap for this report
+type, which is precisely why the guard has to live on our side.
+
+**Trade-offs accepted.** The corrected script was a scratch copy and was deleted after use, so
+`business-pnl.mjs` in the repo is still broken and will still print a zero-revenue month the next
+time anyone runs it. Recorded as open work rather than fixed in passing, because this was a review
+session and shipping an unreviewed change to a money-reporting tool mid-review is how a wrong number
+becomes permanent.
+
+**Status.** Diagnosed, worked around for this session's figures, **not fixed in the repo**. Three
+tools now carry the same silent-window defect: `business-pnl.mjs`, `tacos.mjs` and `kw_daily`.
