@@ -3734,3 +3734,202 @@ becomes permanent.
 
 **Status.** Diagnosed, worked around for this session's figures, **not fixed in the repo**. Three
 tools now carry the same silent-window defect: `business-pnl.mjs`, `tacos.mjs` and `kw_daily`.
+
+## 2026-09-30 · A word that converted last month is no likelier to convert this month than one that never did
+
+**Context.** William asked whether any of August's dead words converted in September, and whether to
+leave them dead. Seventeen of 97 retried words did convert, returning $207.80 on $99.53, which on its
+own argues for second chances. The whole kill / revive / tombstone model assumes a keyword's past
+carries information about its future.
+
+**Options.** (1) Read the 17 converters and revive more like them. (2) Tombstone every zero-sale word
+after one month. (3) Two strikes, off permanently after two failed months. (4) Test whether past
+conversion predicts future conversion at all before choosing.
+
+**Decision.** Did (4) first. Built the control group: what happened to August's *earners* in
+September, not just its failures.
+
+**Reasoning.** The control kills the premise. Of 27 August earners retried in September, 5 converted,
+18.5%. Of 97 August zero-sale words retried, 17 converted, 17.5%. Twenty-two of twenty-seven proven
+earners produced nothing. Click volume is not predictive either and runs slightly backwards: August
+1-2 clicks gave 0.773x in September, August 11+ gave 0.619x. The only prior-month variable that
+predicts next-month ROAS is what we paid per click: 0.72x, 0.60x, 0.43x across the $0.40-0.70,
+$0.70-1.00 and over-$1.00 bands.
+
+So tombstoning is worth money, +$282.40 on the September backtest, but not for the reason I would
+have given. The blocked pool returned 0.564x against an account average of 0.590x, essentially
+identical. It is a brake, not a filter. At 0.59x against a 2.42x break-even every dollar returns
+about 24 cents of contribution, so every draw loses 76% of its cost regardless of history.
+
+**Industry source.** Regression to the mean, and the base-rate problem in low-signal binary
+outcomes. At a 5.58% conversion rate and $1.04 CPC, $4 buys 3.85 clicks, and an average keyword
+produces zero sales in 3.85 clicks 80% of the time. The $4 bar was never a statistical threshold.
+
+**Trade-offs.** Two month-pairs is a thin base, Aug-to-Sep plus a weaker Jul-to-Aug. Within-month CPC
+correlation is contaminated by Amazon rewarding converting ads with cheaper clicks; the forward test
+using only prior-month CPC is the defensible version and shows a smaller effect in the same
+direction. Late-September attribution is still filling, so every net-gain figure is slightly
+optimistic.
+
+**Status.** Research complete, nothing built. Two-strikes list produced: 80 words, $470.38 across two
+months for $0.00, of which 39 are still enabled at ceiling bids. Awaiting William on whether to pause
+them.
+
+## 2026-09-30 · Reactivating proven winners lost more than hunting new words, because they were proven at twice the price
+
+**Context.** William asked whether each month we skip reactivating old converters and just look for
+new words. The premise seemed right: reintroduction promoted 188 "untested" words in September against
+2 tagged "proven winner".
+
+**Options.** (1) Answer from the reintroduction tags alone. (2) Also measure the separate reactivation
+path. (3) Measure what the reactivated words actually returned. (4) Find why the proven tier is starved.
+
+**Decision.** Did (2), (3) and (4). The premise was wrong in a way that mattered.
+
+**Reasoning.** Reactivation ran all month, 104 actions across 75 distinct words, roughly a quarter of
+the month's spend. Those revived converters returned **0.48x**, worse than the untested words at 0.56x
+and worse than the account average of 0.59x. So the neglected-winners theory is not just unsupported,
+it is backwards.
+
+The cause is a price change nobody propagated into the rules. Every "proven winner" earned its record
+at $19.95; we charge $9.49. Break-even needs 4.41x lifetime ROAS and the code asks for 2.0x
+(`REINTRO_LIFETIME_ROAS_MIN`). 171 words in the archive clear 2.0x; only 68 clear 4.41x. Two thirds of
+what the system calls a proven winner is not one.
+
+Three other throttles on the good tier: `kw_lifetime` is a CSV imported 2026-08-06 and covers nothing
+after it; 750 keywords are permanently excluded by the cohort filter, winners included; and
+reintroduction only rescues words sitting at exactly the $0.10 floor.
+
+**Industry source.** Unit-economics drift. A threshold expressed as a ratio silently changes meaning
+when either side of the ratio moves; the standing `price-rescale-factor` note already records the
+0.556 multiplier and nothing read it.
+
+**Trade-offs.** 4.41x is derived from a blended contribution rate across four SKUs, so it is a single
+figure standing in for four different bars. Raising to 4.41x shrinks the eligible pool by 60% and will
+slow intake, which is the intended effect but is a real reduction in exploration.
+
+**Status.** Not built. Recommended raising both bars to 4.41x. Awaiting a go.
+
+## 2026-09-30 · The watchdog was never silent, it has been alerting hourly about one 406
+
+**Context.** `watch_heartbeat` has had zero rows since it shipped. I told William twice that the
+watchdog could not prove it was watching, and offered to fix the heartbeat write. He replied "rbb cbc".
+
+**Options.** (1) Fix the heartbeat write as offered. (2) Read the code and reason about it. (3) Make an
+authenticated runtime call to the production route and find out what it actually does.
+
+**Decision.** Did (3) first, which is what CBC requires, and it showed my offer was for the wrong bug.
+
+**Reasoning.** An authenticated `?dryRun=1` against production returned `clean=False`,
+`heartbeat=True`, zero violations and one unread scope: `US Brands: sb/keywords 406`. The heartbeat
+writer is correct. It is gated on `clean` at `route.ts:73`, and a single 406 has made every run
+un-clean since it shipped, so the condition was never satisfiable. Zero rows is a correct writer
+reporting an unhealthy account.
+
+The more serious consequence is the opposite of what I claimed. Because `clean` is false the route
+never takes its silent path at `route.ts:44`, so the watchdog built to be quiet unless something is
+wrong **has been sending an alert every hour, 24 a day, about the same 406.**
+
+Reproduced live against the real endpoint, both header sets:
+
+```
+HTTP 406  engine-watch.ts:273  Content-Type: application/json + Accept: application/json
+HTTP 200  sb-v2.ts:198         Accept: application/vnd.sbkeyword.v3+json, NO Content-Type   670 rows
+```
+
+A header-only fix is not enough: `sb-v2.ts:203` uses `parsePreservingIds` for the 18-digit id
+problem while `engine-watch.ts:282` uses plain `res.json()`, so fixing the Accept header alone would
+return rounded ids that match nothing.
+
+**Industry source.** RFC 9110 §15.5.7, `406 Not Acceptable` means no representation matches `Accept`;
+Amazon versions Ads API resources through vendor media types so `application/json` matches nothing.
+Google SRE, *Monitoring Distributed Systems*: a monitor's liveness signal must not be gated on the
+health of what it monitors, because doing so collapses "dead" and "unhealthy" into one state. That is
+precisely the defect here.
+
+**Trade-offs accepted.** Ungating the heartbeat means one Telegram a day even when something is
+wrong, slightly more traffic in exchange for provable liveness. What NOT to do: make `isClean` ignore
+unread scopes, which would make the watchdog lie. Rollback is a single revert; the route holds no
+state beyond one heartbeat row.
+
+**Status.** Not built, awaiting a go. Still UNREAD and it matters: whether those hourly Telegram
+messages are arriving cannot be verified without sending one. Separately the same dry run reported
+"75 report request(s) asked for and never collected", not diagnosed.
+
+## 2026-09-30 · Sponsored Brands has never killed a keyword and Sponsored Display cannot be killed at all
+
+**Context.** William asked what is going on with the rule, and with shutting down and adding
+keywords, for every ad group and ad category. The assumption behind every previous session was that
+one rule set applies across the account.
+
+**Options.** (1) Describe the rules from `ad-rules.ts`. (2) Measure what the engine actually did per
+ad product and per ad group in September.
+
+**Decision.** Did (2). It is three different partial rules, not one.
+
+**Reasoning.** September, from the engine's own log:
+
+```
+                    kills  reactivations  adds  bid moves  heartbeat runs
+Sponsored Products   167        44         24     2,586       2,136
+Sponsored Brands       0        60          0     1,315           0
+Sponsored Display      0         0          0       200           0
+```
+
+Sponsored Brands has never killed a keyword across 2,223 log rows. Sponsored Display only moves bids,
+and the compliance run shows 100% of its entities sit below the $4 bar, so no rule can ever reach
+them: $11.37 spent for zero sales, fourth month. Brands is 83.6% below the bar by the same mechanism.
+All 60 Brands reactivations fired in one second at 2026-09-01T15:05:13Z, then nothing for 29 days.
+
+Harvest adds only to Sponsored Products, 24 words, all EXACT and PHRASE, which are our two worst
+match types at 0.414x and 0.481x. BROAD, the best at 0.594x, receives nothing.
+
+Twelve ad groups spent. Two carry 72% of the money at 0.57x, three spent $123.81 for zero orders, and
+the two best groups, ASIN targets at 1.94x and the auto group at 9.83x, spent $40.21 between them.
+
+Outside Sponsored Products the rules cannot show their work: `kw_bid_history` holds 5,128 rows, all
+Sponsored Products, so 1,515 Brands and Display bid moves are unrecorded, and neither writes a
+heartbeat `run` row. That is the same defect as the watchdog above, in a second place.
+
+**Industry source.** Coverage gaps in control loops. A controller that can observe but not actuate on
+part of its domain is not a partial controller, it is an open loop on that part; the standing rule here
+is that "not found is a violation, never a pass".
+
+**Trade-offs.** Extending the kill rule to Brands and Display and lowering the $4 bar are different
+fixes with different risks, and I have not researched either. Presented as a choice rather than a
+recommendation.
+
+**Status.** Measured, nothing changed. Awaiting William on which fix comes first.
+
+## 2026-09-30 · Eight 3-Pack ads switched on, in the two campaigns that already work
+
+**Context.** William: "we also need to start runnign ads to the 3packs and see if that outperfoms ...
+instead of the single pack which its hard to get a 2.4 roas on". The Single needs 2.67x to break even
+and has never cleared it; $903 of September's $912 went to it.
+
+**Options.** (1) Create a new 3-Pack campaign. (2) Move Single budget to the 3-Pack. (3) Unpause the
+dedicated 3-Pack campaign 305834701368758 at a real budget. (4) Enable the existing paused 3-Pack
+product ads inside the campaigns that already perform.
+
+**Decision.** (4), in campaigns 163087560588074 and 28008323784512, as William approved. Eight ads,
+one per ad group per SKU.
+
+**Reasoning.** The 3-Pack needs 2.30x against the Single's 2.67x, carries $7.18 of contribution against
+$3.55, can afford $0.39 a click against $0.19, and moves three tethers per order, which is what a
+sell-through needs. No new campaign or keyword was required: the ads already existed and were paused
+inside the only auto campaign returning 9.83x at $0.175 a click, and the only keyword campaign above
+1x in both months. Ad-group bids there are $0.42 and $0.50, under the $0.85 ceiling.
+
+**Industry source.** Contribution-margin-led bidding: bid the product with the highest contribution
+per click, not the highest revenue per order. The affordable CPC doubles from $0.19 to $0.39 on the
+same funnel.
+
+**Trade-offs accepted.** Only 26 three-packs in stock, our smallest pile, worth about $187 of
+contribution. If it works it exhausts in weeks and the machine points at 139 remaining Singles. It is a
+test, not a strategy. I also nearly stopped on seeing four of the eight ads bound to SKU
+`QO-N196-UJO4` rather than the in-stock `CPH-BLCK-3`; Amazon reports both `AD_STATUS_LIVE` and uses
+`NOT_BUYABLE` where a SKU genuinely cannot serve, which two Single ads show, so both were enabled.
+
+**Status.** LIVE. All eight verified `AD_STATUS_LIVE` by read-back. Nine 3-Pack ads now live across
+three campaigns. Nothing else touched: no bid, keyword, budget or campaign-state changes. Measurement
+needs one to two weeks via the per-ASIN advertised-product report.
