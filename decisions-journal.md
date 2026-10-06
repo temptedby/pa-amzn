@@ -3933,3 +3933,172 @@ test, not a strategy. I also nearly stopped on seeing four of the eight ads boun
 **Status.** LIVE. All eight verified `AD_STATUS_LIVE` by read-back. Nine 3-Pack ads now live across
 three campaigns. Nothing else touched: no bid, keyword, budget or campaign-state changes. Measurement
 needs one to two weeks via the per-ASIN advertised-product report.
+
+## 2026-10-06 — Judge a keyword only on spend whose 14 days are up
+
+**Context.** I had a list of 172 keywords ready to switch off, built by applying William's rule
+("turn off keywords not converting, period") to each word's TOTAL spend. He replied: "mind the
+attribution of 14 days". Splitting the list by whether the clicks had actually had their window:
+177 words holding $517.84 were still inside it and only 19 holding $34.06 were judgeable. Judged on
+settled spend alone, 25 had genuinely proved it. 90% of what I was about to kill had not finished
+reporting, and two August kills had in fact converted.
+
+**Options.** (a) Run the 172 and accept the error rate. (b) Subtract 14 days by hand each time.
+(c) Make the report window itself end 14 days ago, so the data cannot contain unsettled spend.
+(d) Keep a manual list and re-check weekly.
+
+**Decision.** (c), as `settledWindow()` in ad-rules.ts, running daily via
+`/api/cron/settled-sweep`. The window is `[today-44, today-14]`. A keyword with no settled row is
+skipped entirely rather than read as a zero.
+
+**Reasoning.** (b) is the option that fails silently the one time anyone forgets. Putting the
+protection in the date range means the sweep *cannot* judge inside the window even if the rule
+changes later. Daily rather than weekly, on William's instruction, because each day one more cohort
+finishes its 14 days and becomes judgeable, so losers are let go continuously without any being
+judged early.
+
+**Industry source.** Amazon's own 14-day attribution model; the same reason their console labels
+recent ACOS as provisional.
+
+**Trade-offs accepted.** The sweep is slower to act than the hourly kill, so a word can burn for two
+weeks before the sweep can see it. That is why the hourly month-to-date kill is kept as a fast
+brake: it stops $8/day within hours, and the sweep is the certain verdict behind it. Two different
+jobs, two different windows, deliberately.
+
+**Status.** Shipped PR #42, deployed, run live. 28 keywords switched off, $143.98 of settled spend.
+
+---
+
+## 2026-10-06 — Dead stays dead: the monthly reset is over and history revives nothing
+
+**Context.** William: "we are no longer resetting monthly we are keeping keywords dead unless they
+convert now not historically we have wasted too much money on ad spend not converting." Measured
+the same day: 33 words killed in September spent $61.38 again in October for $0.00; 8 of October's
+first 20 kills had been killed in a previous month; two were on their third consecutive month. The
+85 words reopened on 1 October through lifetime evidence returned 0.42x against an account at 0.67x.
+159 of the 196 non-converting words had never once reached $4 in a single month, holding $277.81
+the monthly bar could not reach by construction.
+
+**Options.** (a) Raise the lifetime bar from 2.0x to the price-rescaled 4.41x. (b) Delete the
+lifetime revival code. (c) One switch gating every lifetime path, keeping the constants.
+(d) Change the kill evaluation from month-to-date to cumulative everywhere in the hourly engine.
+
+**Decision.** (c) plus an invariant. `LIFETIME_EVIDENCE_REVIVES = false` closes reactivation route B
+and the reintroduction lifetime pool from one place. The daily sweep enforces that **a tombstoned
+word is never ENABLED**, and tombstones are written on cumulative settled spend.
+
+**Reasoning.** (a) was the earlier plan and it is not enough: the problem is not the height of the
+bar but that a record earned at $19.95 is being used to justify spend at $9.49. (b) loses the
+history of why. (c) keeps the 3.60x constant and its tests, so flipping the switch back cannot
+silently lower the bar as well. The invariant delivers the cumulative bar without rewriting the
+hourly engine, because a word taking $3 a month for a year is tombstoned on cumulative spend and
+then cannot be enabled by any path.
+
+**Industry source.** Standard cohort-decay reasoning: evidence earned under a different price has
+to be rescaled or discarded, not carried forward at face value.
+
+**Trade-offs accepted.** Some genuinely good words earned at $19.95 will now never come back on
+their record alone. They can still return by converting now, through route A or the in-month
+revival. Given 18.5% of past earners converted again versus 17.5% of past zero-sale words, past
+conversion carries almost no predictive weight anyway, so little is lost.
+
+**Status.** Shipped PR #44, merged and deployed. 8 existing tests encoded the old rule and were
+rewritten rather than deleted, each carrying the date and reason. PR #45 extended the same
+treatment to Brands reactivation, whose 1.92x bar was 1.07x in today's money.
+
+---
+
+## 2026-10-06 — A product needs its own ad group, not a seat in someone else's
+
+**Context.** On 2026-09-30 I enabled eight 3-Pack product ads inside the Single's ad groups to test
+whether the 3-Pack outperforms. Six days later: 0 impressions, 0 clicks, $0.00. Every ad read
+ENABLED and AD_STATUS_LIVE the whole time, so the test looked live and measured nothing.
+
+**Options.** (a) Raise bids in those ad groups. (b) Pause the Single's ads so the 3-Pack can serve.
+(c) Give the 3-Pack its own ad group holding only its ad. (d) Abandon the test.
+
+**Decision.** (c). Created ad group 249655793618557 inside the dormant 3-Pack campaign
+305834701368758, holding one 3-Pack product ad and four ASIN targets at $0.37.
+
+**Reasoning.** Amazon serves one ad per ad group per auction and picks the best expected performer.
+The Single has 480 reviews and years of history in those ad groups, so it wins every auction
+regardless of bid, which makes (a) futile. (b) would sacrifice the only product currently earning.
+Only (c) gives the 3-Pack a slot nothing can take from it.
+
+ASIN targeting rather than more keywords because the measurement is stark: ASIN and auto targets
+convert near 10% at about $0.56 a click, broad and phrase keywords convert at 4% at $1.05. The four
+ASINs chosen already run at $0.37 elsewhere in the account, so this copies a working configuration
+rather than guessing. Bid $0.37 rather than the $0.25 keyword entry, because entering too low is
+what produced no data in September, and the 3-Pack affords $0.78.
+
+**Industry source.** Amazon's documented ad-serving behaviour: one ad per ad group enters a given
+auction.
+
+**Trade-offs accepted.** Two of the four ASINs sit at 1.34x and 1.20x, under the 1.5x bar as
+measured on the Single. Kept because the 3-Pack's order value is 1.74x the Single's, so the same
+click plausibly returns above the bar, and because the daily sweep will switch them off on settled
+evidence if it does not. That is reasoning, not evidence, and it is recorded as such. Budget left at
+$2/day; 27 packs in stock is the real ceiling.
+
+**Status.** Live. Campaign ENABLED, 10 keywords at $0.25, 4 ASIN targets, all reading back LIVE.
+
+---
+
+## 2026-10-06 — "Off because the container is off" is not off
+
+**Context.** Enabling the 3-Pack campaign switched on EXACT "phone tether retractable", a word I had
+tombstoned four hours earlier. It sat ENABLED inside the PAUSED campaign, so enabling the campaign
+made it serve at its 2023 bid of $2.50, over both the $2.50 cap and the $0.85 confirm ceiling. My
+script skipped it when re-bidding, and skipping leaves the state alone.
+
+**Options.** (a) Pause it and move on. (b) Fix the script to pause tombstoned keywords. (c) Make the
+daily sweep enforce the invariant, so no script can ever cause this again.
+
+**Decision.** All three. The script now pauses rather than skips, and the sweep enforces that a
+tombstoned word is never ENABLED, reporting a `zombies` count that should sit at 0.
+
+**Reasoning.** (a) and (b) fix this instance and this script. The class of bug is broader: entity
+state and container state are independent, and any future campaign being switched on would do the
+same. An invariant checked daily is the only form that survives the next script I have not written
+yet.
+
+**Industry source.** The standard argument for invariants over point fixes: assert the property, not
+the absence of one known cause.
+
+**Trade-offs accepted.** One extra query a day, and it writes nothing once the count settles at 0.
+
+**Status.** Fixed about three minutes after it happened. `budget-usage` confirms $0.00 spent, so it
+cost nothing. Caught by the script's own read-back printing VIOLATION, which is the argument for
+read-backs that check rather than merely print.
+
+---
+
+## 2026-10-06 — Cheap clicks do not convert better; no click above $0.55 is affordable
+
+**Context.** The CPC-band table appeared to show return falling as CPC rises, and William read it as
+"lower cpc convert best". I had presented 6.71x in the cheapest band without checking the interval.
+
+**Options.** (a) Agree and recommend lowering bids across the board. (b) Check whether conversion
+actually falls with CPC, or whether cheap clicks merely make any conversion profitable.
+
+**Decision.** (b), with 95% confidence intervals and a correction issued.
+
+**Reasoning.** Conversion is U-shaped, not a slope: 3.6% in the $0.60-0.90 band (CI 2.6-5.1%, 854
+clicks) against 11.1% over $1.40 (CI 8.0-15.3%, 288 clicks). Those intervals do not overlap, so
+expensive clicks convert *better*. The cheapest band's interval runs 3.5% to 36% on 16 clicks and
+means nothing. What is true is that a click is worth conversion x contribution, so even our best
+traffic justifies only ~$0.55 and we pay $1.05.
+
+Separately: we pay 1.27x our own bid, confirmed against the bid in force on the day rather than a
+stale one. But AUTO_FOR_SALES campaigns, which cause most of that premium, convert 8.3% and return
+0.68x against 4.1% and 0.54x elsewhere. **Dynamic bidding earns its premium and must not be switched
+off**, which is the opposite of where the first reading pointed.
+
+**Industry source.** Wilson score interval for binomial proportions, the standard guard against
+reading a law off a handful of events.
+
+**Trade-offs accepted.** I corrected a finding I had already given William, which is worth doing
+every time the correction changes what he would do. Here it would have reversed the action.
+
+**Status.** Reported. No bid change made; the lever identified instead is moving spend toward ASIN
+targeting, which is his to decide.
