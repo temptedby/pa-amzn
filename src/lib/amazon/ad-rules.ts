@@ -675,6 +675,42 @@ export function isPermanentlyDead(p: Perf, killSpend = KILL_SPEND): boolean {
   return p.spend >= killSpend && p.orders === 0;
 }
 
+/**
+ * ATTRIBUTION-SAFE WINDOW. The span of days whose sales have finished reporting.
+ *
+ * William 2026-10-06: "let go of words that lose money mind the attribution of 14 days", and then
+ * "daily please".
+ *
+ * A click can be credited a sale up to 14 days later, so TODAY'S spend is not evidence of anything
+ * yet. Measured 2026-10-06: of the 196 active keywords with no conversion, 177 of them holding
+ * $517.84 had spent inside the open window, and only 19 holding $34.06 were actually judgeable.
+ * Switching off all 196 would have judged 90% of them half-blind. Two August kills had in fact
+ * converted, and that is the same mistake.
+ *
+ * This returns [start, end] where `end` is `attributionDays` ago, so nothing inside the window can
+ * be judged at all, and `start` is `spanDays` before that. The Ads API refuses a range over 31
+ * days, so spanDays defaults to 30.
+ *
+ * The RULE applied to this window is the existing one. shouldKill() and isPermanentlyDead() are
+ * unchanged; only the evidence they are handed is different. There is no third threshold to keep
+ * in sync.
+ */
+export function settledWindow(
+  now: Date | number = new Date(),
+  attributionDays = ATTRIBUTION_DAYS,
+  spanDays = 30,
+): { start: string; end: string } {
+  const MS = 864e5;
+  const t = typeof now === "number" ? now : now.getTime();
+  const end = new Date(t - attributionDays * MS);
+  const start = new Date(end.getTime() - spanDays * MS);
+  const iso = (d: Date) => d.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
+}
+
+/** Amazon credits a click with a sale for this many days after it. */
+export const ATTRIBUTION_DAYS = 14;
+
 /** Stable identity for the kill list. Text is lowercased/collapsed so casing cannot resurrect a word. */
 export function deadKey(keywordText: string, matchType: string): string {
   return `${(keywordText || "").trim().toLowerCase().replace(/\s+/g, " ")}|${(matchType || "").toUpperCase()}`;
