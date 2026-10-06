@@ -31,7 +31,7 @@ import {
   type SbKeyword,
 } from "./sb-v2";
 import {
-  shouldKill, KILL_SPEND, ACOS_PIVOT, KILL_MIN_ROAS, planBids,
+  shouldKill, KILL_SPEND, ACOS_PIVOT, KILL_MIN_ROAS, planBids, LIFETIME_EVIDENCE_REVIVES,
   type Perf, type BidCandidate, type BidPlan,
 } from "./ad-rules";
 
@@ -115,6 +115,16 @@ export async function runSbEngine(opts: { dryRun?: boolean; ingestDays?: number 
     monthSpend: 0, monthSales: 0, words: 0, killed: [], survived: [],
     notes: [], errors: [], durationMs: 0,
   };
+  // Lifetime evidence does not reopen a word in any ad product. William 2026-10-06: "keeping
+  // keywords dead unless they convert now not historically". This whole routine reads kw_lifetime,
+  // so it is off in its entirety rather than merely bar-raised.
+  if (!LIFETIME_EVIDENCE_REVIVES) {
+    out.ok = true;
+    out.reason = "lifetime evidence no longer reopens a word (LIFETIME_EVIDENCE_REVIVES=false)";
+    out.notes.push(out.reason);
+    out.durationMs = Date.now() - start;
+    return out;
+  }
   const cfg = adsConfigFromEnv();
   if (!cfg?.profileId) { out.reason = "ADS_* env not configured"; out.durationMs = Date.now() - start; return out; }
 
@@ -332,8 +342,22 @@ export function summarizeSbEngine(r: SbEngineResult): string {
 // switched off one 10% cut at a time.
 // ---------------------------------------------------------------------------
 
-/** Break-even is 1.92x, from real fees: $9.49 price - $0.62 COGS - $1.42 referral - $2.52 FBA. */
-export const SB_REACTIVATE_MIN_ROAS = 1.92;
+/**
+ * William 2026-10-06: "need at 1.5 for everything". The kill bar is KILL_MIN_ROAS = 1.5 in every ad
+ * product, applied through shouldKill(); Brands reactivation was the one place still carrying its
+ * own number, and it was the WRONG number in two ways.
+ *
+ * It was 1.92x, the raw break-even, read against kw_lifetime. Those lifetime figures were earned
+ * when the product sold for $19.95, so 1.92x recorded is 1.07x in today's money, well under the
+ * 1.5x bar. That is how Brands qualified 60 words at an effective 1.07x.
+ *
+ * Rescaled, 1.5x today is 1.5 / 0.556 = 2.70x on the record. The constant now says that.
+ *
+ * It is moot while LIFETIME_EVIDENCE_REVIVES is false, which is the point: this reactivation reads
+ * LIFETIME evidence, exactly the path closed for Sponsored Products in PR #44. Pinned at the
+ * corrected value so that flipping the switch back cannot quietly restore a 1.07x bar as well.
+ */
+export const SB_REACTIVATE_MIN_ROAS = 2.70;
 /** A 79x return built on one order and $0.25 of spend is noise, not evidence. */
 export const SB_REACTIVATE_MIN_ORDERS = 2;
 
