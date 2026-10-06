@@ -6,11 +6,11 @@ import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
-  isPermanentlyDead,
+  isPermanentlyDead, settledWindow, ATTRIBUTION_DAYS,
   bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, activeCeiling, nextGate,
   type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
-  BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND,
+  BID_FLOOR, REINTRO_PER_DAY, KILL_SPEND, KILL_MIN_ROAS,
   lifetimeOnlyPool,
   type Perf, type ReintroCandidate, type ReintroState, type ReintroPick,
   killSpendFor,
@@ -1531,5 +1531,150 @@ export function summarizeAdEngine(r: AdEngineResult): string {
     lines.push("");
   }
   if (r.errors.length) lines.push("ERRORS: " + r.errors.join("; "));
+  return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// THE DAILY SETTLED SWEEP
+// ---------------------------------------------------------------------------
+// William 2026-10-06: "let go of words that lose money mind the attribution of 14 days" and
+// "daily please".
+//
+// WHY THIS EXISTS SEPARATELY FROM THE HOURLY KILL. runAdEngine judges month-to-date spend, which
+// includes the last 14 days, so a word killed today may have sales still in flight. That is the
+// right trade for a fast brake: it stops a word burning $8 a day within hours. But it is the wrong
+// trade for a verdict, and the account has paid for the difference twice.
+//
+// This sweep is the slow, certain half. It judges ONLY a window that closed `ATTRIBUTION_DAYS` ago,
+// so every sale has had its full run. Nothing inside the open window is looked at.
+//
+// Measured on the day it was written, which is the case for it:
+//   active keywords that had never converted            196 words, $551.90
+//   of those, still inside the attribution window        177 words, $517.84   NOT judgeable
+//   fully settled and therefore judgeable                 19 words,  $34.06
+//   had $4+ of SETTLED spend and zero sales               25 words, $177.20   the real list
+//
+// Judging on total spend would have switched off 177 words on evidence that had not finished
+// arriving. Judging on settled spend alone finds 25 that genuinely proved it.
+//
+// The RULE is unchanged: shouldKill() and isPermanentlyDead(), exactly as the hourly engine uses
+// them. Only the window differs. A word that never converted is also tombstoned, so it does not
+// return on the 1st; a word that converted but weakly is paused only, because attribution can
+// still lift it and the in-month revival reads month-to-date.
+export interface SettledSweepResult {
+  ok: boolean;
+  dryRun: boolean;
+  window: { start: string; end: string };
+  ready: boolean;
+  judged: number;
+  paused: { text: string; matchType: string; keywordId: string; spend: number; sales: number; orders: number; retired: boolean }[];
+  tombstoned: number;
+  notes: string[];
+  errors: string[];
+  durationMs: number;
+}
+
+/** Pure selector: from settled performance + live state, which keywords should come off. */
+export function settledSweepCandidates(
+  live: { keywordId: string; keywordText: string; matchType: string; state: string }[],
+  settled: Map<string, { spend: number; orders: number; sales: number }>,
+  killSpend = KILL_SPEND,
+  killMinRoas = KILL_MIN_ROAS,
+): { keywordId: string; keywordText: string; matchType: string; spend: number; sales: number; orders: number; retired: boolean }[] {
+  const out: ReturnType<typeof settledSweepCandidates> = [];
+  for (const k of live) {
+    if (k.state !== "ENABLED") continue;                  // already off; nothing to do
+    const p = settled.get(String(k.keywordId));
+    if (!p) continue;                                     // no settled evidence — silence is not a verdict
+    if (!shouldKill({ spend: p.spend, orders: p.orders, sales: p.sales }, killSpend, undefined, killMinRoas)) continue;
+    out.push({
+      keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
+      spend: p.spend, sales: p.sales, orders: p.orders,
+      // never converted at all -> retire for good. Converted badly -> off for now, can come back.
+      retired: isPermanentlyDead({ spend: p.spend, orders: p.orders, sales: p.sales }, killSpend),
+    });
+  }
+  return out;
+}
+
+export async function runSettledSweep(opts: { dryRun?: boolean; now?: Date | number } = {}): Promise<SettledSweepResult> {
+  const dryRun = opts.dryRun ?? true;     // preview by default — this switches off live keywords
+  const start = Date.now();
+  const win = settledWindow(opts.now ?? new Date());
+  const out: SettledSweepResult = {
+    ok: false, dryRun, window: win, ready: false, judged: 0, paused: [], tombstoned: 0,
+    notes: [], errors: [], durationMs: 0,
+  };
+  const cfg = adsConfigFromEnv();
+  if (!cfg || !cfg.profileId) { out.errors.push("ADS_* env not configured"); out.durationMs = Date.now() - start; return out; }
+  const token = await getAdsAccessToken(cfg);
+
+  // Ask for the settled report and hang up if it is not ready. A sweep that blocks on the report
+  // queue burns the 300s cap and logs nothing, which is how an engine run lost 58 writes.
+  const { rows, ready } = await deferredRows(cfg, token, out.notes, "settled-sweep", "spTargeting", ["targeting"], SP_COLS, win.start, win.end);
+  out.ready = ready;
+  if (!ready) {
+    out.notes.push(`settled report for ${win.start}..${win.end} not collected yet; nothing judged this run`);
+    out.ok = true; out.durationMs = Date.now() - start; return out;
+  }
+
+  const settled = new Map<string, { spend: number; orders: number; sales: number }>();
+  for (const r of rows) {
+    const id = r.keywordId != null ? String(r.keywordId) : "";
+    if (!id) continue;
+    const a = settled.get(id) ?? { spend: 0, orders: 0, sales: 0 };
+    a.spend += r.cost ?? 0; a.orders += r.purchases14d ?? 0; a.sales += r.sales14d ?? 0;
+    settled.set(id, a);
+  }
+  out.judged = settled.size;
+  out.notes.push(`${settled.size} keywords have settled evidence in ${win.start}..${win.end}`);
+
+  let live: { keywordId: string; keywordText: string; matchType: string; state: string }[] = [];
+  try {
+    let next: string | undefined;
+    do {
+      const r = await ads(cfg, token, "/sp/keywords/list", "POST", { maxResults: 1000, ...(next ? { nextToken: next } : {}) }, KW_CT);
+      if (!r.ok) { out.errors.push(`keywords: ${r.status}`); break; }
+      const j = r.json as { keywords?: typeof live; nextToken?: string };
+      live = live.concat(j.keywords ?? []);
+      next = j.nextToken;
+    } while (next);
+  } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+
+  const cands = settledSweepCandidates(live, settled);
+  out.paused = cands.map((c) => ({ text: c.keywordText, matchType: c.matchType, keywordId: c.keywordId, spend: c.spend, sales: c.sales, orders: c.orders, retired: c.retired }));
+  out.notes.push(`${cands.length} enabled keywords failed the kill rule on settled evidence (${cands.filter((c) => c.retired).length} never converted at all)`);
+
+  if (!dryRun && cands.length) {
+    try {
+      const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: cands.map((c) => ({ keywordId: c.keywordId, state: "PAUSED" })) }, KW_CT);
+      if (!r.ok) out.errors.push(`pause: ${r.status}`);
+    } catch (e) { out.errors.push(e instanceof Error ? e.message : String(e)); }
+    // Retire the ones that never converted, so the 1st of the month cannot reopen them.
+    try {
+      const mtd = new Map<string, SinceChange>();
+      for (const c of cands) mtd.set(c.keywordId, { spend: c.spend, sales: c.sales, orders: c.orders, clicks: 0 });
+      out.tombstoned = await recordTombstones(
+        cands.map((c) => ({ text: c.keywordText, spend: c.spend, matchType: c.matchType, keywordId: c.keywordId })),
+        mtd,
+      );
+    } catch (e) { out.errors.push("tombstone: " + (e instanceof Error ? e.message : String(e))); }
+  }
+
+  out.ok = true; out.durationMs = Date.now() - start;
+  return out;
+}
+
+export function summarizeSettledSweep(r: SettledSweepResult): string {
+  const lines = [
+    `Settled sweep ${r.dryRun ? "(preview)" : "ran"} on ${r.window.start}..${r.window.end}, a window that closed ${ATTRIBUTION_DAYS} days ago.`,
+    `${r.judged} keywords had settled evidence. ${r.paused.length} switched off, ${r.tombstoned} retired for good.`,
+    "",
+  ];
+  for (const p of r.paused.sort((a, b) => b.spend - a.spend)) {
+    lines.push(`  $${p.spend.toFixed(2)} -> $${p.sales.toFixed(2)}  ${p.retired ? "never converted" : `${p.orders} order(s), below the bar`}  ${p.matchType} "${p.text}"`);
+  }
+  if (r.notes.length) lines.push("", ...r.notes.map((n) => `note: ${n}`));
+  if (r.errors.length) lines.push("", ...r.errors.map((e) => `ERROR: ${e}`));
   return lines.join("\n");
 }
