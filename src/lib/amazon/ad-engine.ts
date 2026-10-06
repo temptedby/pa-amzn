@@ -1569,6 +1569,7 @@ export interface SettledSweepResult {
   judged: number;
   paused: { text: string; matchType: string; keywordId: string; spend: number; sales: number; orders: number; retired: boolean }[];
   tombstoned: number;
+  historicallyDead?: { found: number; written: number; spend: number; sample: string[] };
   notes: string[];
   errors: string[];
   durationMs: number;
@@ -1661,6 +1662,15 @@ export async function runSettledSweep(opts: { dryRun?: boolean; now?: Date | num
     } catch (e) { out.errors.push("tombstone: " + (e instanceof Error ? e.message : String(e))); }
   }
 
+  // Retire what our own archive already proves dead, including words that are ALREADY paused and
+  // therefore invisible to the sweep above. Those are precisely the ones reactivation reopens on
+  // the 1st. Idempotent, so once the backlog clears this writes nothing.
+  try {
+    const hist = await retireHistoricallyDead(win.end, KILL_SPEND, dryRun);
+    out.historicallyDead = { found: hist.found, written: hist.written, spend: +hist.spend.toFixed(2), sample: hist.sample };
+    out.notes.push(`${hist.found} words in our archive proved dead before ${win.end} ($${hist.spend.toFixed(2)}); ${dryRun ? "would retire" : "retired"} ${dryRun ? hist.found : hist.written}`);
+  } catch (e) { out.errors.push("retire: " + (e instanceof Error ? e.message : String(e))); }
+
   out.ok = true; out.durationMs = Date.now() - start;
   return out;
 }
@@ -1677,4 +1687,59 @@ export function summarizeSettledSweep(r: SettledSweepResult): string {
   if (r.notes.length) lines.push("", ...r.notes.map((n) => `note: ${n}`));
   if (r.errors.length) lines.push("", ...r.errors.map((e) => `ERROR: ${e}`));
   return lines.join("\n");
+}
+
+/**
+ * Retire every word our own archive already proves dead, whatever its current state.
+ *
+ * THE GAP THIS CLOSES. settledSweepCandidates() only looks at ENABLED keywords, because pausing an
+ * already-paused word is a no-op. But a PAUSED word is exactly what reactivation reopens on the 1st,
+ * and route B asks only for a LIFETIME record earned at the old $19.95 price. Measured 2026-10-06:
+ * of the 131 words that spent $4+ in September with zero sales, 103 were already switched off and
+ * therefore invisible to the sweep, yet every one of them was eligible to come back in November.
+ *
+ * It also fixes the sweep's reach. The Ads API serves ~95 days and the sweep reads a 30-day settled
+ * window, so a word that died in July is out of its sight entirely. kw_day is our own archive and
+ * goes back to 2026-05-20, so it remembers what Amazon has already forgotten. That is the whole
+ * reason we started keeping it.
+ *
+ * ONLY SETTLED SPEND COUNTS. Days inside the attribution window are excluded from the sum, so a
+ * word is never retired on sales that had not finished arriving. Same guarantee as the sweep.
+ *
+ * Idempotent: ON CONFLICT DO NOTHING, so running it daily costs one query and writes nothing once
+ * the backlog is cleared.
+ */
+export async function retireHistoricallyDead(
+  settledBefore: string,
+  killSpend = KILL_SPEND,
+  dryRun = true,
+): Promise<{ found: number; written: number; spend: number; sample: string[] }> {
+  const r = await db().execute({
+    sql: `SELECT word, match_type, ROUND(SUM(spend), 2) sp, SUM(clicks) c
+          FROM kw_day
+          WHERE ad_product = 'SPONSORED_PRODUCTS' AND day < ?
+          GROUP BY word, match_type
+          HAVING SUM(spend) >= ? AND COALESCE(SUM(orders), 0) = 0 AND COALESCE(SUM(sales), 0) = 0
+          ORDER BY SUM(spend) DESC`,
+    args: [settledBefore, killSpend],
+  });
+  const rows = r.rows as unknown as { word: string; match_type: string; sp: number; c: number }[];
+  const out = {
+    found: rows.length,
+    written: 0,
+    spend: rows.reduce((s, x) => s + Number(x.sp), 0),
+    sample: rows.slice(0, 10).map((x) => `$${Number(x.sp).toFixed(2)} ${x.match_type} "${x.word}"`),
+  };
+  if (dryRun) return out;
+  const now = new Date().toISOString();
+  for (const x of rows) {
+    const w = await db().execute({
+      sql: `INSERT INTO kw_tombstone (dead_key, word, match_type, reason, evidence, killed_at)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(dead_key) DO NOTHING`,
+      args: [deadKey(x.word, x.match_type), x.word, x.match_type, "never_converted",
+             JSON.stringify({ spend: Number(x.sp), clicks: Number(x.c), orders: 0, settledBefore }), now],
+    });
+    if (w.rowsAffected) out.written++;
+  }
+  return out;
 }
