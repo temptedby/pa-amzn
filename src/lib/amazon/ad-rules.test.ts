@@ -1169,9 +1169,13 @@ describe("Sponsored Display steps in 5c, once a day (William 2026-08-13)", () =>
 });
 
 describe("lifetimeOnlyPool — the run whose report has not arrived (William 2026-08-14, 40 a day)", () => {
-  it("keeps a proven 2x+ winner", () => {
+  // SUPERSEDED 2026-10-06. William: "keeping keywords dead unless they convert now not
+  // historically". LIFETIME_EVIDENCE_REVIVES is false, so a proven lifetime winner is no longer
+  // admitted. Only a word with NO spending record at all stays eligible, because that is untested
+  // rather than historically proven, and the 1,160-word release queue is how new winners are found.
+  it("no longer keeps a proven 2x+ winner, because history does not revive anything", () => {
     const c = cand({ keywordId: "001", lifetimeRoas: 2.4, lifetimeSpend: 900, lifetimeOrders: 60 });
-    expect(lifetimeOnlyPool([c])).toHaveLength(1);
+    expect(lifetimeOnlyPool([c])).toHaveLength(0);
   });
 
   it("keeps a word with no spending record at all", () => {

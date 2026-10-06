@@ -6,7 +6,7 @@ import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
-  isPermanentlyDead, settledWindow, ATTRIBUTION_DAYS,
+  isPermanentlyDead, settledWindow, ATTRIBUTION_DAYS, LIFETIME_EVIDENCE_REVIVES,
   bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, activeCeiling, nextGate,
   type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
@@ -364,6 +364,10 @@ export function reactivationCandidates(
     // longer than the window is stranded for good. Measured 2026-08-07: 106 Sponsored Products
     // words clear 1.92x lifetime on 2+ orders, holding $27,764 of lifetime sales, and route A finds
     // essentially none of them. That is the same mechanism that left 151 winners switched off.
+    // ROUTE B IS OFF. William 2026-10-06: "keeping keywords dead unless they convert now not
+    // historically". Every lifetime record here was earned at the old $19.95 price, and the 85
+    // words this route reopened on 1 October returned 0.42x. See LIFETIME_EVIDENCE_REVIVES.
+    if (!LIFETIME_EVIDENCE_REVIVES) continue;
     const lt = lifetimeByWord?.get(deadKey(k.keywordText, k.matchType));
     if (lt && lt.orders >= minOrders && lt.roas >= minRoas) {
       out.push({ keywordId: String(k.keywordId), keywordText: k.keywordText, matchType: k.matchType,
@@ -1569,6 +1573,8 @@ export interface SettledSweepResult {
   judged: number;
   paused: { text: string; matchType: string; keywordId: string; spend: number; sales: number; orders: number; retired: boolean }[];
   tombstoned: number;
+  /** Tombstoned words found ENABLED and switched back off. Should settle at 0. */
+  zombies?: number;
   historicallyDead?: { found: number; written: number; spend: number; sample: string[] };
   notes: string[];
   errors: string[];
@@ -1661,6 +1667,33 @@ export async function runSettledSweep(opts: { dryRun?: boolean; now?: Date | num
       );
     } catch (e) { out.errors.push("tombstone: " + (e instanceof Error ? e.message : String(e))); }
   }
+
+  // THE INVARIANT: a tombstoned word must never be ENABLED. William 2026-10-06: "we are no longer
+  // resetting monthly we are keeping keywords dead unless they convert now not historically".
+  //
+  // This is what replaces the monthly reset. The month-to-date counter still decides when a word is
+  // FIRST killed, but once tombstoned it can never be enabled again, by any path: not the 1st of
+  // the month, not a lifetime record, not a campaign being switched back on. That last one is not
+  // hypothetical — enabling the 3-Pack campaign on 2026-10-06 made a word retired four hours
+  // earlier serve at $2.50, because it sat ENABLED inside a PAUSED campaign and "off because the
+  // container is off" is not off.
+  //
+  // It also delivers the cumulative bar. retireHistoricallyDead() tombstones on CUMULATIVE settled
+  // spend, so a word that quietly took $3 a month for a year is caught even though it never once
+  // reached $4 in a single month. Measured 2026-10-06: 159 of the 196 non-converting words had
+  // never reached $4 in a month, holding $277.81 the monthly bar could not reach by construction.
+  try {
+    const dead = new Set((await db().execute("SELECT dead_key FROM kw_tombstone")).rows.map((x) => String(x.dead_key)));
+    const zombies = live.filter((k) => k.state === "ENABLED" && dead.has(deadKey(k.keywordText, k.matchType)));
+    out.zombies = zombies.length;
+    if (zombies.length) {
+      out.notes.push(`${zombies.length} tombstoned words were ENABLED and ${dryRun ? "would be" : "have been"} switched back off`);
+      if (!dryRun) {
+        const r = await ads(cfg, token, "/sp/keywords", "PUT", { keywords: zombies.map((k) => ({ keywordId: k.keywordId, state: "PAUSED" })) }, KW_CT);
+        if (!r.ok) out.errors.push(`zombies: ${r.status}`);
+      }
+    }
+  } catch (e) { out.errors.push("zombies: " + (e instanceof Error ? e.message : String(e))); }
 
   // Retire what our own archive already proves dead, including words that are ALREADY paused and
   // therefore invisible to the sweep above. Those are precisely the ones reactivation reopens on

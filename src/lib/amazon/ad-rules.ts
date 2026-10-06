@@ -441,16 +441,41 @@ export interface ReintroPlan {
  * lifetime record that FAILS the 2x bar is a known non-winner, not an untested one, so it waits for
  * the next run rather than being laundered into the untested tier.
  */
+/**
+ * DEAD STAYS DEAD. William 2026-10-06: "we are no longer resetting monthly we are keeping keywords
+ * dead unless they convert now not historically we have wasted too much money on ad spend not
+ * converting".
+ *
+ * Every lifetime record in this account was earned when the product sold for $19.95. It now sells
+ * for $9.49, so the same traffic returns 0.556 of the recorded figure and a word showing 2.00x on
+ * record is really 1.11x today, under the kill bar. Measured 2026-10-06: the 85 words reopened on
+ * 1 October through lifetime evidence went on to return 0.42x against an account running 0.67x.
+ * They were the worst money in the account, two months running.
+ *
+ * With this false, history can no longer reopen anything. A word comes back only by converting NOW:
+ * the in-month revival still reads month-to-date attribution, so a kill whose sale lands late is
+ * still reversed. What is gone is the claim that a word which earned at $19.95 deserves another $4
+ * at $9.49.
+ *
+ * UNTESTED WORDS ARE UNAFFECTED. A keyword with no spending record at all is not "historically
+ * proven", it is unproven, and the release queue of 1,160 such words is how new winners are still
+ * found. William the same day: "keep finding new keywords to add from conversions on broad search
+ * so we dont run out of keywords to spend".
+ */
+export const LIFETIME_EVIDENCE_REVIVES = false;
+
 export function lifetimeOnlyPool(
   candidates: ReintroCandidate[],
   minRoas = REINTRO_LIFETIME_ROAS_MIN,
   minOrders = REINTRO_LIFETIME_MIN_ORDERS,
 ): ReintroCandidate[] {
   return candidates.filter((c) => {
+    const untested = (c.lifetimeSpend ?? 0) === 0;   // never spent: unproven, not proven. Still eligible.
+    if (!LIFETIME_EVIDENCE_REVIVES) return untested;  // dead stays dead; only NOW counts
     const proven = (c.lifetimeRoas ?? null) !== null
       && (c.lifetimeRoas as number) >= minRoas
       && (c.lifetimeOrders ?? 0) >= minOrders;
-    return proven || (c.lifetimeSpend ?? 0) === 0;   // 2x+ winner, or no spending record at all
+    return proven || untested;                        // 2x+ winner, or no spending record at all
   });
 }
 

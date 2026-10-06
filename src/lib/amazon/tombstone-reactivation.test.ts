@@ -19,48 +19,50 @@ const paused = (keywordId: string, keywordText: string, matchType: string) =>
   ({ keywordId, keywordText, matchType, state: "PAUSED" });
 
 describe("the tombstone gates reactivation, not just reintroduction", () => {
-  it("route B does NOT reopen a tombstoned word, however good its lifetime record", () => {
+  // SUPERSEDED IN PART, 2026-10-06. William: "we are no longer resetting monthly we are keeping
+  // keywords dead unless they convert now not historically". LIFETIME_EVIDENCE_REVIVES is now
+  // false, so route B is off entirely and a lifetime record cannot reopen anything, tombstoned or
+  // not. The tombstone gate on route A still matters and is still pinned below.
+  it("route B is OFF, so no lifetime record reopens a word at all", () => {
     const kw = paused("1", "safety leash phone", "BROAD");
     const lifetime = new Map([[deadKey("safety leash phone", "BROAD"), { roas: 9.9, spend: 400, sales: 3960, orders: 40 }]]);
 
-    // without the tombstone this is exactly what reopened it three months running
-    expect(reactivationCandidates([kw], new Map(), lifetime)).toHaveLength(1);
+    // Before 2026-10-06 this returned 1 candidate, and that is how the same word was revived in
+    // three consecutive months. A 9.9x lifetime record earned at $19.95 now buys nothing.
+    expect(reactivationCandidates([kw], new Map(), lifetime)).toHaveLength(0);
 
     const dead = new Set([deadKey("safety leash phone", "BROAD")]);
     expect(reactivationCandidates([kw], new Map(), lifetime, { deadKeys: dead })).toHaveLength(0);
   });
 
-  it("route A does NOT reopen a tombstoned word either", () => {
+  it("route A does NOT reopen a tombstoned word", () => {
     const kw = paused("2", "iphone leash tether", "BROAD");
-    const perf = new Map([["2", { cost: 20, sales: 100 }]]);   // $20 at 0.20 ACOS, a clear route-A pass
+    const perf = new Map([["2", { cost: 20, sales: 100 }]]);   // $20 at 0.20 ACOS: a clear route-A pass
     expect(reactivationCandidates([kw], perf)).toHaveLength(1);
 
     const dead = new Set([deadKey("iphone leash tether", "BROAD")]);
     expect(reactivationCandidates([kw], perf, undefined, { deadKeys: dead })).toHaveLength(0);
   });
 
-  it("a word that is NOT tombstoned still reactivates normally", () => {
-    const kw = paused("3", "retractable phone tether", "EXACT");
-    const lifetime = new Map([[deadKey("retractable phone tether", "EXACT"), { roas: 5.0, spend: 100, sales: 500, orders: 9 }]]);
-    const dead = new Set([deadKey("something else entirely", "BROAD")]);
-    expect(reactivationCandidates([kw], new Map(), lifetime, { deadKeys: dead })).toHaveLength(1);
+  it("route A still works for a word that converted RECENTLY and is not tombstoned", () => {
+    // This is the only way back now: convert NOW, in the trailing window, not historically.
+    const kw = paused("3", "retractable keychain", "PHRASE");
+    const perf = new Map([["3", { cost: 10, sales: 40 }]]);
+    expect(reactivationCandidates([kw], perf, undefined, { deadKeys: new Set() })).toHaveLength(1);
   });
 
-  it("the tombstone is matched on word AND match type, so one match type dying does not kill the others", () => {
+  it("the gate is keyed on word AND match type, so one match type dying does not kill the others", () => {
     const broad = paused("4", "phone lanyard retractable", "BROAD");
     const exact = paused("5", "phone lanyard retractable", "EXACT");
-    const lifetime = new Map([
-      [deadKey("phone lanyard retractable", "BROAD"), { roas: 5, spend: 50, sales: 250, orders: 5 }],
-      [deadKey("phone lanyard retractable", "EXACT"), { roas: 5, spend: 50, sales: 250, orders: 5 }],
-    ]);
+    const perf = new Map([["4", { cost: 20, sales: 100 }], ["5", { cost: 20, sales: 100 }]]);
     const dead = new Set([deadKey("phone lanyard retractable", "EXACT")]);
-    const got = reactivationCandidates([broad, exact], new Map(), lifetime, { deadKeys: dead });
+    const got = reactivationCandidates([broad, exact], perf, undefined, { deadKeys: dead });
     expect(got.map((c) => c.matchType)).toEqual(["BROAD"]);
   });
 
-  it("an empty tombstone changes nothing", () => {
+  it("an empty tombstone does not resurrect route B either", () => {
     const kw = paused("6", "phone tether", "PHRASE");
     const lifetime = new Map([[deadKey("phone tether", "PHRASE"), { roas: 4, spend: 40, sales: 160, orders: 4 }]]);
-    expect(reactivationCandidates([kw], new Map(), lifetime, { deadKeys: new Set() })).toHaveLength(1);
+    expect(reactivationCandidates([kw], new Map(), lifetime, { deadKeys: new Set() })).toHaveLength(0);
   });
 });
