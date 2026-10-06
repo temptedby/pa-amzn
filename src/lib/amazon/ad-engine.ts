@@ -1,5 +1,6 @@
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { db } from "@/lib/db/client";
+import type { Client } from "@libsql/client";
 import { recordBidRun, type LedgerObservation } from "./bid-ledger";
 import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { getReport, type ReportSpec } from "./ads-reports";
@@ -589,9 +590,10 @@ async function recordKills(killed: AdEngineResult["killed"], month: string): Pro
  * William 2026-10-06: "remove all words that didnt convert last month and spent $4 to not
  * reactivate this month" and "dont reopen in nov".
  */
-async function recordTombstones(
+export async function recordTombstones(
   killed: AdEngineResult["killed"],
   mtd: Map<string, SinceChange>,
+  conn: Pick<Client, "execute"> = db(),
 ): Promise<number> {
   let n = 0;
   for (const k of killed) {
@@ -599,7 +601,7 @@ async function recordTombstones(
     const perf = mtd.get(String(k.keywordId));
     if (!perf) continue;                            // no evidence this run — silence is not a verdict
     if (!isPermanentlyDead({ spend: perf.spend, orders: perf.orders, sales: perf.sales })) continue;
-    const r = await db().execute({
+    const r = await conn.execute({
       sql: `INSERT INTO kw_tombstone (dead_key, word, match_type, reason, evidence, killed_at)
             VALUES (?,?,?,?,?,?) ON CONFLICT(dead_key) DO NOTHING`,
       args: [deadKey(k.text, k.matchType), k.text, k.matchType, "never_converted",
