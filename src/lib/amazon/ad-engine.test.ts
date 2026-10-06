@@ -290,12 +290,16 @@ describe("reactivationCandidates — lifetime route", () => {
   const lt = (roas: number, orders: number, spend = 100) =>
     new Map([["phone tether|EXACT", { roas, spend, sales: spend * roas, orders }]]);
 
-  it("brings back a word with NO recent spend at all, on its lifetime record alone", () => {
-    // 4.0x recorded = 2.22x in today's money, comfortably over the rescaled bar. Was 3.1x when the
-    // bar was 1.92x; the fixture moved with the bar, the behaviour under test did not.
-    const out = reactivationCandidates(paused(), new Map(), lt(4.0, 40));
-    expect(out).toHaveLength(1);
-    expect(out[0].via).toBe("lifetime");
+  // SUPERSEDED 2026-10-06. William: "we are no longer resetting monthly we are keeping keywords
+  // dead unless they convert now not historically we have wasted too much money on ad spend not
+  // converting". LIFETIME_EVIDENCE_REVIVES is false, so route B is closed entirely.
+  //
+  // The case for closing it, measured that day: the 85 words reopened on 1 October through this
+  // route went on to return 0.42x, against an account running 0.67x. They were the worst money in
+  // the account two months running, because every lifetime record was earned at $19.95.
+  it("no longer brings a word back on its lifetime record, however good", () => {
+    expect(reactivationCandidates(paused(), new Map(), lt(4.0, 40))).toHaveLength(0);
+    expect(reactivationCandidates(paused(), new Map(), lt(99.0, 500))).toHaveLength(0);
   });
 
   // William 2026-08-31: "reactivation bar should never turn on words that never converted only key
@@ -309,16 +313,21 @@ describe("reactivationCandidates — lifetime route", () => {
   // William 2026-08-31 chose the 2x to be read IN TODAY'S MONEY. Lifetime records were earned at
   // $19.95 and the product now sells for $9.49, so the bar on the recorded number is 2 / 0.556 =
   // 3.60x. A 2.00x record is only 1.11x today and would be killed again days after coming back.
-  it("holds the lifetime bar at 3.60x, the price-rescaled 2x", () => {
-    expect(reactivationCandidates(paused(), new Map(), lt(2.0, 40))).toHaveLength(0);
-    expect(reactivationCandidates(paused(), new Map(), lt(3.59, 40))).toHaveLength(0);
-    expect(reactivationCandidates(paused(), new Map(), lt(3.6, 40))).toHaveLength(1);
+  // The 3.60x price-rescaled bar is retained in the constant and still applies IF the route is ever
+  // reopened, but no lifetime figure passes while LIFETIME_EVIDENCE_REVIVES is false. Pinned at
+  // both ends so flipping the switch back cannot silently lower the bar as well.
+  it("no lifetime figure passes, at, below or far above the old 3.60x bar", () => {
+    for (const roas of [2.0, 3.59, 3.6, 10.0]) {
+      expect(reactivationCandidates(paused(), new Map(), lt(roas, 40))).toHaveLength(0);
+    }
   });
 
-  it("every word it re-enables clears the 1.5x kill bar once rescaled", () => {
-    const out = reactivationCandidates(paused(), new Map(), lt(3.6, 40));
+  it("the only way back is converting NOW: route A, on trailing-window evidence", () => {
+    const perf = new Map([["K1", { cost: 20, sales: 100 }]]);   // $20 at 0.20 ACOS, recent
+    const out = reactivationCandidates(paused(), perf, lt(4.0, 40));
     expect(out).toHaveLength(1);
-    expect((1 / out[0].acos) * PRICE_RESCALE).toBeGreaterThanOrEqual(1.5);
+    expect(out[0].via).toBe("window");
+    expect((1 / out[0].acos)).toBeGreaterThanOrEqual(1.5);
   });
 
   // Route A is the trailing-window path. It must refuse a never-converted word too, otherwise the
