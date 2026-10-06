@@ -13,6 +13,7 @@ const ITEMS=[
   {asin:'B07Y5GZP1T',label:'Single',price:9.49,cogs:0.62},
   {asin:'B0BLLJLSDP',label:'Pro',price:10.49,cogs:1.62},
   {asin:'B097MGPCPC',label:'2-Pack',price:13.49,cogs:1.24},
+  {asin:'B097MK5VZ4',label:'3-Pack',price:16.49,cogs:1.86},
 ];
 const fee=async(it)=>{
   const body={FeesEstimateRequest:{MarketplaceId:MKT,IsAmazonFulfilled:true,Identifier:it.asin,PriceToEstimateFees:{ListingPrice:{CurrencyCode:'USD',Amount:it.price}}}};
@@ -29,7 +30,7 @@ for(const it of ITEMS){
   const ref=details.ReferralFee??'?', fba=details.FBAFees??details.FulfillmentFees??'?';
   const contribution=it.price-it.cogs-total;
   const beAcos=contribution/it.price;
-  console.log(`${it.label.padEnd(8)} $${it.price}  $${it.cogs}   $${(+ref).toFixed(2)}    $${fba==='?'?'?':(+fba).toFixed(2)}   $${total.toFixed(2)}      $${contribution.toFixed(2)}        ${(beAcos*100).toFixed(0)}%`);
+  console.log(`${it.label.padEnd(8)} $${it.price}  $${it.cogs}   $${(+ref).toFixed(2)}    $${fba==='?'?'?':(+fba).toFixed(2)}   $${total.toFixed(2)}      $${contribution.toFixed(2)}        ${(beAcos*100).toFixed(0)}%            ${(1/beAcos).toFixed(2)}x`);
 }
 console.log('\ncontribution = price - COGS - (referral + FBA + other Amazon fees);  break-even ACOS = contribution / price');
 console.log('(storage/long-term fees not in per-unit estimate; add from monthly settlement for full accuracy.)');

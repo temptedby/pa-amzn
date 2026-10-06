@@ -329,13 +329,22 @@ export function reactivationCandidates(
   paused: { keywordId: string; keywordText: string; matchType: string; state: string }[],
   perfById: Map<string, { cost: number; sales: number }>,
   lifetimeByWord?: Map<string, { roas: number; spend: number; sales: number; orders: number }>,
-  opts: { minRoas?: number; minOrders?: number } = {},
+  opts: { minRoas?: number; minOrders?: number; deadKeys?: Set<string> } = {},
 ): ReactivationCandidate[] {
   const minRoas = opts.minRoas ?? REACTIVATE_MIN_ROAS;
   const minOrders = opts.minOrders ?? REACTIVATE_MIN_ORDERS;
+  const dead = opts.deadKeys ?? new Set<string>();
   const out: ReactivationCandidate[] = [];
   for (const k of paused) {
     if (k.state !== "PAUSED") continue;                         // never touch an already-ENABLED keyword
+
+    // TOMBSTONED — never resurrect, whatever the lifetime record says. selectReintroductions has
+    // honoured this since the tombstone was written; reactivation never did, and reactivation is
+    // the path that actually reopens words: the 2026-10-01 reset re-enabled 33 Sponsored Products
+    // words through here, which then spent $67.77 for 2 orders (0.42x). A word that spent the kill
+    // bar and never converted has an unbeaten route back through route B, because route B asks only
+    // for LIFETIME orders and those were earned at the old $19.95 price.
+    if (dead.has(deadKey(k.keywordText, k.matchType))) continue;
 
     // ROUTE A — recent recovery. Trailing window shows >= $4 spend at ACOS <= 50%.
     const p = perfById.get(String(k.keywordId));
@@ -1403,7 +1412,9 @@ export async function runMonthlyReactivation(opts: { dryRun?: boolean; profileId
     perfById.clear();
   }
 
-  const cands = reactivationCandidates(paused, perfById, lifetime);
+  const deadKeys = await deadKeySet();
+  out.notes.push(`${deadKeys.size} tombstoned words excluded from reactivation`);
+  const cands = reactivationCandidates(paused, perfById, lifetime, { deadKeys });
   for (const c of cands) out.reactivated.push({ text: c.keywordText, matchType: c.matchType, cost: c.cost, acos: c.acos, via: c.via });
 
   if (!dryRun && cands.length) {
