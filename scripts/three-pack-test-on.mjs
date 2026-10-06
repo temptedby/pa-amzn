@@ -27,7 +27,24 @@ const KW='application/vnd.spKeyword.v3+json', CA='application/vnd.spCampaign.v3+
 let kws=[],n;
 do{const k=await rq(`${A}/sp/keywords/list`,{method:'POST',headers:H(KW),body:JSON.stringify({maxResults:1000,includeExtendedDataFields:true,campaignIdFilter:{include:[CID]},...(n?{nextToken:n}:{})})});
   const j=JSON.parse(await k.text()); (j.keywords||[]).forEach(x=>kws.push(x)); n=j.nextToken;}while(n);
-const over=kws.filter(k=>k.state==='ENABLED'&&Number(k.bid)>CEILING);
+// Never switch a tombstoned word back on. The campaign's EXACT "phone tether retractable" was
+// retired on 2026-10-06 having spent the bar with no sale; enabling it would undo that.
+const { createClient } = await import('@libsql/client');
+const _db = createClient({ url: process.env.DATABASE_URL || process.env.TURSO_DATABASE_URL, authToken: process.env.DATABASE_AUTH_TOKEN || process.env.TURSO_AUTH_TOKEN });
+const _dead = new Set((await _db.execute('SELECT dead_key FROM kw_tombstone')).rows.map(r => String(r.dead_key)));
+const _dk = (t, m) => String(t).trim().toLowerCase().replace(/\s+/g, ' ') + '|' + String(m).trim().toUpperCase();
+console.log(`${_dead.size} tombstoned words on record; any of them here stays off.`);
+// SKIPPING a tombstoned keyword is not enough. These sit ENABLED inside a PAUSED campaign, so
+// enabling the campaign makes them serve. They must be PAUSED explicitly. Learned the hard way at
+// 2026-10-06T21:16Z: EXACT "phone tether retractable" went live at $2.50, over cap and ceiling.
+const _tomb = kws.filter(k => k.state === 'ENABLED' && _dead.has(_dk(k.keywordText, k.matchType)));
+for (const k of _tomb) console.log(`  PAUSE  $${Number(k.bid).toFixed(2)} ${k.matchType} "${k.keywordText}"  tombstoned, must not serve`);
+if (APPLY && _tomb.length) {
+  const _r = await rq(`${A}/sp/keywords`, { method: 'PUT', headers: H(KW), body: JSON.stringify({ keywords: _tomb.map(k => ({ keywordId: k.keywordId, state: 'PAUSED' })) }) });
+  const _t = await _r.text();
+  console.log(_r.ok ? `tombstoned keywords paused: ${JSON.parse(_t).keywords?.success?.length ?? 0}` : `PAUSE FAILED ${_r.status} ${_t.slice(0,200)}`);
+}
+const over=kws.filter(k=>k.state==='ENABLED'&&Number(k.bid)>CEILING&&!_dead.has(_dk(k.keywordText,k.matchType)));
 console.log(`3-Pack campaign ${CID}`);
 console.log(`  ${kws.length} keywords, ${kws.filter(k=>k.state==='ENABLED').length} enabled, ${over.length} above the $${CEILING} confirm ceiling`);
 for(const k of over) console.log(`    $${Number(k.bid).toFixed(2)} -> $${ENTRY.toFixed(2)}  ${k.matchType} "${k.keywordText}"`);
