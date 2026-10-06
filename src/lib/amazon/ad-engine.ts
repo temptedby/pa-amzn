@@ -5,6 +5,7 @@ import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-
 import { getReport, type ReportSpec } from "./ads-reports";
 import {
   decide, shouldKill, isValidKeywordText, shortenToValidKeyword, selectReintroductions, deadKey, isProtected,
+  isPermanentlyDead,
   bidWithMemory, BID_COOLDOWN_HOURS, BID_CONFIRM_CEILING, activeCeiling, nextGate,
   type BidChange, type SinceChange,
   ladderVerdict, BID_LADDER_MAX, BID_LADDER_STEP,
@@ -571,6 +572,45 @@ async function recordKills(killed: AdEngineResult["killed"], month: string): Pro
   }
 }
 
+/**
+ * Retire for good the words that cleared the kill bar and never once converted.
+ *
+ * `kw_tombstone` has existed in schema.sql since it was designed and `deadKeySet()` has read it on
+ * every reintroduction run. NOTHING EVER WROTE TO IT, so it was still empty on 2026-10-06 while 131
+ * words had spent $4 or more in September with zero orders between them, $609.87 in total. Amazon
+ * serves about 95 days of report history, so each of those reads as "never spent" by December and
+ * earns another $4 of rope. Measured: 33 of them spent $61.38 again in October for $0.00, and 8 of
+ * October's first 20 kills had already been killed in a previous month.
+ *
+ * isPermanentlyDead() is deliberately narrower than shouldKill(): $4 spent AND zero orders, no
+ * evidence it can ever convert. A word that DID convert, just badly, is not tombstoned, because
+ * attribution can still lift it.
+ *
+ * William 2026-10-06: "remove all words that didnt convert last month and spent $4 to not
+ * reactivate this month" and "dont reopen in nov".
+ */
+async function recordTombstones(
+  killed: AdEngineResult["killed"],
+  mtd: Map<string, SinceChange>,
+): Promise<number> {
+  let n = 0;
+  for (const k of killed) {
+    if (k.applied === false) continue;              // Amazon refused it; it is not off, so not dead
+    const perf = mtd.get(String(k.keywordId));
+    if (!perf) continue;                            // no evidence this run — silence is not a verdict
+    if (!isPermanentlyDead({ spend: perf.spend, orders: perf.orders, sales: perf.sales })) continue;
+    const r = await db().execute({
+      sql: `INSERT INTO kw_tombstone (dead_key, word, match_type, reason, evidence, killed_at)
+            VALUES (?,?,?,?,?,?) ON CONFLICT(dead_key) DO NOTHING`,
+      args: [deadKey(k.text, k.matchType), k.text, k.matchType, "never_converted",
+             JSON.stringify({ spend: perf.spend, orders: perf.orders, month: new Date().toISOString().slice(0, 7) }),
+             new Date().toISOString()],
+    });
+    if (r.rowsAffected) n++;
+  }
+  return n;
+}
+
 /** This month's kills that have not been revived yet. */
 async function openKills(month: string): Promise<KillLedgerRow[]> {
   const r = await db().execute({
@@ -1003,6 +1043,11 @@ export async function runAdEngine(opts: { dryRun?: boolean; profileId?: string; 
     try { await persistLog(out, applied); } catch (e) { out.errors.push("log: " + (e instanceof Error ? e.message : String(e))); }
     // Ledger the kills so the next run can reconsider them once attribution catches up.
     try { await ensureKillLedger(); await recordKills(out.killed, month); } catch (e) { out.errors.push("kill ledger: " + (e instanceof Error ? e.message : String(e))); }
+    // Tombstone the ones that burned the bar and NEVER converted, so next month does not pay to
+    // relearn the same lesson. deadKeySet() has read this table since it was written; until now
+    // nothing wrote to it.
+    try { const n = await recordTombstones(out.killed, nowMtd); if (n) out.notes.push(`tombstoned ${n} words that spent the bar and never converted`); }
+    catch (e) { out.errors.push("tombstone: " + (e instanceof Error ? e.message : String(e))); }
   }
 
   out.ok = true; out.durationMs = Date.now() - start;
