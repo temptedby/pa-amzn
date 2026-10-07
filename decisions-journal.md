@@ -4102,3 +4102,279 @@ every time the correction changes what he would do. Here it would have reversed 
 
 **Status.** Reported. No bid change made; the lever identified instead is moving spend toward ASIN
 targeting, which is his to decide.
+
+## 2026-10-07 — BACOS becomes the governing metric, and it is the one number that settles same-day
+
+**Context.** William set a new goal: "Need to have a goal of BACOS which is marketing spend and
+overal sales not to be more than 40% please". Measured against it the account is at **81.1%** on
+10-01..10-07 ($307.48 of ad spend against $379.22 of booked revenue) and **79.3%** on 09-30..10-06.
+Two independent windows, roughly double the target. Nothing in the account enforces any spend
+ceiling: the $4 bar is a per-keyword receipt, and today's compliance audit found 54% of October's
+spend sitting below it where no rule can reach.
+
+**Options.** (1) Report BACOS and leave spend alone. (2) A one-off manual cut to the $21.67/day the
+target permits. (3) A daily governor that throttles when BACOS is over target. (4) Chase ROAS
+instead and let BACOS follow.
+
+**Decision.** Option 3, and William extended it himself to be two-way: "i like throttle idea if
+things are going well then press the spend". Built as `src/lib/amazon/bacos.ts`: throttle 20% down
+over 40%, press 10% up under 32%, hold in between. The lever is **campaign daily budget**, not bids.
+
+**Reasoning.** Three things decided this. First, BACOS is the only efficiency number this account can
+act on in the present tense, because **both of its inputs settle the same day** -- ad spend
+immediately, order revenue immediately. Only ad-ATTRIBUTED sales need the 14-day window, which is
+why ACOS and ROAS cannot steer today and nearly cost us 177 keywords on 10-06. Second, bids cannot
+deliver it: the kill rule reaches 46% of spend and 100% of Brands, Display and Canada are under the
+$4 bar by construction. Only a budget throttles the whole account. Third, the goal has a clean twin
+-- **BACOS 40% is satisfied at any spend once ad ROAS reaches 2.50x**, since 1/2.5 = 0.40 -- so the
+ceiling loosens automatically as efficiency improves and the two levers do not fight.
+
+**Industry source.** Target-ACOS / target-ROAS budget governors are the standard portfolio control
+in both Amazon Ads (portfolio budget caps, rule-based bidding) and Google Ads (tROAS). The dead band
+between 32% and 40% is standard anti-hunting practice for any closed-loop controller, and this
+codebase has its own worked example of omitting one: 31 "the raise to $0.85 made it worse" reversals
+in 36 hours.
+
+**Trade-offs accepted.** 40% is **a hair past break-even, not profitable**: contribution is 37.4% of
+price before refunds and 33.7% after, so 40% still loses about $2.59 per $100 of revenue. I said so
+rather than let the target read as safe. It is still a 94% cut in the bleed from 81%. This also
+**supersedes William's own 2026-08-28 decision** to leave daily budgets alone because hourly
+enforcement would be the brake; hourly enforcement never became one. The reversal is written into
+the module header rather than slipped through. `ad_day_observation` holds Sponsored Products only,
+so Brands and Display spend must be passed in by hand; the script refuses to run silently without it
+because treating the missing 6% as zero would flatter BACOS and invite more spend.
+
+**Status.** Built, 27 tests, suite at 564, typecheck clean, dry-run against live data. **Not wired to
+any cron and not merged.** Awaiting William.
+
+## 2026-10-07 — The dry run found three flaws that reasoning had not
+
+**Context.** The BACOS governor was written, typechecked and passing 21 unit tests. Then it was run
+read-only against the live account.
+
+**Options.** (1) Trust the tests and wire it up. (2) Dry-run first against real campaigns.
+
+**Decision.** Dry-run first. It immediately proposed **raising the 3-Pack test campaign from $2.00 to
+$5.00 inside a run whose action was THROTTLE**, and authorised $82.01/day against a $39.07/day plan.
+
+**Reasoning.** Both faults came from the same place: the per-campaign floor was being applied as a
+pro-rata *share*, so for an idle campaign the floor acted as a raise, and nine idle campaigns each
+taking $5 added to more than twice the planned spend. Neither showed up in unit tests because the
+fixtures did not contain a campaign whose budget was already **below** the floor. The real account
+did, because the 3-Pack sits at $2/day deliberately. Three rules now encode it: only campaigns that
+actually spent get repriced; a dormant campaign is pulled **down** to a $5 cap and never up to it;
+and a throttle may never raise a budget while a press may never lower one. The spender floor also
+dropped from $5 to $1, Amazon's real minimum, because $5 across five campaigns whose combined
+pro-rata share was $2.05 authorised twelve times the plan.
+
+**Industry source.** "Never let a clamp change the sign of an action" is the standard invariant for
+any rate limiter or governor. Separating a floor-for-active from a cap-for-dormant is how budget
+pacing systems avoid reviving dead line items.
+
+**Trade-offs accepted.** My first fix for the dormant case -- capping at the planned daily spend --
+was **worse** than the bug, leaving a dormant $100/day campaign at $39.07 where a flat $5 cap puts
+it at $5. I had to be shown that by the numbers too. Two tests written an hour earlier encoded the
+superseded rule; they were rewritten with dates and reasons rather than deleted.
+
+**Status.** Fixed, 27 tests, re-run live: 10 moves, every one downward, $747.00/day to $59.01/day,
+and the 3-Pack untouched at $2.
+
+## 2026-10-07 — A total built on a source that did not answer is worse than no total
+
+**Context.** `tacos.mjs` exists to measure exactly the metric William had just made the goal. Asked
+for it, it returned: "ad spend $95.65, total sales $0.00, TACOS Infinity%, organic $-156.86".
+
+**Options.** (1) Read the number and move on. (2) Work around it with a bespoke query. (3) Fix the
+script.
+
+**Decision.** Option 3, and specifically make a failed source **fatal** to the output rather than
+invisible in it. The script now exits 2 and prints UNREAD.
+
+**Reasoning.** The script had two faults and only one of them was the window. Its default range ran
+08-01 to yesterday, **67 days**, past the 31-day Ads cap and the 30-day all-orders cap, so Sponsored
+Products, Display and orders all came back empty while Brands survived because it is fetched one day
+at a time. That is why $95.65 looked plausible: it was Brands alone, when October's Products spend
+was $288.85. The second and worse fault was that `v3()` logged the failure to stderr and returned an
+empty array, so a confident month total got printed from no data. The window was a bug; printing a
+total anyway was the defect. Both sides are now chunked under their caps and the "Date range
+exceeded" body that arrives with a DONE status is caught by name.
+
+**Industry source.** Fail-closed on missing inputs. This repo's own standing rule says it better:
+"not found is a violation, never a pass" -- "we could not look" and "we looked and it was fine" are
+different answers and only one of them is reassuring.
+
+**Trade-offs accepted.** The fix makes the script *less* likely to produce a number, and on its first
+run after fixing it produced none, because the Products and Display reports timed out in the queue.
+That is the correct behaviour and it is also why the fast path for BACOS is now the governor's
+preview, which reads our own archive in 4 seconds instead of blocking on a queue that took 1,800
+seconds for one Display report today. `business-pnl.mjs` still carries the same 58-day fault and is
+logged as open.
+
+**Status.** Fixed and committed. Proved itself by failing correctly.
+
+## 2026-10-07 — The kill rule applied across all three ad products, judged only on settled spend
+
+**Context.** William: "aything over $4 spend that has less than 1.5x roas should be turned off
+please". `rule-compliance.mjs` labels the deployed bar as 1.0x, which would have made this a code
+change.
+
+**Options.** (1) Trust the label and change the constant. (2) Read the deployed code. (3) Apply the
+rule month-to-date, as the hourly engine does. (4) Apply it on settled spend only.
+
+**Decision.** Read the code: `KILL_MIN_ROAS = 1.5` **is** deployed and `shouldKill` reads it
+correctly, so the label is a stale comment and no code change was needed. Then applied it on
+**settled** data (on or before 2026-09-23) and **per keywordId, never per word**.
+
+**Reasoning.** Settled, because William's own instruction the day before was "mind the attribution of
+14 days", and judging inside the window is what nearly killed 177 keywords holding $517.84. Per
+keywordId, because `cell phone lanyard tab` is 0.00x on $8.52 as a PHRASE and 2.21x on $4.29 as an
+EXACT; aggregating by word would have killed the good one. Of **274** keywords with $4+ of settled
+spend, 12 were enabled and passing, 236 were already off, and **7** were enabled and failing. Brands
+came back clean on a complete 31 of 31 days (one entity above $4, returning 2.60x). Display came back
+clean at $14.83 with nothing above $4.
+
+**Industry source.** Judge on a closed attribution window, which is Amazon's own guidance for any
+14-day-attributed metric, and the reason their console defaults to lagged date ranges.
+
+**Trade-offs accepted.** The answer is small -- 7 keywords and $49.34 -- because 10-06 already did
+the heavy lifting. More importantly I **nearly got the number wrong**: a first scan said 3 keywords
+where an earlier pass said 7, because `HAVING spend>=4` makes SQLite bind the bare name to the raw
+column rather than the alias, so it tested single days instead of sums. With `HAVING SUM(spend)>=4`
+both methods agreed. Two methods disagreeing is the signal; the fix was not to prefer the newer one.
+Display remains a structural hole: all 28 targets have zero orders and not one reaches $4, so no
+rule can touch any of it.
+
+**Status.** 7 paused, verified 7/7 on a fresh read. Brands and Display complete and clean.
+
+## 2026-10-07 — No exemption for a good-looking duplicate
+
+**Context.** 61 tombstoned keywords were still ENABLED and able to spend, several bidding $0.83. One
+of them returns **5.33x on $2.53**: the same word and match type as a copy spending $9.27 at 1.02x,
+under a different keywordId. Tombstones are keyed on word plus match type, so killing the bad copy
+marks the good copy dead too.
+
+**Options.** (1) Exempt a tombstoned keyword that is itself returning 1.5x or better. (2) Key
+tombstones on keywordId instead of word. (3) Enforce the tombstone as written.
+
+**Decision.** Asked William directly. He said **"no exempt of the duplicate"**. All 57 remaining
+zombies switched off, including the 5.33x one.
+
+**Reasoning.** It is consistent with the rule he set the day before -- "we are no longer resetting
+monthly we are keeping keywords dead unless they convert now not historically". 5.33x on settled data
+*is* history, and history no longer revives a word; only converting now does. Keying on keywordId
+would also defeat the purpose, because 25% of this account is duplicates and a word would survive as
+long as any one of its copies looked acceptable.
+
+**Industry source.** None applicable; this is the owner's risk preference on a small-sample
+observation, and one order at 5.33x is an anecdote either way.
+
+**Trade-offs accepted.** We are switching off a keyword that returned $13.49 on $2.53. If a
+tombstoned word genuinely converts again it now has no route back, which is the explicit point of
+dead-stays-dead. The underlying cause is also diagnosed and NOT fixed: in `ad-engine.ts` the zombie
+pass (1688) runs **before** the retire pass (1702), so everything the retire pass tombstones stays
+enabled until the next sweep, and both sit below the `if (!ready)` return at 1623 so neither runs
+when the settled report is uncollected -- though pausing a tombstoned word needs no report at all.
+
+**Status.** 57 paused, verified 57/57. ENABLED 2090 -> 2026 across both of today's actions.
+
+## 2026-10-07 — We are starving the harvest, and it is one line
+
+**Context.** William asked whether we are "adding new keywords as well". The engine added **24**
+keyword rows in 30 days against **164** kills. Adds come in EXACT+PHRASE pairs, so that is **12
+distinct words a month**, while we remove words nearly seven times faster.
+
+**Options.** (1) Add keywords by hand. (2) Lower the harvest return bar below 2x. (3) Remove the
+broad-only discovery gate. (4) Accept the shrinkage, since the business is winding down.
+
+**Decision.** Option 3, which is not a new decision at all: William's instruction on **2026-08-18**
+was "exact and phrase for search words converting", and PR #8 implements it. It has been open 50
+days. Flagged as my delivery backlog rather than proposed as a change.
+
+**Reasoning.** `ad-engine.ts:286` still reads `discoveryMatchTypes ?? ["BROAD"]`, so only terms
+surfaced by a broad keyword can be harvested. Measured on the live 30-day search-term report: of 29
+terms that converted at 2x or better, the gate **allows 10 and blocks 19**, with $250.27 of sales
+behind the blocked ones. It would add 21 keyword rows against the current gate's 4. And harvest is
+not a marginal source -- every top earner in the account came from it, including `retractable phone
+tether` at 7 orders and `phone tether` at 6.
+
+**Industry source.** Search-term harvesting from any converting query is the standard Amazon
+structure; restricting promotion to broad-discovered terms is a non-standard narrowing that William
+himself had already retracted.
+
+**Trade-offs accepted.** The qualifying terms are almost all a **single order on a single click**,
+and I said so rather than present 24.1x as a 24x keyword after over-reading a 6.71x figure the day
+before. The defensible claim is narrower: they converted on their first or second click at $0.56 to
+$5.05, which is the only early signal this account has, while our spend sits in words running under
+1.3x. Also unresolved and larger: at $1.08 a click against $0.25 affordable, adding cheap converters
+helps the mix but does not by itself make the account profitable.
+
+**Status.** Diagnosed with numbers. PR #8 still unmerged, awaiting William.
+
+## 2026-10-07 — Brands has no memory, and the watchdog's 406 is one wrong header
+
+**Context.** Two findings from the morning readings. Sponsored Brands made **203 rebids in 36 hours,
+100% of them downward**, two cents each, with five keywords moving 29 to 33 times apiece from $0.81
+down to $0.11-$0.17. Separately, the watchdog has been alerting hourly for 40 days about a 406.
+
+**Options.** (1) Add a cooldown to `sb-engine.ts` directly. (2) Thread the cooldown through the
+shared `planBids` so Brands and Display both inherit it. (3) Leave it; Brands spends little.
+
+**Decision.** Option 2, which is what **PR #25** already does. It also fixes the 406 in the same
+change. Verified it still applies: `git merge-tree` reports **no conflicts** on today's main despite
+the branch being 40 days old.
+
+**Reasoning.** `sb-engine.ts:223` calls `planBids` raw, reads `kw_bid_history` zero times, and has no
+cooldown, so every hourly run shaves another two cents off every Brands keyword. Search has
+`BID_COOLDOWN_HOURS = 6` and Display has 24; Brands has nothing. The live consequence is measurable:
+670 enabled Brands keywords, 11 already at the $0.10 floor and 21 at or under $0.15. The 406 was
+confirmed by running the identical call two ways: `engine-watch.ts:279` sends
+`Accept: application/json` and gets 406, while `application/vnd.sbkeyword.v3+json` returns **200 and
+670 keywords**.
+
+**Industry source.** A control loop needs a settling time longer than its measurement interval or it
+chases noise. The vendor media type requirement is Amazon's documented behaviour for `/sb/keywords`,
+already recorded in this repo's own `sb-v2.ts`.
+
+**Trade-offs accepted.** Several of the "made it worse" reversals attribute impression swings to a
+two-cent bid change -- "impressions fell 210 -> 102" almost certainly is not causal -- so part of
+what the cooldown fixes is the engine treating noise as signal. Three Brands bids also sit above the
+$2.50 cap at $3.50/$3.30/$3.00 on core head terms, untouched because they have no Brands report row;
+that is logged and not fixed.
+
+**Status.** Diagnosed and confirmed live. PR #25 unmerged, awaiting William.
+
+## 2026-10-07 — Category targeting is dead in this account, and our own category has never been used
+
+**Context.** William asked for "more competitors for different uses like keychain" and for "products
+the clip can atatch to - anything with a hole or loop to attach 170 grams to we can compliment".
+
+**Options.** (1) Guess a list of complementary products. (2) Use Amazon's product recommendations for
+both jobs. (3) Use recommendations for substitutes and the category tree for complements.
+
+**Decision.** Option 3, because they are different problems. Recommendations are built from
+"frequently viewed together" and "top converting targets", which surfaces rivals but will never
+surface a backpack, since nobody cross-shops a tether with luggage.
+
+**Reasoning.** Pulling both revealed a larger gap than the question. Of 835 targeting clauses, **819
+are single-ASIN**; all 4 category clauses are paused or archived and all 4 point at the same
+category, `Cell Phone Holsters`, which is the wrong browse node for us. `21209103011 Cell Phone
+Lanyards & Wrist Straps`, the category Amazon's own API recommends for our ASINs, has **never been
+targeted**. Amazon's automatic accessory targeting -- mechanically William's complement idea -- is
+already enabled at $0.18-$0.68 and has never been measured. On substitutes, **91 of 100 recommended
+ASINs are untargeted**, including the exact crossovers he named: a retractable keychain, a
+remote-control tether, and the anti-theft bag brands Travelon and Baggallini which outrank every
+tether on the list.
+
+**Industry source.** Amazon's three product-targeting tiers (specific ASIN, category, and
+relational accessory/substitute) are designed to be used together; running only the narrowest tier
+is the non-standard choice here.
+
+**Trade-offs accepted.** **Category targeting is unproven for us.** ASIN targeting converts at ~10%
+for $0.56 against keywords at 4% and $1.05, but the only category we ever ran bought 3,833
+impressions for $1.56 with 3 clicks and no orders -- cheap reach, 0.08% click rate, and in the wrong
+node. One category spans thousands of products, so a bid safe on one ASIN can spend fast across a
+node. Recommended starting with **three categories, not nineteen**. My keyword scan over the 35,686
+targetable nodes also returned real noise ("White Collar Crime True Accounts"), so the delivered
+list is hand-curated and said to be.
+
+**Status.** Research delivered. No targets created. Awaiting William on the three-category test.
