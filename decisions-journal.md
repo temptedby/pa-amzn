@@ -4378,3 +4378,218 @@ targetable nodes also returned real noise ("White Collar Crime True Accounts"), 
 list is hand-curated and said to be.
 
 **Status.** Research delivered. No targets created. Awaiting William on the three-category test.
+
+## 2026-10-08 — The problem was never the bid rules, it was the price
+
+**Context.** Six weeks of rule changes have moved BACOS from roughly 80% to roughly 80%. October to
+the 8th: $354.19 of ad spend against $409.96 of revenue, 86.4% BACOS against William's 40% target.
+He asked for six-step research before anything else was built.
+
+**Options.** (a) Keep tuning the bid ladder. (b) Adopt the industry's 15-25 click kill threshold.
+(c) Attack order value. (d) Stop advertising and let organic clear the stock.
+
+**Decision.** (c), and only after proving (a) cannot work.
+
+**Reasoning.** Every source converges on `Max CPC = Target ACOS x Price x CVR`. At our 37.4% margin
+and $9.49 price, even a best-in-class 15.2% conversion rate affords **$0.54** a click against a
+market rate of $1.18. Inverted: to break even at the $0.96 we pay, each unit must contribute
+**$10.56**; it contributes $3.55. Meanwhile our CTR (0.69%) is at the top of the normal 0.3-0.7%
+band and our CPC ($0.96) is **below** the $1.18 average. We are not running the ads badly. We are
+running average ads on a product that cannot carry average costs.
+
+**Industry source.** Clickstera, AdLabs and Canopy Management all give the same max-CPC formula with
+break-even ACOS equal to contribution margin. Autron and AdBadger 2026 benchmarks: typical account
+32% ACOS, $1.18 CPC, 0.59% CTR, 11.5% CVR; Sponsored Products CVR 10-18%. The WSJ via Seller Central
+forums on Amazon's internal **"CRaP"** label, Can't Realize a Profit, applied to items at $15 or
+less.
+
+**Trade-offs.** Accepting that no bid rule can fix this means the two months of rule work bought
+diagnosis rather than margin. Worth saying plainly rather than continuing.
+
+**Status.** Research document at `confabulator/research/2026-10-08-ppc-for-a-low-priced-item.md`.
+Acted on the same day: prices up and ads moved to the 3-Pack.
+
+## 2026-10-08 — The kill threshold is clicks, and we cannot afford the right one
+
+**Context.** `KILL_SPEND = 4` with `KILL_MIN_ROAS = 1.5`. At our $0.96 CPC that is **4.2 clicks**.
+
+**Options.** (a) Adopt the 20-click standard. (b) Keep $4. (c) Lower CPC first, then adopt it.
+
+**Decision.** (c). Hold the 20-click rule until CPC falls.
+
+**Reasoning.** The published threshold is 15-25 clicks with no conversion, and *"below that
+threshold you're making decisions based on statistical noise"*. Our bar sits squarely in the noise,
+which our own record already found empirically. But 20 clicks x $0.96 is **$19.20 to learn one
+fact**, which is 5.4 units of contribution. The standard assumes you can afford to buy significance.
+At $9.49 we cannot. At a $0.32 CPC, 20 clicks costs $5.00 and it becomes usable.
+
+**Industry source.** Jarvio and keywords.am both give 20 clicks as the negate threshold, 15
+aggressive, 25 conservative.
+
+**Trade-offs.** We keep knowingly false-killing winners for now. That is the cheaper error at this
+click price.
+
+**Status.** Decided and documented. **This is the dependency we had backwards for two months: CPC
+first, then the rule.**
+
+## 2026-10-08 — A $1 price rise would have earned us less
+
+**Context.** William: "Let's raise the single ticket by a dollar", $9.49 to $10.49.
+
+**Options.** (a) $10.49 as asked. (b) $9.99. (c) $11.49 or above.
+
+**Decision.** (b) $9.99, and said why before acting.
+
+**Reasoning.** Live SP-API fee estimates found a hard cliff at **exactly $10.00**: Amazon's low-price
+FBA rate ends there and the fulfilment fee jumps **$0.92**. Net to us: $9.49 -> $5.55,
+$9.99 -> $5.97, $10.00 -> $5.06, **$10.49 -> $5.48**. His figure would have raised the price and cut
+our take by 7 cents. Every price between $10.00 and about $11.07 is worse than charging $9.99. The
+2-Pack was already above the cliff, so $13.49 -> $14.49 keeps the whole dollar less referral:
+$8.03 -> $8.88.
+
+**Industry source.** Amazon's own Product Fees API at the proposed price, which is the only
+authority that matters here. Reading `ReferralFee` alone would have missed it entirely.
+
+**Trade-offs.** Fifty cents instead of a dollar, so a smaller optical gap between the Single and the
+3-Pack. Worth it to not go backwards.
+
+**Status.** LIVE and verified: Single $9.99, 2-Pack $14.49. Noted that `PATCH 200 ACCEPTED` is
+queued, not applied; the real change landed about 7 minutes later.
+
+## 2026-10-08 — Every ad moved to the 3-Pack, and the data said it was safe
+
+**Context.** William, repeatedly: "all our ads to start going to the three-pack instead of the
+single-pack. Just redirect it. They can still access the single-pack on the page." I had objected
+that this removes advertising from 105 of our 192 items. He reaffirmed, so it is his call.
+
+**Options.** (a) Build new 3-Pack campaigns. (b) Pause the Single inside the existing ad groups.
+(c) Leave it.
+
+**Decision.** (b).
+
+**Reasoning.** Three measurements. First, the 3-Pack ads added on 09-30 took **151 impressions and
+zero clicks in eight days** while the Single took 54,140, because they sat in the Single's own ad
+groups and Amazon serves one ad per group and prefers the incumbent. So (a) would mean starting from
+zero CTR history, and the entire 3-Pack holding is 26 packs worth about $116 of contribution, less
+than the learning would cost. Second, pausing the Single **inside the same ad group** hands the
+keyword history to the 3-Pack. Third, and decisively, **44.7% of our ad sales over 30 days were for
+a different ASIN than the one advertised** ($330.25 of $738.32), including a Single ad group whose
+only order was a $16.49 3-Pack. William's premise was right and now measured: the click keeps its
+credit whichever variation the shopper buys.
+
+**Industry source.** *"A common waste is advertising every child in the family on the same broad head
+term, all converting at wildly different rates, all charged to one budget. This pattern accounts for
+most of the loss in variation accounts"*, and *"concentrate rather than spread"* (zonhack,
+scaleinsights). Against it: a multipack on single-intent keywords is a relevance mismatch and Amazon
+demotes poor converters, with bundle-intent keywords the documented mitigation.
+
+**Trade-offs.** Affordable CPC rises from $0.32 to about $0.41, so this narrows the gap to $0.96 by
+a third and does not close it. Order count will fall by design. Only 26 3-Packs in stock.
+
+**Status.** LIVE, read back from Amazon: 19 live ad groups, **0 dark, 24 3-Pack ads enabled, 0
+Single ads serving.** A one-week test. Judge on impressions and revenue per click, baseline $0.82
+revenue against $1.03 cost; **not** on order count.
+
+## 2026-10-08 — My script paused 19 ads it had failed to replace
+
+**Context.** `redirect-ads-to-3pack.mjs` ran two passes: create the missing 3-Pack ads, then pause
+the Single ads.
+
+**Options.** (a) Report it and move on. (b) Repair, then fix the script. (c) Revert everything.
+
+**Decision.** (b).
+
+**Reasoning.** Pass 1 failed with **207 `missingValueError`, "merchantSku is empty"**: a seller
+account must create a product ad by **`sku`, not `asin`**. Pass 2 was not gated on pass 1, so it
+paused all 19 Single ads anyway and left **8 live ad groups with no enabled ad**, dark for about 12
+minutes including a $250/day campaign. Repair needed two different mechanisms: creating by SKU fixed
+5, and the last 3 already held a **paused** 3-Pack ad so the create was a duplicate and they needed
+`PUT state=ENABLED` instead. Reverting would have thrown away a change William had explicitly asked
+for because of my own bug.
+
+**Industry source.** None; this is ordinary engineering discipline. Any two-pass script where pass 2
+removes what pass 1 replaces must abort unless pass 1 fully succeeded.
+
+**Trade-offs.** 12 minutes of lost impressions, accepted, and reported rather than buried.
+
+**Status.** Repaired and verified clean. Script patched on both counts: creates by SKU, and pass 2
+exits 2 if `created < needed`. A second lesson recorded: a read-back **8 seconds** after a create
+reported 3 ad groups dark when 5 creates had actually succeeded, because Amazon had not indexed them
+yet.
+
+## 2026-10-08 — PR #45 switched the Brands engine off, silently, reporting ok
+
+**Context.** Brands rebid 252 times on 10-01 and 95 on 10-06, then **zero on 10-07 and 10-08** while
+Search and Display kept running.
+
+**Options.** (a) Blame the flaky SB report. (b) Read the engine.
+
+**Decision.** (b), after publishing two wrong diagnoses from (a).
+
+**Reasoning.** `sb-engine.ts:121` returns out of the **whole engine** when
+`LIFETIME_EVIDENCE_REVIVES` is false, which it is (`ad-rules.ts:465`). So every Brands run exits
+before ingest, before bids, and before the $4 / 1.5x kill pass, and sets `ok: true` so nothing
+alarms. Introduced by **PR #45, merged 2026-10-06, "1.5x in every ad product, including the one
+place still on its own number"** -- the change meant to bring Brands under the kill bar is the
+change that stopped Brands being managed. `ad-engine.ts:370` handles the same flag correctly with
+`continue`; `sd-engine.ts` never reads it.
+
+**Industry source.** None needed; our own code and our own log timestamps.
+
+**Trade-offs.** Brands is $15.19 of October, about 4%, so the money is small. What it cost is the
+thing William asked for twice.
+
+**Status.** Diagnosed, **NOT fixed**. The fix is to scope the guard to sb-engine's reactivation
+routine rather than the engine. Recorded with the two wrong diagnoses I published first: "nothing to
+rebid because Brands spent $0" (it spent $2.12 across those days) and "the keyword report is blind
+where the campaign report sees money" (both returned zero rows in the same run; SB reports are
+simply flaky and the engine does not retry).
+
+## 2026-10-08 — The newest day's SPEND is wrong, and it fooled me twice
+
+**Context.** I told William spend was "genuinely falling", quoting 10-07 at $26.95. The live report
+says **$47.21**.
+
+**Options.** (a) Treat it as a one-off. (b) Find the mechanism and change how we read the table.
+
+**Decision.** (b).
+
+**Reasoning.** A trading day's **spend**, not only its sales, keeps rising for about a day after the
+day closes. Measured on one day read twice in one morning: 10-07 showed $26.95 from report-warm and
+**$47.21** from a live pull hours later. `ad_day_observation.observed_on` is a **date with no hour**,
+so `MAX(observed_on)` cannot distinguish an early read from a late one, and taking "the latest
+observation" still understates the newest day. The reliable test is already in the data: **a day is
+final when two consecutive observations agree** (10-06 read $38.42 on both the 7th and the 8th).
+
+**Industry source.** None; our own archive carries the proof.
+
+**Trade-offs.** Judging only settled days means the freshest signal is two days old. Better than a
+confident wrong number, which this has now produced twice in two days in opposite directions.
+
+**Status.** Mechanism identified and saved. **This is a live defect in the BACOS governor built
+2026-10-07**, whose window ends at "yesterday, the last full day" -- the one day guaranteed to be
+wrong. It must be fixed before the governor is wired to anything.
+
+## 2026-10-08 — Account health has been reading Canada for three days
+
+**Context.** `sc-account-status.mjs` produced no usable output on 10-06 and 10-07, and on 10-08
+returned a page showing "Securisee / Canada / Account Health / Healthy" with three of four deep
+links returning Amazon's "Not found" page.
+
+**Options.** (a) Report "Healthy". (b) Report UNREAD and find the cause.
+
+**Decision.** (b).
+
+**Reasoning.** The script's own guard prints `WARNING: NOT on United States. Every US page below
+will 404 and MUST NOT be read as clean.` The switcher navigates to `/account-switcher`, the country
+list never renders, so the session stays on the Canada dashboard. The "Healthy" was **Canada's**
+verdict. A separate self-inflicted problem: I piped the run through `tail -40`, which discarded that
+warning line, so on the first pass I saw only the page body and not the verdict.
+
+**Industry source.** None; the script's own comment records losing three days to this same trap in
+August.
+
+**Trade-offs.** We go without a US account-health reading rather than publish a reassuring wrong one.
+
+**Status.** **UNREAD, day three**, cause now identified as our own broken selector rather than an
+Amazon or account problem. Fix is mine and not yet done.
