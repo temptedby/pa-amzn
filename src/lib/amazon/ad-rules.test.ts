@@ -8,6 +8,7 @@ import {
   LADDER_GATES, nextGate, activeCeiling,
   isPermanentlyDead, deadKey, shouldRetirePermanently, isNextMonth, type MonthPerf,
   inCooldown, searchStep, bidWithMemory, daysSince, BID_COOLDOWN_HOURS, BID_FLOOR, BID_CAP, BID_CONFIRM_CEILING, TARGET_ROAS,
+  NO_CLICK_MIN_IMPRESSIONS,
   type BidChange, type SinceChange,
   type ReintroCandidate, type ReintroState,
   lifetimeOnlyPool, SD_BID_FLOOR, killSpendFor, KILL_MIN_ROAS } from "./ad-rules";
@@ -640,6 +641,53 @@ describe("searchStep — find the cheapest bid that still works (William 2026-08
     const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 4000 });
     expect(v.bid).toBe(0.60);
     if (v.bid !== null) expect(v.direction).toBe("up");
+  });
+
+  // -------------------------------------------------------------------------
+  // THE IMPRESSIONS BAR (William 2026-08-20)
+  // -------------------------------------------------------------------------
+  // Measured over 852 Sponsored Products bid moves, 2026-08-14 to 2026-08-20: 674 were raises and
+  // 652 of those came from this one branch, on a MEDIAN of 2 impressions of evidence. Account CTR
+  // over the same window is 0.595%, one click per 168 impressions. The rule was reading the most
+  // ordinary event in the account as a verdict and paying more for it.
+  it("does NOT raise on the median evidence the rule actually fired on: 2 impressions", () => {
+    const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: 2 });
+    expect(v.bid).toBeNull();
+    expect(v.reason).toContain("too few to mean anything");
+  });
+
+  it("holds just under the bar and raises just over it", () => {
+    const under = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: NO_CLICK_MIN_IMPRESSIONS - 1 });
+    const over = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions: NO_CLICK_MIN_IMPRESSIONS });
+    expect(under.bid).toBeNull();
+    expect(over.bid).toBe(0.60);
+    if (over.bid !== null) expect(over.direction).toBe("up");
+  });
+
+  it("leaves the not-in-the-auction climb alone — that is the escape from the $0.10 floor trap", () => {
+    // No impressions at all is a different branch and a different argument: the keyword is not in
+    // the auction, and a bid only charges when it wins a click, so raising costs nothing.
+    const v = searchStep(0.10, silent);
+    expect(v.bid).toBe(0.20);
+  });
+
+  it("is a delay, not a freeze — impressions accumulate while the bid holds", () => {
+    // The window runs from the last bid CHANGE, so a held keyword keeps being shown and keeps
+    // gathering evidence. Once it genuinely clears the bar with still no click, the raise fires.
+    let impressions = 20, raised = false;
+    for (let run = 0; run < 12 && !raised; run++) {
+      const v = searchStep(0.50, { spend: 0, sales: 0, orders: 0, clicks: 0, impressions });
+      if (v.bid !== null) { raised = true; break; }
+      impressions += 20;
+    }
+    expect(raised).toBe(true);
+    expect(impressions).toBeGreaterThanOrEqual(NO_CLICK_MIN_IMPRESSIONS);
+  });
+
+  it("keeps the bar at or above the impressions one click actually costs on this account", () => {
+    // CTR 0.595% = one click per 168 impressions. A bar materially below that would let the rule
+    // go on buying noise; this pins the number against the account rather than against taste.
+    expect(NO_CLICK_MIN_IMPRESSIONS).toBeGreaterThanOrEqual(100);
   });
 
   it("clears the $0.59 market CPC in five runs, not nineteen", () => {
