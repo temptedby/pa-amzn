@@ -4593,3 +4593,123 @@ August.
 
 **Status.** **UNREAD, day three**, cause now identified as our own broken selector rather than an
 Amazon or account problem. Fix is mine and not yet done.
+
+## 2026-10-09 — The bid ladder climbs hardest exactly when a new ad is re-earning its position
+
+**Context.** Day 1 of the one-week 3-Pack test. In the 5.5 hours after the 03:00Z switchover the
+engine made **9 raises against 2 lowers**, net +$0.70 of bid. The impressions behind each raise:
+**0, 0, 0, 2, 2, 3, 3, 22.** Over seven days, 333 raises against 294 lowers, net +$16.43.
+
+**Options.** (a) Accept it; the raises are small. (b) Merge PR #12, the 150-impression bar. (c) Treat
+the transition as a special case and freeze raises for the test week. (d) Fix the thing that makes a
+raise expensive rather than the thing that makes it frequent.
+
+**Decision.** Recommend (d) first, then (b). Neither taken: both need William.
+
+**Reasoning.** The redirect creates an artificial no-clicks period by design. A fresh 3-Pack ad in an
+old ad group has to re-earn its position, so for several days every keyword shows few impressions
+and no clicks, and that is the exact branch that raises. The automation will read the transition as
+proof we are underbidding, and the test gets judged on a week in which the bid book climbed.
+
+PR #12 (`NO_CLICK_MIN_IMPRESSIONS = 150`) blocks **5 of the 9** -- the 2, 2, 3, 3 and 22-impression
+raises. It deliberately exempts the zero-impression climb, with a test pinning that exemption, on
+the argument that *"a bid only charges when it wins a click, so raising costs nothing."* **That
+argument is only true if the resulting bid is affordable.** Under `AUTO_FOR_SALES` plus a +50%
+placement adjustment, an $0.85 bid is a $2.55 click. The exemption is right in a campaign with no
+multipliers and wrong in the one campaign holding 730 of our bids.
+
+**Industry source.** None needed; `kw_bid_history` carries the raises and their stated reasons.
+
+**Trade-offs.** Merging #12 slows escape from the $0.10 floor, where 839 live keywords sit. That
+trade was already argued and accepted in the PR: it is a delay, not a freeze, because impressions
+keep accumulating while the bid holds.
+
+**Status.** Measured and reported. PR #12 open 50 days, MERGEABLE. No action taken.
+
+## 2026-10-09 — 495 live bids are authorised to pay $2.00 for a $0.41 click
+
+**Context.** Six weeks of rule changes have moved BACOS from about 80% to 97.8%. I stopped reading
+bids and read what Amazon actually charges against: each live bid multiplied by its campaign's
+placement adjustment and dynamic-bidding strategy.
+
+**Options.** (a) Keep tuning keyword bids. (b) Measure effective max CPC per campaign and act where
+the multiplier lives.
+
+**Decision.** (b).
+
+**Reasoning.** 2,212 live keywords and targets:
+
+```
+  <= $0.32  (affordable at $9.49)     1,183
+  $0.33-0.96                            485
+  $0.97-1.99                             49
+  >= $2.00                              495     22% of the book
+  median $0.30      max $3.00
+```
+
+Affordable is $0.32 at $9.49, about $0.41 on the 3-Pack. We pay $0.97. The concentration is total:
+`212260116772958` ($90/day, `AUTO_FOR_SALES` + TOP +50% + PRODUCT_PAGE +50%) holds **730 entities,
+426 of them at or above the $0.85 ceiling, mean effective $1.73, worst $2.55**. And **75 live bids
+sit above the $0.85 confirm ceiling entirely** -- 41 in the 2-Pack auto campaign at $1.30-$1.50
+doubled to $2.60-$3.00, and 34 in a Leash campaign, mostly $1.43 ASIN targets. ASIN targeting is our
+cheapest converter at roughly 10% on a $0.56 click; authorising $1.43 for it is backwards.
+
+Two mechanisms put every one of those out of the engine's reach: the multiplier lives on the
+**campaign** while the engine writes **keyword** bids, and the ceiling was never applied to bids that
+predate it.
+
+**Industry source.** Amazon's own documented order of operations -- placement adjustment first, then
+dynamic bidding on the adjusted bid -- which is what makes $0.85 x 1.5 x 2.0 = $2.55.
+
+**Trade-offs.** Removing the multipliers costs top-of-search position, and that placement converts
+better than the rest. At 0.41x on the last settled day there is nothing to protect.
+
+**Status.** Measured. Recommended twice today. **Unchanged on day 39 since first measurement.**
+Two reversible writes, waiting on William.
+
+## 2026-10-09 — A script whose default window is a date will answer about the wrong month
+
+**Context.** I ran `node scripts/intl-daily-spend.mjs` with no arguments to get Canada's October
+spend. It returned CAD 2.16 across three days and a clean per-campaign table. The window was
+**2026-08-20 to 2026-08-22**, hardcoded at line 8.
+
+**Options.** (a) Note it and move on. (b) Treat defaulted date windows as a class of defect.
+
+**Decision.** (b).
+
+**Reasoning.** This is the third instance in the same family: `business-pnl.mjs` carries a 58-day
+window, `tacos.mjs` carried one until it was fixed on 10-07, and `kw_daily` went stale silently and
+produced a confident wrong August number. The failure mode is not an error message. It is a
+**plausible, well-formatted, completely wrong answer**, which is strictly more dangerous than a
+crash. A default of "now" degrades to a useless-but-honest empty result; a default of a fixed date
+degrades to fiction.
+
+**Industry source.** None; our own archive has three instances.
+
+**Trade-offs.** Required arguments mean more typing and no quick bare invocation. Worth it.
+
+**Status.** Caught before it reached William. Canada and Mexico October spend recorded as **UNREAD**
+rather than filled in with the August figure. `--start`/`--end` should be made required.
+
+## 2026-10-09 — The v3 reporting API deduplicates on configuration, not on name
+
+**Context.** A per-campaign report timed out after 14 minutes of polling. I retried it. Amazon
+returned **HTTP 425, "The Request is a duplicate of ..."**. I renamed the report and retried again:
+425 again.
+
+**Options.** (a) Keep retrying. (b) Find what the dedupe key actually is.
+
+**Decision.** (b).
+
+**Reasoning.** The dedupe key is the report **configuration** -- ad product, date range, groupBy,
+columns, reportTypeId, timeUnit. The `name` field is a label and plays no part in it. Adding one
+column (`costPerClick`) produced a fresh report immediately. The 425 body names the originating
+*request* id, not the *report* id, so the original cannot be retrieved from it either.
+
+**Industry source.** Amazon Ads API v3 reporting behaviour, observed directly.
+
+**Trade-offs.** None. This is purely a thing to know.
+
+**Status.** Recorded. About 20 minutes lost. Pairs with the existing note that the report queue is a
+fixed cost unrelated to window size -- 961s has been measured for a 10-day report, so a 14-minute
+poll is genuinely too short.
