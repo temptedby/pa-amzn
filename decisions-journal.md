@@ -4713,3 +4713,156 @@ column (`costPerClick`) produced a fresh report immediately. The 425 body names 
 **Status.** Recorded. About 20 minutes lost. Pairs with the existing note that the report queue is a
 fixed cost unrelated to window size -- 961s has been measured for a 10-day report, so a 14-minute
 poll is genuinely too short.
+
+## 2026-10-20 — A bid is a volume dial, not a price dial
+
+**Context.** ROAS fell from 1.56x in May to 0.60x in October while CPC rose from $0.563 to $1.060
+and conversion held flat at 7.8% to 7.5%. I told William the $0.85 ceiling was therefore "the ROAS
+dial, turned the wrong way for two months." Then I measured it: 510 bid moves of 10c or more, each
+compared against its own matched 7-day windows either side, as daily rates.
+
+**Options.** (a) Accept the month-over-month correlation and lower the ceiling. (b) Test whether our
+own bid moves actually move our own CPC.
+
+**Decision.** (b), and the result killed (a).
+
+**Reasoning.** Cutting a bid cut clicks **51%** and the click price only **10%**. Raising one more
+than doubled clicks for **+14%** on price. The cross-section agrees and is not even monotonic: at the
+$0.85 ceiling we pay $1.058 a click, and in the $0.70-$0.84 band we pay $1.105, slightly *more*.
+CPC/bid sits at 1.2x-1.3x across every band. So the May-to-October CPC rise was the market getting
+dearer, not our ladder bidding itself up. A bid buys volume; it does not buy price.
+
+**Industry source.** None needed; this is our own account measured against itself. The matched-window
+method is from the existing note that raw totals across unequal windows reversed every conclusion.
+
+**Trade-offs.** Lowering the ceiling still shrinks the bleed, by buying less. It just does not improve
+ROAS, so it should never be sold as an efficiency measure.
+
+**Status.** Recorded, and it removes bidding from the list of ROAS levers. What is left is *what* we
+buy: keyword clicks cost $0.960 against $0.210 of worth, ASIN rows $0.504 against $0.334, and auto
+targeting $0.166 against $0.238 — the only line in the account that pays.
+
+## 2026-10-20 — I had the placement multipliers backwards
+
+**Context.** I opened the morning review by naming the $2.54 click in campaign 212260116772958 as
+the leading waste and recommended zeroing its two +50% placement adjustments. Later the same session
+I pulled a `campaignPlacement` report, which this account had never run.
+
+**Options.** (a) Let the recommendation stand, it was directionally sensible. (b) Report the reversal
+plainly and say what changed my mind.
+
+**Decision.** (b).
+
+**Reasoning.** The placement split shows we pay roughly the same for inventory worth five times
+different amounts: top of search converts at 12.0% and costs $1.506, detail pages 6.1% at $0.955,
+rest of search **2.2% at $0.805**. The campaign carrying the multipliers wins 155 top-of-search
+clicks at 11.6% conversion. The campaign *without* them wins 12, and dumps 145 clicks into rest of
+search at **0.08x** — $118.32 for one order, the worst line in the account. The multipliers are what
+buy the good placement; the $2.54 click is the price of 12% conversion, and the "cheap" $0.82 click
+next door is 0.7% conversion. The right move is the opposite of what I proposed: add multipliers to
+the $250 MANUAL campaign.
+
+**Industry source.** Amazon SP placement adjustments are positive-only, 0-900%, so rest of search can
+be reduced relatively but never excluded. Verified against the live campaign objects.
+
+**Trade-offs.** Stripping the multipliers would have pushed spend from 11.6%-converting inventory into
+0.7%-converting inventory while appearing to lower CPC. It would have looked like a win in every
+report we currently run.
+
+**Status.** Reversed before anything was written. The actionable finding stands on its own: rest of
+search is $181.94 per 31 days at 0.27x, and reducing it is worth about $5.28 a day.
+
+## 2026-10-20 — Every cheap-converting number we have belonged to the Single
+
+**Context.** I recommended pointing ASIN targeting at the 3-Pack and funding it, on the strength of
+campaign 254328185654624 returning 1.9x at 10% conversion and $0.559 a click, and auto targeting
+returning 3.80x at $0.166. William approved it. Before building I read the product-ad records.
+
+**Options.** (a) Build on the measured numbers. (b) Check which ASIN actually earned them.
+
+**Decision.** (b), and it invalidated my own recommendation's evidence.
+
+**Reasoning.** Ad group 266122741022729 holds `B07Y5GZP1T` PAUSED, updated 2026-10-08, and
+`B097MK5VZ4` ENABLED, **created 2026-10-08**. The 1.9x was September, advertising the Single. Same in
+the auto-targeting group. **There is no measurement of the 3-Pack succeeding anywhere in this
+account** — only the eleven days since 10-08, which are uniformly bad: conversion halved from 6.2% to
+2.8%, impressions down 93%, ROAS 0.69x to 0.25x.
+
+**Industry source.** Amazon's Feb-May 2026 variation review split explains the mechanism: reviews no
+longer pool across children with significant functional differences, so the 3-Pack shows **14 reviews
+at 3.6 stars** against the Single's **482 at 3.8**, verified live. Published guidance is to advertise
+the child with the best image, price, in-stock history and conversion rate, not the best margin
+(zonhack, Velocity Sellers).
+
+**Trade-offs.** The AOV logic for the 3-Pack is sound and revenue per order did rise 17%. It is simply
+dwarfed by a halved conversion rate and a 48% dearer click. And stock settles it: **34 3-Packs against
+144 Singles.** Advertising 18% of the inventory cannot sell through the other 77%.
+
+**Status.** Reverted in plan, not yet in the account. `scripts/revert-keywords-to-single.mjs` is built,
+dry-run and awaiting William's go. Two migration methods have now been tried and both failed: adding
+the 3-Pack beside the Single (09-30, 151 impressions against 54,140) and pausing the Single inside the
+same ad group (10-08, impressions down 93%). Impression share follows the ASIN, not the ad group and
+not the keyword history.
+
+## 2026-10-20 — The 3-Pack's swatch says "Black" and the Single's says "BK"
+
+**Context.** Chasing why the 3-Pack converts at half the Single's rate, I read the variation family
+off the live page rather than inferring it.
+
+**Options.** (a) Attribute the conversion gap entirely to 14 reviews. (b) Look at what the shopper
+actually sees.
+
+**Decision.** (b).
+
+**Reasoning.** The variation dimension is `color_name`, which Amazon renders as the "Color:" selector.
+Its six values, alphabetical, in the order a shopper meets them: `BK, Black, Phone Assured Pack of 2,
+Phone Assured Pro 2-Pack, Phone Assured Pro 3-Pack, Silver`. "BK" is the Single. "Black" is the
+3-Pack. **Nothing on that selector tells anyone they are buying three of something**, and "BK" sorts
+first so it reads as the default. Three of the labels are colour words for products that are all black
+bar the Pro, and three are full product names. No title is affected; titles correctly say "(3-Pack)",
+"(2-Pack)", "Pro".
+
+**Industry source.** Encoding pack count as colour is also precisely the "significant functional
+difference" that triggers Amazon's 2026 review split, which is a plausible mechanism for how the
+3-Pack ended up with 14 of the family's 600 reviews (Cahoot, SalesDuo, Jarvio).
+
+**Trade-offs.** None identified. It is a display string, not the variation theme, so the parent-child
+relationship is untouched. Writability of `color_name` on these children is **unprobed** and the
+listings API is down.
+
+**Status.** William approved renaming to `1-Pack, 2-Pack, 3-Pack, Pro 1-Pack, Pro 2-Pack, Pro 3-Pack`,
+which also sorts into a clean ladder. **Blocked on the SP-API secret rotation.** When "BK" was set is
+UNREAD: nothing in the repo or git history, and the only two sane labels belong to the Pro packs
+created 10-13. This is also the one free route to the 3-Pack — the Single carries 482 reviews and
+roughly half our orders arrive organically on that exact selector.
+
+## 2026-10-20 — A 200 from the token endpoint is not a working API
+
+**Context.** `orders-recent.mjs` printed "TOTAL orders 0" and `inventory-health.mjs` printed "skus
+returned 0". Both looked like genuine zeroes. Eleven days unattended made a real sales stop
+plausible.
+
+**Options.** (a) Report zero orders and zero stock. (b) Probe the credential and several unrelated
+endpoints before believing either number.
+
+**Decision.** (b).
+
+**Reasoning.** The LWA refresh returned **200 with a valid access token**, so nothing upstream
+complained. Every SP-API endpoint then returned **403, "The LWA secret token you provided has
+expired."** — marketplace participations, FBA inventory, listings and reports alike. Amazon had
+emailed three times: *"Rotate 'Login with Amazon' credentials by 2026-10-17T21:55:45.647Z."* A
+successful token exchange proves the secret is accepted by the auth service, not that the app is
+still authorised. One endpoint returning zero is ambiguous; four unrelated endpoints returning the
+same 403 is a credential, not a business outcome.
+
+**Industry source.** None; Amazon's error text is actively misleading here, naming an expired token
+while the token issues fine.
+
+**Trade-offs.** The probe cost about two minutes. Reporting "sales have stopped" would have been a
+false alarm on the one day the business was being shown to Flippa buyers.
+
+**Status.** Orders, inventory, listings, pricing and fees recorded as **UNREAD**, not zero. Corrected
+in-session: an inventory delta suggesting 5 units in 9 days was replaced with shipped-item notices
+from the inbox, which show 1.70 shipments a day against 4.63 before. `daily-sync` has been failing
+silently since 10-18T14:00Z; no bid decision was affected because only `sync-inventory.ts` and the
+settings pages touch SP-API.
