@@ -43,7 +43,7 @@
 // something that will claw back the 0.87x lifetime loss on its own.
 
 import { db } from "@/lib/db/client";
-import { recordBidRun, type LedgerObservation } from "./bid-ledger";
+import { recordBidRun, lastChanges, type LedgerObservation } from "./bid-ledger";
 import { approvedCeilings, unaskedGates, markAsked, formatGateAsk } from "./bid-gate";
 import { adsConfigFromEnv, getAdsAccessToken, type AdsConfig } from "./ads-api";
 import { getReport, type ReportSpec } from "./ads-reports";
@@ -263,7 +263,13 @@ export async function runSdEngine(opts: { dryRun?: boolean } = {}): Promise<SdEn
   // Display moves in NICKELS and at most ONCE A DAY (William 2026-08-13). Retargeting produces far
   // fewer clicks than search, so a six-hour window holds almost no evidence, and a dime crosses a
   // third of the usable $0.10-$0.48 range in a single move.
-  const bidPlan = planBids(candidates, { step: SD_BID_STEP, defaultBid: SD_START_BID, floor: SD_BID_FLOOR });
+  // Same fix as Sponsored Brands: Display re-bid every hour with no memory of its own last move.
+  const sdLast = await lastChanges("SPONSORED_DISPLAY");
+  for (const c of candidates) c.last = sdLast.get(c.id) ?? null;
+  const bidPlan = planBids(candidates, {
+    step: SD_BID_STEP, defaultBid: SD_START_BID, floor: SD_BID_FLOOR,
+    cooldownHours: SD_BID_COOLDOWN_HOURS,
+  });
   out.bidPlan = bidPlan;
   const obs: LedgerObservation[] = candidates.map((c) => ({
     entityId: c.id, label: c.label, bid: c.bid ?? 0,
