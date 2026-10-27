@@ -4866,3 +4866,140 @@ in-session: an inventory delta suggesting 5 units in 9 days was replaced with sh
 from the inbox, which show 1.70 shipments a day against 4.63 before. `daily-sync` has been failing
 silently since 10-18T14:00Z; no bid decision was affected because only `sync-inventory.ts` and the
 settings pages touch SP-API.
+
+## 2026-10-23: Break-even is 1.92x, and 1.71x once the goods are sunk
+
+**Context.** I told William three times in one session that ads must beat 2.67x. That number comes
+from the skill file's "price $9.49, we keep $3.55", which cites no source. At 2.67x the 58-word
+shortlist looked like +$6 and barely worth running.
+
+**Options.** (1) Keep quoting 2.67x as the conservative bar. (2) Use the code's figure. (3) Use a
+sunk-cost figure that ignores COGS. (4) Refuse to pick until SP-API comes back.
+
+**Decision.** State all three and use 1.71x for the sell-through decision.
+
+**Reasoning.** `ad-rules.ts:60` and `:861` carry $9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA =
+$4.93, explicitly VALIDATED against a live `getMyFeesEstimate` call. That is 1.92x. William then
+made the sunk-cost point: the inventory is already bought and we are winding down, so COGS is not
+a marginal cost of the next click. Excluding it gives $5.55 and 1.71x. The 58-word set moves from
++$5.99 to +$204.02 on the same data.
+
+**Industry source.** Standard contribution-margin analysis: for a sell-through decision only
+avoidable costs belong in the margin. Amazon's own `getMyFeesEstimate` is the authority for
+referral and FBA.
+
+**Trade-offs accepted.** 1.71x understates true cost if we ever restock, so it is a wind-down
+number only. The $0.62 COGS is from the code comment and cannot be re-verified while SP-API is
+down. William's stated 1.5x floor sits just below 1.71x, so his bar loses a little per order by
+design, and he knows.
+
+**Status.** Adopted. Recorded as memory `breakeven-is-192-not-267`. The skill file still says
+2.67x and should be corrected.
+
+## 2026-10-23: Matching a product ad by ASIN darkened four ad groups
+
+**Context.** `reroute-estate-split.mjs` had to swap each ad group's product ad from the 3-Pack to
+the Single or 2-Pack. It found the replacement with `x.sku === s.sku || x.asin === s.asin`.
+
+**Options.** (1) Match by ASIN or SKU, reusing whatever exists. (2) Match by SKU only. (3) Always
+create a new ad on a known-good SKU. (4) Verify `servingStatus` before pausing the incumbent.
+
+**Decision.** I shipped (1). It was wrong. The repair uses (2) plus (4).
+
+**Reasoning.** An ASIN has many SKUs and most of ours are dead. The ASIN arm adopted old paused ads
+on `34-MR1G-UASV` and `FY-2WDI-19GH`, which have no offer, then paused the working 3-Pack ads
+beside them. The read-back was `{"B097MGPCPC":3}` all NOT_BUYABLE. My gate confirmed an ad for the
+right ASIN existed; it never asked whether that ad could sell. Four of five ad groups could not
+serve for about fifteen minutes.
+
+**Industry source.** Amazon's own `servingStatus` is the authority, and it reports the most
+upstream blocker: CAMPAIGN_INCOMPLETE while a campaign has no targeting, CAMPAIGN_PAUSED while it
+is paused, and only the SKU verdict once it is enabled and complete. A related earlier bug came
+from gating keyword creation on AD_STATUS_LIVE, which is unreachable before keywords exist.
+
+**Trade-offs accepted.** SKU-only matching will sometimes create a duplicate ad where a usable one
+existed under another SKU. That is cheap; a dark ad group is not.
+
+**Status.** Fixed and verified live, all five ad groups AD_STATUS_LIVE. Recorded as memory
+`serving-status-masks-sku-verdict`. The rebuilt `reroute-single-mirror-2pack.mjs` matches by SKU
+only and refuses to pause anything until the replacement reads live in that same ad group.
+
+## 2026-10-23: An even budget split, not an even keyword split
+
+**Context.** William wanted the estate split between the Single and the 2-Pack with the same top
+converting keywords on both sides. Amazon serves one ad per advertiser per auction, so identical
+keywords in two campaigns means they compete with each other.
+
+**Options.** (1) All 45 words in both, accept Amazon picks. (2) Split the words 22/23 so they never
+collide. (3) Run sequentially, Single then 2-Pack. (4) Different keywords per side.
+
+**Decision.** (1), all 45 in both, with a tight daily cap on each campaign.
+
+**Reasoning.** I first told William the 2-Pack would be starved, then corrected myself: that is
+true with open budgets, not with a binding cap. When the Single's campaign spends its cap it leaves
+the auction and the 2-Pack wins those impressions. The cap is the splitter. Splitting the keywords
+instead would halve an already thin dataset, 82 settled orders across 58 words.
+
+**Industry source.** Amazon's single-ad-per-advertiser auction rule, and the standard practice of
+using daily budget caps for ad rotation when true A/B infrastructure is unavailable.
+
+**Trade-offs accepted.** The read is time-of-day biased, because whichever side exhausts first
+systematically gets mornings. So the result must be read as ROAS per campaign, never impression
+share. And it returns a direction, not a verdict.
+
+**Status.** Live since 10-23. Four days in, the mechanism is only partly working: the Single has
+73% of impressions because only one of six pairs actually hits its cap.
+
+## 2026-10-26: Copying a campaign copies its bad bids
+
+**Context.** The mirror script duplicated each campaign's keywords and targeting clauses with
+`bid: x.bid`, faithfully reproducing the source.
+
+**Options.** (1) Copy bids as-is. (2) Clamp every copied bid to the $0.85 confirm ceiling.
+(3) Reprice each copied entity from its own settled CPC. (4) Copy, then clamp in a second pass.
+
+**Decision.** I shipped (1) without thinking about it. It should have been (2).
+
+**Reasoning.** 23 entities were already bidding over $0.85, including `phone assured retractable
+phone tether` at $2.50 and 41 ASIN clauses at $1.43. The mirror doubled them. 64 live entities now
+authorise up to $84.06 per click round against a max affordable CPC of $0.32 on keywords and $0.56
+on ASIN rows. This is the 10-09 "495 bids authorised at $2.00 for a $0.41 click" finding, recreated
+by me in one command.
+
+**Industry source.** Our own BID_CONFIRM_CEILING of $0.85 in `ad-rules.ts`, which exists precisely
+so no rule raises past it without a human. A copy is a write and should respect the same gate.
+
+**Trade-offs accepted.** Clamping to $0.85 may lose top-of-search position on the branded term,
+which converts at 67%. Branded traffic is cheap to recover and $2.50 is 4.5x what the click is
+worth.
+
+**Status.** Not fixed. Awaiting William's go to clamp all 64 to $0.85.
+
+## 2026-10-26: The $4 kill rule is deleting the proven shortlist
+
+**Context.** The whole point of the restructure was to run only the 45 keywords with settled ROAS
+at or above 1.5x. Four days later five of them have been killed by the engine.
+
+**Options.** (1) Leave it; the rule is the rule. (2) Hold the split campaigns out of the hourly
+engine. (3) Raise KILL_SPEND for shortlist words. (4) Make the kill rule skip spend inside the
+14-day attribution window.
+
+**Decision.** None yet. Flagged to William; (2) is my recommendation and has been unanswered since
+10-23.
+
+**Reasoning.** The rule kills a word that spends $4 in a month with no sale. These words have
+proven lifetime records above 1.5x and are being judged on four days of spend inside the window
+where their sales cannot yet be credited. That is the documented
+`kill-judges-blind-in-the-attribution-window` trap operating on the very list we chose for its
+history. At five per four days the 45-word shortlist is gone in about five weeks, and there is no
+second list behind it.
+
+**Industry source.** Amazon's 14-day attribution window. Judging conversion on a window shorter
+than the attribution period systematically under-counts orders.
+
+**Trade-offs accepted.** Holding campaigns out of the engine means no automated brake on them, so
+a genuinely bad word could run. At $10.80/day of authorised cap across both sides the downside is
+bounded, and William's 2026-08-13 no-raise rule would stop applying to them, which is a change to a
+rule he called absolute and therefore his to make.
+
+**Status.** Open. Blocks the test from producing a clean read.
