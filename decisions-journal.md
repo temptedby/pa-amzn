@@ -5003,3 +5003,172 @@ bounded, and William's 2026-08-13 no-raise rule would stop applying to them, whi
 rule he called absolute and therefore his to make.
 
 **Status.** Open. Blocks the test from producing a clean read.
+
+---
+
+## 2026-10-27: The $4 bar counts keyword IDs, not words
+
+**Context.** I reported three words still serving above the $4 bar, the largest being
+`retractable phone tether` PHRASE at $67.31 of settled spend returning 1.17x. William asked the
+obvious question: why were these not cut?
+
+**Options.** (a) Call the rule broken and rewrite it. (b) Find out what the rule was actually
+looking at before touching it. (c) Cut the words by hand and move on.
+
+**Decision.** (b) first, then (c) for the three words. The rule is not broken.
+
+**Reasoning.** `KILL_SPEND` is month-to-date spend per keyword ID. `retractable phone tether`
+PHRASE exists as six separate keyword IDs across four campaigns, and in October each of the six
+spent $0.00. The $67.31 is lifetime, spread over six IDs and three months. The rule had nothing to
+judge. It had already killed the word three times, 08-29, 08-31 and 09-12, and each duplicate
+carries its own counter that resets on the 1st. `bungee cord phone` shows the mechanism cleanly:
+one ID spent $4.52 and was killed on 10-13, its twin spent $0.00 and kept serving. Account-wide,
+164 words are duplicated across campaigns carrying $1,508.46 of lifetime spend. **I had compared a
+lifetime figure against a month-to-date rule and presented that as the rule failing.**
+
+**Industry source.** Amazon Advertising counts spend per targeting entity, not per keyword text, so
+any threshold rule written against entity IDs is defeated by duplication. Standard practice is to
+dedupe targets before applying budget guards, which is what Amazon's own duplicate-keyword
+recommendations push sellers toward.
+
+**Trade-offs.** Cutting the three by hand fixes today and not the class. The real fix is either
+aggregating the bar across duplicates of the same word, or deduping the account. Deduping is the
+larger and more useful job and is not started.
+
+**Status.** Three words cut, 11 keyword rows, verified 11/11 paused. The class of problem is open.
+See [[keyword-duplicates-break-kill-rule]] and [[four-dollar-bar-is-a-receipt]].
+
+---
+
+## 2026-10-27: An ad's history, not its campaign's age, is the clock that matters
+
+**Context.** In the morning review I told William the Single versus 2-Pack test was invalid, because
+five of the six 2-Pack campaigns were created on 10-23 and Amazon prices an ad on its own history.
+That was the same mechanism that collapsed the 3-Pack, so it felt right.
+
+**Options.** (a) Leave the claim standing, it was directionally plausible. (b) Check the ad-level
+creation dates before the claim shaped a decision.
+
+**Decision.** (b), and the claim was wrong.
+
+**Reasoning.** The pair carrying $501 of the $534 of October SP spend is
+`212260116772958` / `212881454178968`, and both campaigns are 2021 vintage. At the ad level, which
+is the level the auction actually prices, the 2-Pack ad was created 2021-10-24 and the Single ad was
+created 2026-10-23T15:35:55. **The newcomer is the Single**, and over the first four days it drew
+1,907 impressions to the 2-Pack's 865 and took both orders. If anything the age asymmetry worked
+against the Single. Campaign creation date was the wrong clock; the five genuinely new mirrors
+account for about $8 of spend and are not where the test lives.
+
+**Industry source.** Amazon's relevance and quality signals attach to the ad and its ASIN history,
+not the campaign shell, which is why rebuilding a campaign around an existing ad preserves
+performance while swapping the advertised ASIN does not.
+
+**Trade-offs.** Twenty clicks is still far too few to call a winner. Being wrong in the cautious
+direction cost nothing here, but it nearly argued for tearing down a test that is fine.
+
+**Status.** Corrected to William the same day. Four days of data, no verdict yet.
+See [[three-pack-never-measured-working]] and [[shortlist-split-test-live]].
+
+---
+
+## 2026-10-27: A symmetry pass will undo a kill rule unless it carries the same gate
+
+**Context.** The two sides of the A/B had drifted apart: 41 of 45 shortlist words serving on the
+Single side, 44 of 45 on the 2-Pack side, because the $4 kill only fires where a specific keyword ID
+spends and the 2-Pack side barely spends. William asked for the words that work to be unpaused
+unless they had spent $4 this month.
+
+**Options.** (a) Create every missing word on the side that lacks it, so both sides match.
+(b) Apply the $4-this-month gate to creates as well as revives. (c) Do nothing and accept the
+asymmetry.
+
+**Decision.** (b).
+
+**Reasoning.** The first dry run of the symmetry pass wanted to create four words, and three of
+them were the exact words the kill rule had just switched off: `iphone safety tether` at $6.40 of
+October spend, `iphone tether tab and lanyard` at $8.65, `phone tether with clip` at $5.02. Option
+(a) would have silently reinstated everything the rule cuts, every time it ran, and the two
+mechanisms would have fought each other forever with the create winning because it runs last.
+William's rule is literal and it applies to creates as much as revives.
+
+**Industry source.** The general pattern is that an idempotent reconciler and a policy engine must
+share the same predicate, or the reconciler becomes a bypass for the policy. Terraform drift
+detection and Kubernetes admission control both encode this.
+
+**Trade-offs.** Three proven words at 2.53x, 2.56x and 2.85x lifetime stay off, and the two sides
+stay asymmetric by three words. That is a real cost to the test. The alternative is worse.
+
+**Status.** Gate added before the pass ran. One word created, `cell phone harness` on the 2-Pack
+side. Whether to switch the three off on the 2-Pack side too is open, question Q7 in the 10-27
+summary. See [[dont-widen-a-stated-rule]] and [[kill-rule-eats-the-shortlist]].
+
+---
+
+## 2026-10-27: Sponsored Brands ads cannot be created through the API on this profile
+
+**Context.** William asked for every campaign to be copied into a Single and a 2-Pack half,
+explicitly including the video campaigns. The $160/day `Video - B07Y5GZP1T` campaign is the largest
+single ad budget in the account.
+
+**Options.** (a) Build the mirror through the API. (b) Report it as impossible without proving it.
+(c) Prove the limit, then hand the one manual step to William.
+
+**Decision.** (c).
+
+**Reasoning.** Campaign create works. Ad group create works. `POST /sb/v4/ads/list` works on
+`application/vnd.sbadresource.v4+json`. Only the ad **create** has no reachable route: six header
+combinations all returned 403 "Invalid key=value pair in Authorization header", and
+`/sb/v4/ads/video`, `/brandVideo`, `/productCollection`, `/storeSpotlight` and `/sb/ads` all
+returned 404. That fits what we already knew about these campaigns, that they are legacy
+single-ad-group Brands campaigns, the same reason v3 reporting has never seen them. I stopped after
+six attempts rather than keep guessing media types.
+
+**Industry source.** Amazon's Sponsored Brands v4 ad-create endpoints are gated per advertiser
+account and per campaign vintage; legacy campaigns created in the old console are routinely
+read-only through the newer resource APIs.
+
+**Trade-offs.** I had already halved the source to $80 before discovering this. Halving one side
+with no other side is a unilateral cut William did not ask for, so I restored it to $160 and left
+the empty mirror shell paused. Brands therefore stays unpaired at $220/day with no engine on it,
+four days before the month resets.
+
+**Status.** Shell campaign `227832154279101` exists at $80, PAUSED, no ad, no keywords. The ad has
+to be made in Seller Central, question Q6. See [[v3-hides-legacy-sb-campaigns]] and
+[[sb-engine-switched-off-by-pr45]].
+
+---
+
+## 2026-10-27: Halve the budget, not the spend
+
+**Context.** William asked me to check the budgets from two weeks ago, before all the changes, to
+confirm each side of the A/B really holds 50% of the original. He was right to ask.
+
+**Options.** (a) Trust that the 10-23 split had halved correctly. (b) Reconstruct the pre-change
+baseline from the `budget-usage` read taken that morning, the 10-07 and 10-09 daily summaries, and
+`campaign_lifetime`'s 08-05 snapshot, then compare.
+
+**Decision.** (b), and five of seven pairs were right while two were badly wrong.
+
+**Reasoning.** The 10-23 script states its own logic in a comment: "October SP actual was
+$21.59/day. Half is $10.80, set as $5.40/day each." It halved **actual spend**, not budget. The two
+campaigns carrying the shortlist had real budgets of $90 and $250, so they took a 94% cut rather
+than 50%. The other five were halved against their true budgets and are correct. The baseline across
+the paired estate is $567/day, so a true half is $283.50 per side; it currently sits at $124.30 and
+$113.50. Setting both shortlist campaigns to $170 restores the $340 they held between them and lands
+each ASIN on exactly $283.50.
+
+**Industry source.** Budget and spend are different quantities and only budget is a control. Halving
+a realised metric to set a control conflates the two, and it is the same error as sizing a rate
+limiter from observed traffic rather than from capacity.
+
+**Trade-offs.** This is a 31x increase on the only pair that spends real money, and over the last
+four days the $5.40 cap was genuinely binding at $5.83/day. William's position is that large budgets
+are safe because Amazon never spends them and the $4 kill is the brake. The first half holds, $747
+authorised produced $21/day. The second half does not, for the reason in the first entry above. My
+estimate is $12 to $20/day per campaign rather than anywhere near $170, because 45 words at $0.85 is
+the real constraint, but it is an estimate.
+
+**Status.** The write was blocked by the permission classifier and is outstanding, question Q3.
+`node scripts/budget-restore-true-half.mjs --apply`. Display was checked and is correct, it was
+$200/day on 10-23 and is $200/day now. See [[budget-headroom-is-22x]] and
+[[budget-cap-declined-2026-08-28]].
