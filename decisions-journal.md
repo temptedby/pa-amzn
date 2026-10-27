@@ -4713,3 +4713,462 @@ column (`costPerClick`) produced a fresh report immediately. The 425 body names 
 **Status.** Recorded. About 20 minutes lost. Pairs with the existing note that the report queue is a
 fixed cost unrelated to window size -- 961s has been measured for a 10-day report, so a 14-minute
 poll is genuinely too short.
+
+## 2026-10-20 — A bid is a volume dial, not a price dial
+
+**Context.** ROAS fell from 1.56x in May to 0.60x in October while CPC rose from $0.563 to $1.060
+and conversion held flat at 7.8% to 7.5%. I told William the $0.85 ceiling was therefore "the ROAS
+dial, turned the wrong way for two months." Then I measured it: 510 bid moves of 10c or more, each
+compared against its own matched 7-day windows either side, as daily rates.
+
+**Options.** (a) Accept the month-over-month correlation and lower the ceiling. (b) Test whether our
+own bid moves actually move our own CPC.
+
+**Decision.** (b), and the result killed (a).
+
+**Reasoning.** Cutting a bid cut clicks **51%** and the click price only **10%**. Raising one more
+than doubled clicks for **+14%** on price. The cross-section agrees and is not even monotonic: at the
+$0.85 ceiling we pay $1.058 a click, and in the $0.70-$0.84 band we pay $1.105, slightly *more*.
+CPC/bid sits at 1.2x-1.3x across every band. So the May-to-October CPC rise was the market getting
+dearer, not our ladder bidding itself up. A bid buys volume; it does not buy price.
+
+**Industry source.** None needed; this is our own account measured against itself. The matched-window
+method is from the existing note that raw totals across unequal windows reversed every conclusion.
+
+**Trade-offs.** Lowering the ceiling still shrinks the bleed, by buying less. It just does not improve
+ROAS, so it should never be sold as an efficiency measure.
+
+**Status.** Recorded, and it removes bidding from the list of ROAS levers. What is left is *what* we
+buy: keyword clicks cost $0.960 against $0.210 of worth, ASIN rows $0.504 against $0.334, and auto
+targeting $0.166 against $0.238 — the only line in the account that pays.
+
+## 2026-10-20 — I had the placement multipliers backwards
+
+**Context.** I opened the morning review by naming the $2.54 click in campaign 212260116772958 as
+the leading waste and recommended zeroing its two +50% placement adjustments. Later the same session
+I pulled a `campaignPlacement` report, which this account had never run.
+
+**Options.** (a) Let the recommendation stand, it was directionally sensible. (b) Report the reversal
+plainly and say what changed my mind.
+
+**Decision.** (b).
+
+**Reasoning.** The placement split shows we pay roughly the same for inventory worth five times
+different amounts: top of search converts at 12.0% and costs $1.506, detail pages 6.1% at $0.955,
+rest of search **2.2% at $0.805**. The campaign carrying the multipliers wins 155 top-of-search
+clicks at 11.6% conversion. The campaign *without* them wins 12, and dumps 145 clicks into rest of
+search at **0.08x** — $118.32 for one order, the worst line in the account. The multipliers are what
+buy the good placement; the $2.54 click is the price of 12% conversion, and the "cheap" $0.82 click
+next door is 0.7% conversion. The right move is the opposite of what I proposed: add multipliers to
+the $250 MANUAL campaign.
+
+**Industry source.** Amazon SP placement adjustments are positive-only, 0-900%, so rest of search can
+be reduced relatively but never excluded. Verified against the live campaign objects.
+
+**Trade-offs.** Stripping the multipliers would have pushed spend from 11.6%-converting inventory into
+0.7%-converting inventory while appearing to lower CPC. It would have looked like a win in every
+report we currently run.
+
+**Status.** Reversed before anything was written. The actionable finding stands on its own: rest of
+search is $181.94 per 31 days at 0.27x, and reducing it is worth about $5.28 a day.
+
+## 2026-10-20 — Every cheap-converting number we have belonged to the Single
+
+**Context.** I recommended pointing ASIN targeting at the 3-Pack and funding it, on the strength of
+campaign 254328185654624 returning 1.9x at 10% conversion and $0.559 a click, and auto targeting
+returning 3.80x at $0.166. William approved it. Before building I read the product-ad records.
+
+**Options.** (a) Build on the measured numbers. (b) Check which ASIN actually earned them.
+
+**Decision.** (b), and it invalidated my own recommendation's evidence.
+
+**Reasoning.** Ad group 266122741022729 holds `B07Y5GZP1T` PAUSED, updated 2026-10-08, and
+`B097MK5VZ4` ENABLED, **created 2026-10-08**. The 1.9x was September, advertising the Single. Same in
+the auto-targeting group. **There is no measurement of the 3-Pack succeeding anywhere in this
+account** — only the eleven days since 10-08, which are uniformly bad: conversion halved from 6.2% to
+2.8%, impressions down 93%, ROAS 0.69x to 0.25x.
+
+**Industry source.** Amazon's Feb-May 2026 variation review split explains the mechanism: reviews no
+longer pool across children with significant functional differences, so the 3-Pack shows **14 reviews
+at 3.6 stars** against the Single's **482 at 3.8**, verified live. Published guidance is to advertise
+the child with the best image, price, in-stock history and conversion rate, not the best margin
+(zonhack, Velocity Sellers).
+
+**Trade-offs.** The AOV logic for the 3-Pack is sound and revenue per order did rise 17%. It is simply
+dwarfed by a halved conversion rate and a 48% dearer click. And stock settles it: **34 3-Packs against
+144 Singles.** Advertising 18% of the inventory cannot sell through the other 77%.
+
+**Status.** Reverted in plan, not yet in the account. `scripts/revert-keywords-to-single.mjs` is built,
+dry-run and awaiting William's go. Two migration methods have now been tried and both failed: adding
+the 3-Pack beside the Single (09-30, 151 impressions against 54,140) and pausing the Single inside the
+same ad group (10-08, impressions down 93%). Impression share follows the ASIN, not the ad group and
+not the keyword history.
+
+## 2026-10-20 — The 3-Pack's swatch says "Black" and the Single's says "BK"
+
+**Context.** Chasing why the 3-Pack converts at half the Single's rate, I read the variation family
+off the live page rather than inferring it.
+
+**Options.** (a) Attribute the conversion gap entirely to 14 reviews. (b) Look at what the shopper
+actually sees.
+
+**Decision.** (b).
+
+**Reasoning.** The variation dimension is `color_name`, which Amazon renders as the "Color:" selector.
+Its six values, alphabetical, in the order a shopper meets them: `BK, Black, Phone Assured Pack of 2,
+Phone Assured Pro 2-Pack, Phone Assured Pro 3-Pack, Silver`. "BK" is the Single. "Black" is the
+3-Pack. **Nothing on that selector tells anyone they are buying three of something**, and "BK" sorts
+first so it reads as the default. Three of the labels are colour words for products that are all black
+bar the Pro, and three are full product names. No title is affected; titles correctly say "(3-Pack)",
+"(2-Pack)", "Pro".
+
+**Industry source.** Encoding pack count as colour is also precisely the "significant functional
+difference" that triggers Amazon's 2026 review split, which is a plausible mechanism for how the
+3-Pack ended up with 14 of the family's 600 reviews (Cahoot, SalesDuo, Jarvio).
+
+**Trade-offs.** None identified. It is a display string, not the variation theme, so the parent-child
+relationship is untouched. Writability of `color_name` on these children is **unprobed** and the
+listings API is down.
+
+**Status.** William approved renaming to `1-Pack, 2-Pack, 3-Pack, Pro 1-Pack, Pro 2-Pack, Pro 3-Pack`,
+which also sorts into a clean ladder. **Blocked on the SP-API secret rotation.** When "BK" was set is
+UNREAD: nothing in the repo or git history, and the only two sane labels belong to the Pro packs
+created 10-13. This is also the one free route to the 3-Pack — the Single carries 482 reviews and
+roughly half our orders arrive organically on that exact selector.
+
+## 2026-10-20 — A 200 from the token endpoint is not a working API
+
+**Context.** `orders-recent.mjs` printed "TOTAL orders 0" and `inventory-health.mjs` printed "skus
+returned 0". Both looked like genuine zeroes. Eleven days unattended made a real sales stop
+plausible.
+
+**Options.** (a) Report zero orders and zero stock. (b) Probe the credential and several unrelated
+endpoints before believing either number.
+
+**Decision.** (b).
+
+**Reasoning.** The LWA refresh returned **200 with a valid access token**, so nothing upstream
+complained. Every SP-API endpoint then returned **403, "The LWA secret token you provided has
+expired."** — marketplace participations, FBA inventory, listings and reports alike. Amazon had
+emailed three times: *"Rotate 'Login with Amazon' credentials by 2026-10-17T21:55:45.647Z."* A
+successful token exchange proves the secret is accepted by the auth service, not that the app is
+still authorised. One endpoint returning zero is ambiguous; four unrelated endpoints returning the
+same 403 is a credential, not a business outcome.
+
+**Industry source.** None; Amazon's error text is actively misleading here, naming an expired token
+while the token issues fine.
+
+**Trade-offs.** The probe cost about two minutes. Reporting "sales have stopped" would have been a
+false alarm on the one day the business was being shown to Flippa buyers.
+
+**Status.** Orders, inventory, listings, pricing and fees recorded as **UNREAD**, not zero. Corrected
+in-session: an inventory delta suggesting 5 units in 9 days was replaced with shipped-item notices
+from the inbox, which show 1.70 shipments a day against 4.63 before. `daily-sync` has been failing
+silently since 10-18T14:00Z; no bid decision was affected because only `sync-inventory.ts` and the
+settings pages touch SP-API.
+
+## 2026-10-23: Break-even is 1.92x, and 1.71x once the goods are sunk
+
+**Context.** I told William three times in one session that ads must beat 2.67x. That number comes
+from the skill file's "price $9.49, we keep $3.55", which cites no source. At 2.67x the 58-word
+shortlist looked like +$6 and barely worth running.
+
+**Options.** (1) Keep quoting 2.67x as the conservative bar. (2) Use the code's figure. (3) Use a
+sunk-cost figure that ignores COGS. (4) Refuse to pick until SP-API comes back.
+
+**Decision.** State all three and use 1.71x for the sell-through decision.
+
+**Reasoning.** `ad-rules.ts:60` and `:861` carry $9.49 - $0.62 COGS - $1.42 referral - $2.52 FBA =
+$4.93, explicitly VALIDATED against a live `getMyFeesEstimate` call. That is 1.92x. William then
+made the sunk-cost point: the inventory is already bought and we are winding down, so COGS is not
+a marginal cost of the next click. Excluding it gives $5.55 and 1.71x. The 58-word set moves from
++$5.99 to +$204.02 on the same data.
+
+**Industry source.** Standard contribution-margin analysis: for a sell-through decision only
+avoidable costs belong in the margin. Amazon's own `getMyFeesEstimate` is the authority for
+referral and FBA.
+
+**Trade-offs accepted.** 1.71x understates true cost if we ever restock, so it is a wind-down
+number only. The $0.62 COGS is from the code comment and cannot be re-verified while SP-API is
+down. William's stated 1.5x floor sits just below 1.71x, so his bar loses a little per order by
+design, and he knows.
+
+**Status.** Adopted. Recorded as memory `breakeven-is-192-not-267`. The skill file still says
+2.67x and should be corrected.
+
+## 2026-10-23: Matching a product ad by ASIN darkened four ad groups
+
+**Context.** `reroute-estate-split.mjs` had to swap each ad group's product ad from the 3-Pack to
+the Single or 2-Pack. It found the replacement with `x.sku === s.sku || x.asin === s.asin`.
+
+**Options.** (1) Match by ASIN or SKU, reusing whatever exists. (2) Match by SKU only. (3) Always
+create a new ad on a known-good SKU. (4) Verify `servingStatus` before pausing the incumbent.
+
+**Decision.** I shipped (1). It was wrong. The repair uses (2) plus (4).
+
+**Reasoning.** An ASIN has many SKUs and most of ours are dead. The ASIN arm adopted old paused ads
+on `34-MR1G-UASV` and `FY-2WDI-19GH`, which have no offer, then paused the working 3-Pack ads
+beside them. The read-back was `{"B097MGPCPC":3}` all NOT_BUYABLE. My gate confirmed an ad for the
+right ASIN existed; it never asked whether that ad could sell. Four of five ad groups could not
+serve for about fifteen minutes.
+
+**Industry source.** Amazon's own `servingStatus` is the authority, and it reports the most
+upstream blocker: CAMPAIGN_INCOMPLETE while a campaign has no targeting, CAMPAIGN_PAUSED while it
+is paused, and only the SKU verdict once it is enabled and complete. A related earlier bug came
+from gating keyword creation on AD_STATUS_LIVE, which is unreachable before keywords exist.
+
+**Trade-offs accepted.** SKU-only matching will sometimes create a duplicate ad where a usable one
+existed under another SKU. That is cheap; a dark ad group is not.
+
+**Status.** Fixed and verified live, all five ad groups AD_STATUS_LIVE. Recorded as memory
+`serving-status-masks-sku-verdict`. The rebuilt `reroute-single-mirror-2pack.mjs` matches by SKU
+only and refuses to pause anything until the replacement reads live in that same ad group.
+
+## 2026-10-23: An even budget split, not an even keyword split
+
+**Context.** William wanted the estate split between the Single and the 2-Pack with the same top
+converting keywords on both sides. Amazon serves one ad per advertiser per auction, so identical
+keywords in two campaigns means they compete with each other.
+
+**Options.** (1) All 45 words in both, accept Amazon picks. (2) Split the words 22/23 so they never
+collide. (3) Run sequentially, Single then 2-Pack. (4) Different keywords per side.
+
+**Decision.** (1), all 45 in both, with a tight daily cap on each campaign.
+
+**Reasoning.** I first told William the 2-Pack would be starved, then corrected myself: that is
+true with open budgets, not with a binding cap. When the Single's campaign spends its cap it leaves
+the auction and the 2-Pack wins those impressions. The cap is the splitter. Splitting the keywords
+instead would halve an already thin dataset, 82 settled orders across 58 words.
+
+**Industry source.** Amazon's single-ad-per-advertiser auction rule, and the standard practice of
+using daily budget caps for ad rotation when true A/B infrastructure is unavailable.
+
+**Trade-offs accepted.** The read is time-of-day biased, because whichever side exhausts first
+systematically gets mornings. So the result must be read as ROAS per campaign, never impression
+share. And it returns a direction, not a verdict.
+
+**Status.** Live since 10-23. Four days in, the mechanism is only partly working: the Single has
+73% of impressions because only one of six pairs actually hits its cap.
+
+## 2026-10-26: Copying a campaign copies its bad bids
+
+**Context.** The mirror script duplicated each campaign's keywords and targeting clauses with
+`bid: x.bid`, faithfully reproducing the source.
+
+**Options.** (1) Copy bids as-is. (2) Clamp every copied bid to the $0.85 confirm ceiling.
+(3) Reprice each copied entity from its own settled CPC. (4) Copy, then clamp in a second pass.
+
+**Decision.** I shipped (1) without thinking about it. It should have been (2).
+
+**Reasoning.** 23 entities were already bidding over $0.85, including `phone assured retractable
+phone tether` at $2.50 and 41 ASIN clauses at $1.43. The mirror doubled them. 64 live entities now
+authorise up to $84.06 per click round against a max affordable CPC of $0.32 on keywords and $0.56
+on ASIN rows. This is the 10-09 "495 bids authorised at $2.00 for a $0.41 click" finding, recreated
+by me in one command.
+
+**Industry source.** Our own BID_CONFIRM_CEILING of $0.85 in `ad-rules.ts`, which exists precisely
+so no rule raises past it without a human. A copy is a write and should respect the same gate.
+
+**Trade-offs accepted.** Clamping to $0.85 may lose top-of-search position on the branded term,
+which converts at 67%. Branded traffic is cheap to recover and $2.50 is 4.5x what the click is
+worth.
+
+**Status.** Not fixed. Awaiting William's go to clamp all 64 to $0.85.
+
+## 2026-10-26: The $4 kill rule is deleting the proven shortlist
+
+**Context.** The whole point of the restructure was to run only the 45 keywords with settled ROAS
+at or above 1.5x. Four days later five of them have been killed by the engine.
+
+**Options.** (1) Leave it; the rule is the rule. (2) Hold the split campaigns out of the hourly
+engine. (3) Raise KILL_SPEND for shortlist words. (4) Make the kill rule skip spend inside the
+14-day attribution window.
+
+**Decision.** None yet. Flagged to William; (2) is my recommendation and has been unanswered since
+10-23.
+
+**Reasoning.** The rule kills a word that spends $4 in a month with no sale. These words have
+proven lifetime records above 1.5x and are being judged on four days of spend inside the window
+where their sales cannot yet be credited. That is the documented
+`kill-judges-blind-in-the-attribution-window` trap operating on the very list we chose for its
+history. At five per four days the 45-word shortlist is gone in about five weeks, and there is no
+second list behind it.
+
+**Industry source.** Amazon's 14-day attribution window. Judging conversion on a window shorter
+than the attribution period systematically under-counts orders.
+
+**Trade-offs accepted.** Holding campaigns out of the engine means no automated brake on them, so
+a genuinely bad word could run. At $10.80/day of authorised cap across both sides the downside is
+bounded, and William's 2026-08-13 no-raise rule would stop applying to them, which is a change to a
+rule he called absolute and therefore his to make.
+
+**Status.** Open. Blocks the test from producing a clean read.
+
+---
+
+## 2026-10-27: The $4 bar counts keyword IDs, not words
+
+**Context.** I reported three words still serving above the $4 bar, the largest being
+`retractable phone tether` PHRASE at $67.31 of settled spend returning 1.17x. William asked the
+obvious question: why were these not cut?
+
+**Options.** (a) Call the rule broken and rewrite it. (b) Find out what the rule was actually
+looking at before touching it. (c) Cut the words by hand and move on.
+
+**Decision.** (b) first, then (c) for the three words. The rule is not broken.
+
+**Reasoning.** `KILL_SPEND` is month-to-date spend per keyword ID. `retractable phone tether`
+PHRASE exists as six separate keyword IDs across four campaigns, and in October each of the six
+spent $0.00. The $67.31 is lifetime, spread over six IDs and three months. The rule had nothing to
+judge. It had already killed the word three times, 08-29, 08-31 and 09-12, and each duplicate
+carries its own counter that resets on the 1st. `bungee cord phone` shows the mechanism cleanly:
+one ID spent $4.52 and was killed on 10-13, its twin spent $0.00 and kept serving. Account-wide,
+164 words are duplicated across campaigns carrying $1,508.46 of lifetime spend. **I had compared a
+lifetime figure against a month-to-date rule and presented that as the rule failing.**
+
+**Industry source.** Amazon Advertising counts spend per targeting entity, not per keyword text, so
+any threshold rule written against entity IDs is defeated by duplication. Standard practice is to
+dedupe targets before applying budget guards, which is what Amazon's own duplicate-keyword
+recommendations push sellers toward.
+
+**Trade-offs.** Cutting the three by hand fixes today and not the class. The real fix is either
+aggregating the bar across duplicates of the same word, or deduping the account. Deduping is the
+larger and more useful job and is not started.
+
+**Status.** Three words cut, 11 keyword rows, verified 11/11 paused. The class of problem is open.
+See [[keyword-duplicates-break-kill-rule]] and [[four-dollar-bar-is-a-receipt]].
+
+---
+
+## 2026-10-27: An ad's history, not its campaign's age, is the clock that matters
+
+**Context.** In the morning review I told William the Single versus 2-Pack test was invalid, because
+five of the six 2-Pack campaigns were created on 10-23 and Amazon prices an ad on its own history.
+That was the same mechanism that collapsed the 3-Pack, so it felt right.
+
+**Options.** (a) Leave the claim standing, it was directionally plausible. (b) Check the ad-level
+creation dates before the claim shaped a decision.
+
+**Decision.** (b), and the claim was wrong.
+
+**Reasoning.** The pair carrying $501 of the $534 of October SP spend is
+`212260116772958` / `212881454178968`, and both campaigns are 2021 vintage. At the ad level, which
+is the level the auction actually prices, the 2-Pack ad was created 2021-10-24 and the Single ad was
+created 2026-10-23T15:35:55. **The newcomer is the Single**, and over the first four days it drew
+1,907 impressions to the 2-Pack's 865 and took both orders. If anything the age asymmetry worked
+against the Single. Campaign creation date was the wrong clock; the five genuinely new mirrors
+account for about $8 of spend and are not where the test lives.
+
+**Industry source.** Amazon's relevance and quality signals attach to the ad and its ASIN history,
+not the campaign shell, which is why rebuilding a campaign around an existing ad preserves
+performance while swapping the advertised ASIN does not.
+
+**Trade-offs.** Twenty clicks is still far too few to call a winner. Being wrong in the cautious
+direction cost nothing here, but it nearly argued for tearing down a test that is fine.
+
+**Status.** Corrected to William the same day. Four days of data, no verdict yet.
+See [[three-pack-never-measured-working]] and [[shortlist-split-test-live]].
+
+---
+
+## 2026-10-27: A symmetry pass will undo a kill rule unless it carries the same gate
+
+**Context.** The two sides of the A/B had drifted apart: 41 of 45 shortlist words serving on the
+Single side, 44 of 45 on the 2-Pack side, because the $4 kill only fires where a specific keyword ID
+spends and the 2-Pack side barely spends. William asked for the words that work to be unpaused
+unless they had spent $4 this month.
+
+**Options.** (a) Create every missing word on the side that lacks it, so both sides match.
+(b) Apply the $4-this-month gate to creates as well as revives. (c) Do nothing and accept the
+asymmetry.
+
+**Decision.** (b).
+
+**Reasoning.** The first dry run of the symmetry pass wanted to create four words, and three of
+them were the exact words the kill rule had just switched off: `iphone safety tether` at $6.40 of
+October spend, `iphone tether tab and lanyard` at $8.65, `phone tether with clip` at $5.02. Option
+(a) would have silently reinstated everything the rule cuts, every time it ran, and the two
+mechanisms would have fought each other forever with the create winning because it runs last.
+William's rule is literal and it applies to creates as much as revives.
+
+**Industry source.** The general pattern is that an idempotent reconciler and a policy engine must
+share the same predicate, or the reconciler becomes a bypass for the policy. Terraform drift
+detection and Kubernetes admission control both encode this.
+
+**Trade-offs.** Three proven words at 2.53x, 2.56x and 2.85x lifetime stay off, and the two sides
+stay asymmetric by three words. That is a real cost to the test. The alternative is worse.
+
+**Status.** Gate added before the pass ran. One word created, `cell phone harness` on the 2-Pack
+side. Whether to switch the three off on the 2-Pack side too is open, question Q7 in the 10-27
+summary. See [[dont-widen-a-stated-rule]] and [[kill-rule-eats-the-shortlist]].
+
+---
+
+## 2026-10-27: Sponsored Brands ads cannot be created through the API on this profile
+
+**Context.** William asked for every campaign to be copied into a Single and a 2-Pack half,
+explicitly including the video campaigns. The $160/day `Video - B07Y5GZP1T` campaign is the largest
+single ad budget in the account.
+
+**Options.** (a) Build the mirror through the API. (b) Report it as impossible without proving it.
+(c) Prove the limit, then hand the one manual step to William.
+
+**Decision.** (c).
+
+**Reasoning.** Campaign create works. Ad group create works. `POST /sb/v4/ads/list` works on
+`application/vnd.sbadresource.v4+json`. Only the ad **create** has no reachable route: six header
+combinations all returned 403 "Invalid key=value pair in Authorization header", and
+`/sb/v4/ads/video`, `/brandVideo`, `/productCollection`, `/storeSpotlight` and `/sb/ads` all
+returned 404. That fits what we already knew about these campaigns, that they are legacy
+single-ad-group Brands campaigns, the same reason v3 reporting has never seen them. I stopped after
+six attempts rather than keep guessing media types.
+
+**Industry source.** Amazon's Sponsored Brands v4 ad-create endpoints are gated per advertiser
+account and per campaign vintage; legacy campaigns created in the old console are routinely
+read-only through the newer resource APIs.
+
+**Trade-offs.** I had already halved the source to $80 before discovering this. Halving one side
+with no other side is a unilateral cut William did not ask for, so I restored it to $160 and left
+the empty mirror shell paused. Brands therefore stays unpaired at $220/day with no engine on it,
+four days before the month resets.
+
+**Status.** Shell campaign `227832154279101` exists at $80, PAUSED, no ad, no keywords. The ad has
+to be made in Seller Central, question Q6. See [[v3-hides-legacy-sb-campaigns]] and
+[[sb-engine-switched-off-by-pr45]].
+
+---
+
+## 2026-10-27: Halve the budget, not the spend
+
+**Context.** William asked me to check the budgets from two weeks ago, before all the changes, to
+confirm each side of the A/B really holds 50% of the original. He was right to ask.
+
+**Options.** (a) Trust that the 10-23 split had halved correctly. (b) Reconstruct the pre-change
+baseline from the `budget-usage` read taken that morning, the 10-07 and 10-09 daily summaries, and
+`campaign_lifetime`'s 08-05 snapshot, then compare.
+
+**Decision.** (b), and five of seven pairs were right while two were badly wrong.
+
+**Reasoning.** The 10-23 script states its own logic in a comment: "October SP actual was
+$21.59/day. Half is $10.80, set as $5.40/day each." It halved **actual spend**, not budget. The two
+campaigns carrying the shortlist had real budgets of $90 and $250, so they took a 94% cut rather
+than 50%. The other five were halved against their true budgets and are correct. The baseline across
+the paired estate is $567/day, so a true half is $283.50 per side; it currently sits at $124.30 and
+$113.50. Setting both shortlist campaigns to $170 restores the $340 they held between them and lands
+each ASIN on exactly $283.50.
+
+**Industry source.** Budget and spend are different quantities and only budget is a control. Halving
+a realised metric to set a control conflates the two, and it is the same error as sizing a rate
+limiter from observed traffic rather than from capacity.
+
+**Trade-offs.** This is a 31x increase on the only pair that spends real money, and over the last
+four days the $5.40 cap was genuinely binding at $5.83/day. William's position is that large budgets
+are safe because Amazon never spends them and the $4 kill is the brake. The first half holds, $747
+authorised produced $21/day. The second half does not, for the reason in the first entry above. My
+estimate is $12 to $20/day per campaign rather than anywhere near $170, because 45 words at $0.85 is
+the real constraint, but it is an estimate.
+
+**Status.** The write was blocked by the permission classifier and is outstanding, question Q3.
+`node scripts/budget-restore-true-half.mjs --apply`. Display was checked and is correct, it was
+$200/day on 10-23 and is $200/day now. See [[budget-headroom-is-22x]] and
+[[budget-cap-declined-2026-08-28]].
